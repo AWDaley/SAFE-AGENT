@@ -200,6 +200,10 @@ class GoogleOAuthService:
                  http: httpx.Client) -> None:
         self._vault, self._cfg, self._http = vault, config, http
 
+    @property
+    def redirect_uri(self) -> str:
+        return self._cfg.redirect_uri
+
     def start(self, *, principal: Principal, calendar_id: str,
               now: datetime) -> OAuthStart:
         verifier = secrets.token_urlsafe(64)
