@@ -43,7 +43,9 @@ class RequestClarification(StrictModel):
 
 
 Proposal = Annotated[CalendarCreateEvent | RequestClarification, Field(discriminator="operation")]
-_PROPOSAL_ADAPTER = TypeAdapter(Proposal)
+_PROPOSAL_ADAPTER: TypeAdapter[CalendarCreateEvent | RequestClarification] = TypeAdapter(
+    Proposal
+)
 MAX_PROPOSAL_BYTES = 16_384
 
 
