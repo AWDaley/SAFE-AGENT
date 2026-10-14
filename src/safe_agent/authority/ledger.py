@@ -109,14 +109,14 @@ class AuditLedger:
             predecessor=event.event_hash
             if index==1 and event.event_type!="TASK_REGISTERED":
                 raise ValueError("missing registration genesis")
-            if event.event_type==""PROPOSAL_RECORDED":
+            if event.event_type=="PROPOSAL_RECORDED":
                 state=TaskState.PROPOSED_UNVERIFIED
-            elif event.event_type==""DENIED":
+            elif event.event_type=="DENIED":
                 state=TaskState.REJECTED
-            elif event.event_type==""APPROVAL_REQUIRED":
+            elif event.event_type=="APPROVAL_REQUIRED":
                 state=TaskState.AWAITING_APPROVAL
-            elif event.event_type==""APPROVAL_REJECTED":
+            elif event.event_type=="APPROVAL_REJECTED":
                 state=TaskState.REJECTED
-            elif event.event_type==""ADMITTED":
+            elif event.event_type=="ADMITTED":
                 state=TaskState.PROPOSED_UNVERIFIED
         return state,events
