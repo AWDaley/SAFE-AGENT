@@ -292,9 +292,25 @@ class DockerIsolatedTextGenerator:
                     timeout_seconds=policy.timeout_seconds,
                     max_output_bytes=max_output,
                 )
-            except ModelIsolationDenied:
+            except ModelIsolationDenied as error:
                 self._cleanup_failed_container(cidfile)
-                raise
+                # Only messages emitted by the trusted BoundedDockerRunner
+                # are safe for diagnostics. A substituted runner must never
+                # inject provider stderr, prompt text or secrets into errors.
+                fixed_codes = {
+                    "isolated runtime unavailable",
+                    "isolated runtime pipe unavailable",
+                    "isolated runtime time budget exceeded",
+                    "isolated runtime closed input unexpectedly",
+                    "isolated runtime read failed",
+                    "isolated runtime output budget exceeded",
+                    "isolated runtime returned no valid proposal",
+                }
+                if str(error) in fixed_codes:
+                    raise
+                raise ModelIsolationDenied(
+                    "isolated planner execution denied",
+                ) from error
             except OSError as error:
                 self._cleanup_failed_container(cidfile)
                 raise ModelIsolationDenied("isolated planner execution denied") from error
