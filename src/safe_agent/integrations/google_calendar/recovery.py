@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 from importlib import import_module
 from secrets import token_hex
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -141,9 +141,9 @@ class OfflineGoogleTestRecoveryWorker:
         binding = self._repo.read_google_test_action_binding(
             claim.task_id, claim.action_hash,
         )
-        authority = self._repo.read_office_execution_authorization(
+        authority = cast(Any, self._repo.read_office_execution_authorization(
             claim.task_id, claim.action_hash,
-        )
+        ))
         with self._repo.write_task(claim.task_id) as tx:
             task, manifest, snap = tx.task, tx.manifest, tx.snapshot
             row = tx.read_outbox(claim.action_hash)
