@@ -330,7 +330,8 @@ class TaskTransaction:
 
     def bind_google_test_action(
         self, *, action_hash: str, connection_ref: str,
-        observation: object, request_hash: str, now: datetime,
+        observation: object, request_hash: str,
+        provider_simulation: object, now: datetime,
     ) -> None:
         """Pin an allowlisted, actor-owned test connection in the SAME outbox tx.
 
@@ -343,10 +344,16 @@ class TaskTransaction:
             GoogleTestEventIntent,
         )
         from safe_agent.integrations.google_calendar.oauth import GOOGLE_SCOPES
+        from safe_agent.integrations.google_calendar.provider_simulation import (
+            GoogleTestProviderSimulation,
+            simulate_provider_proposal,
+        )
 
         now = require_aware(now)
-        if type(observation) is not GoogleCalendarObservation:
-            raise StateConflict("GOOGLE_TRUSTED_OBSERVATION_REQUIRED")
+        if (type(observation) is not GoogleCalendarObservation
+                or type(provider_simulation) is not GoogleTestProviderSimulation):
+            raise StateConflict("GOOGLE_TRUSTED_PROVIDER_EVIDENCE_REQUIRED")
+        provider_simulation.verify_hash()
         task, manifest, snapshot = self.task, self.manifest, self.snapshot
         if (not isinstance(task, Task) or not isinstance(manifest, TaskManifest)
                 or snapshot.phase is not OfficePhase.EXECUTING):
@@ -395,6 +402,11 @@ class TaskTransaction:
         })
         if request_hash != expected_request_hash:
             raise StateConflict("GOOGLE_REQUEST_HASH_MISMATCH")
+        expected_simulation = simulate_provider_proposal(
+            observation=observation, proposal=proposal, manifest=manifest, now=now,
+        )
+        if provider_simulation != expected_simulation:
+            raise StateConflict("GOOGLE_PROVIDER_SIMULATION_MISMATCH")
         GoogleTestEventIntent(
             action_hash=action_hash, request_hash=request_hash,
             start_at=proposal.start_at, end_at=proposal.end_at,
@@ -410,6 +422,8 @@ class TaskTransaction:
             observation_revision=observation.revision,
             observation_hash=sha256(observation),
             provider_request_hash=request_hash,
+            provider_simulation_hash=expected_simulation.simulation_hash,
+            provider_simulation_json=expected_simulation.model_dump(mode="json"),
             recorded_at=now.astimezone(UTC),
         ))
         self.session.flush()
@@ -790,6 +804,11 @@ class LedgerRepository:
         Never expose this method in an operator/agent API. No OAuth credentials,
         raw provider IDs or HTTP calls are returned.
         """
+        from safe_agent.integrations.google_calendar.provider_simulation import (
+            GoogleProviderSimulationInvalid,
+            GoogleTestProviderSimulation,
+        )
+
         with self._sessions.begin() as session:
             task = session.get(TaskRow, task_id)
             outbox = session.get(OutboxRow, action_hash)
@@ -828,6 +847,27 @@ class LedgerRepository:
             })
             if row.provider_request_hash != expected_request_hash:
                 raise StateConflict("GOOGLE_OUTBOX_REQUEST_HASH_TAMPERED")
+            try:
+                if row.provider_simulation_json is None or row.provider_simulation_hash is None:
+                    raise GoogleProviderSimulationInvalid("PROVIDER_SIMULATION_NOT_RECORDED")
+                simulation = GoogleTestProviderSimulation.model_validate_json(
+                    json.dumps(row.provider_simulation_json),
+                )
+                simulation.verify_hash()
+                if (simulation.simulation_hash != row.provider_simulation_hash
+                        or simulation.provenance != "google_test_calendar"
+                        or simulation.observation_revision != outbox.source_revision
+                        or simulation.observation_hash != outbox.source_hash
+                        or simulation.proposal_hash != outbox.proposal_hash
+                        or simulation.organization_id != row.organization_id
+                        or simulation.task_id != task_id
+                        or simulation.calendar_ref != row.calendar_ref
+                        or simulation.connection_ref != row.connection_id
+                        or simulation.start_at != proposal.start_at
+                        or simulation.end_at != proposal.end_at):
+                    raise GoogleProviderSimulationInvalid("GOOGLE_PROVIDER_SIMULATION_MISMATCH")
+            except (ValueError, TypeError) as error:
+                raise StateConflict("GOOGLE_PROVIDER_SIMULATION_INTEGRITY_ERROR") from error
             connection = session.get(GoogleTestConnectionRow, row.connection_id)
             if (connection is None or connection.revoked
                     or connection.organization_id != row.organization_id
@@ -843,6 +883,7 @@ class LedgerRepository:
                 "observation_revision": row.observation_revision,
                 "observation_hash": row.observation_hash,
                 "provider_request_hash": row.provider_request_hash,
+                "provider_simulation_hash": row.provider_simulation_hash,
                 "authorization_hash": authority.authorization_hash,
                 "provider_kind": outbox.provider_kind,
             }
@@ -950,6 +991,9 @@ class LedgerRepository:
                         or outbox.proposal_hash != persisted.proposal_hash):
                     raise ValueError("outbox not bound to ledger intent")
                 if outbox.provider_kind == "google_test":
+                    from safe_agent.integrations.google_calendar.provider_simulation import (
+                        GoogleTestProviderSimulation,
+                    )
                     binding = session.get(GoogleTestOutboxBindingRow, outbox.action_hash)
                     auth = session.get(
                         OfficeExecutionAuthorizationRow, outbox.action_hash)
@@ -962,8 +1006,25 @@ class LedgerRepository:
                             or auth.task_id != task_id
                             or auth.authorization_json.get("outbox_action_hash") != outbox.action_hash
                             or auth.authorization_hash != auth.authorization_json.get(
-                                "authorization_hash")):
+                                "authorization_hash")
+                            or binding.provider_simulation_json is None
+                            or binding.provider_simulation_hash is None):
                         raise ValueError("Google outbox authorization/binding replay mismatch")
+                    try:
+                        sim = GoogleTestProviderSimulation.model_validate_json(
+                            json.dumps(binding.provider_simulation_json),
+                        )
+                        sim.verify_hash()
+                        if (sim.simulation_hash != binding.provider_simulation_hash
+                                or sim.observation_revision != outbox.source_revision
+                                or sim.observation_hash != outbox.source_hash
+                                or sim.proposal_hash != outbox.proposal_hash
+                                or sim.calendar_ref != binding.calendar_ref
+                                or sim.connection_ref != binding.connection_id
+                                or sim.task_id != task_id):
+                            raise ValueError("provider simulation binding mismatch")
+                    except (ValueError, TypeError) as error:
+                        raise ValueError("Google provider simulation replay mismatch") from error
                 elif outbox.provider_kind != "synthetic":
                     raise ValueError("unsupported outbox provider kind")
                 if (persisted.phase is OfficePhase.COMPLETED and outbox.status != "VERIFIED"):

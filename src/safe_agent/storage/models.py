@@ -207,6 +207,9 @@ class GoogleTestOutboxBindingRow(Base):
     observation_revision: Mapped[str] = mapped_column(String(72), nullable=False)
     observation_hash: Mapped[str] = mapped_column(String(72), nullable=False)
     provider_request_hash: Mapped[str] = mapped_column(String(72), nullable=False)
+    # Nullable for historical PR2 intents: they fail closed until re-staged.
+    provider_simulation_hash: Mapped[str | None] = mapped_column(String(72))
+    provider_simulation_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
