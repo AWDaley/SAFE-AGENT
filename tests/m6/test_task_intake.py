@@ -172,6 +172,9 @@ def test_idempotent_replay_does_not_create_another_task_or_expand_permissions(ki
     ({"option_id": "cal_main_private"}, 404),
     ({"idempotency_key": "weak"}, 422),
     ({"allowed_start": "2026-10-15T12:00:00"}, 422),
+    ({"allowed_start": 12345}, 422),
+    ({"allowed_start": True}, 422),
+    ({"allowed_start": {"unexpected": "object"}}, 422),
     ({"allowed_end": (NOW + timedelta(days=40)).isoformat()}, 422),
     ({"allowed_end": (NOW + timedelta(days=1, hours=5)).isoformat()}, 422),
 ])

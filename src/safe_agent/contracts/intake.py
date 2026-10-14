@@ -26,6 +26,8 @@ class TaskIntakeRequest(StrictModel):
     def aware(cls, value: datetime | str) -> datetime:
         if isinstance(value, str):
             value = datetime.fromisoformat(value)
+        if not isinstance(value, datetime):
+            raise ValueError("offset-aware datetime required")
         return require_aware(value)
 
     @model_validator(mode="after")

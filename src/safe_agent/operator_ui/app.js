@@ -323,6 +323,7 @@
     try {
       await loadInbox(true);
       await loadTaskOptions();
+      if (!token) return;  // Option fetch may have expired this local session.
       node("signInPanel").hidden = true;
       node("workspace").hidden = false;
       status("Connected for scoped task review. No live Google writes enabled.");
