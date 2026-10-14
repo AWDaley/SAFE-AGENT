@@ -48,8 +48,8 @@ from safe_agent.storage.models import (
     ExecutionRow,
     LedgerRow,
     ManifestRow,
-    OutboxRow,
     OfficeExecutionAuthorizationRow,
+    OutboxRow,
     ProjectionRow,
     ProposalRow,
     ReferenceRow,
@@ -260,13 +260,13 @@ class TaskTransaction:
         This does not dispatch or enable Google writes. Only trusted code with
         the pinned upstream TAL package may invoke the operation.
         """
-        from tal.office_execution import OfficeExecutionAuthorization
         from tal.core import sha256 as tal_sha256
+        from tal.office_execution import OfficeExecutionAuthorization
 
         if type(authorization) is not OfficeExecutionAuthorization:
             raise StateConflict("TAL_AUTHORIZATION_TYPE_INVALID")
         raw = authorization.model_dump(mode="json")
-        record = OfficeExecutionAuthorization.model_validate(raw)
+        record = OfficeExecutionAuthorization.model_validate_json(__import__('json').dumps(raw))
         if (record != authorization or tal_sha256(
                 record.model_dump(mode="json", exclude={"authorization_hash"})
         ) != record.authorization_hash):
@@ -595,7 +595,7 @@ class LedgerRepository:
                     or outbox.organization_id != task.organization_id
                     or task.manifest_hash != outbox.manifest_hash):
                 raise StateConflict("TAL_AUTHORIZATION_NOT_FOUND")
-            record = OfficeExecutionAuthorization.model_validate(row.authorization_json)
+            record = OfficeExecutionAuthorization.model_validate_json(json.dumps(row.authorization_json))
             if (row.authorization_hash != record.authorization_hash
                     or tal_sha256(record.model_dump(mode="json", exclude={
                         "authorization_hash"})) != record.authorization_hash
