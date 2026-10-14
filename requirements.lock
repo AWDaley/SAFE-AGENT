@@ -1,0 +1,7 @@
+# M0 offline-installable, direct dependency pins. Use `pip install -r requirements.lock`.
+# This is NOT a full transitive/hashes lock. The formal uv.lock gate remains open
+# until an online resolver and pinned Python target can generate/check it.
+pydantic==2.13.5
+pytest==9.0.2
+ruff==0.12.12
+mypy==1.17.1

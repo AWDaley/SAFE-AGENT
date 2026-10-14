@@ -1,0 +1,20 @@
+# M0: optional isolated development database for future persistence work.
+# No model or real provider connects to this service.
+services:
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_USER: safe_agent
+      POSTGRES_PASSWORD: local_development_only
+      POSTGRES_DB: safe_agent
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U safe_agent -d safe_agent"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    volumes:
+      - safe_agent_postgres:/var/lib/postgresql/data
+volumes:
+  safe_agent_postgres:
