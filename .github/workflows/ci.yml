@@ -52,6 +52,35 @@ jobs:
           docker version
           docker build --pull -f docker/model_runtime.Dockerfile -t safe-agent-offline-model:ci .
           export SAFE_AGENT_ISOLATION_IMAGE_ID="$(docker image inspect --format '{{.Id}}' safe-agent-offline-model:ci)"
+          python - <<'PY'
+          import os
+          import subprocess
+          import tempfile
+          from pathlib import Path
+          from safe_agent.model_runtime import DockerIsolatedTextGenerator, ModelIsolationPolicy
+          from safe_agent.contracts.actions import parse_proposal_json
+          from tests.m6.test_isolated_model_runtime import prompt
+
+          runtime = DockerIsolatedTextGenerator(
+              ModelIsolationPolicy(image_id=os.environ["SAFE_AGENT_ISOLATION_IMAGE_ID"])
+          )
+          with tempfile.TemporaryDirectory() as temp:
+              argv = runtime._argv(Path(temp) / "probe.cid")
+              result = subprocess.run(
+                  argv, input=prompt().encode(), stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE, timeout=15, cwd="/",
+                  env={"PATH": "/usr/bin:/bin", "HOME": "/nonexistent",
+                       "DOCKER_CONFIG": "/nonexistent"},
+              )
+              print("synthetic_container_probe_exit", result.returncode)
+              print("synthetic_container_probe_stdout_bytes", len(result.stdout))
+              if result.returncode:
+                  print("synthetic_container_probe_docker_stderr",
+                        result.stderr.decode(errors="replace")[:1000])
+                  raise SystemExit(1)
+              parse_proposal_json(result.stdout.decode())
+              print("synthetic_container_probe_valid_proposal")
+          PY
           python -m safe_agent m6-isolated-model-demo
       - name: Migration head smoke (isolated SQLite fixture)
         env:
