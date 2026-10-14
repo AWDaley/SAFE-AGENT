@@ -177,6 +177,7 @@ class OfflineGoogleTestRecoveryWorker:
                     or binding["calendar_ref"] != manifest.calendar_ref
                     or binding["connection_ref"] == ""
                     or binding["authorization_hash"] != authority.authorization_hash
+                    or not binding["provider_simulation_hash"].startswith("sha256:")
                     or authority.state_version != snap.state_version):
                 raise GoogleDispatchDenied("GOOGLE_TRUSTED_INTENT_MISMATCH")
             tal_action = _trusted_tal_office_command(

@@ -21,6 +21,7 @@ from safe_agent.orchestration.office_tasks import TrustedOfficeTasks
 from safe_agent.security.principal import AccessDenied, Principal
 from safe_agent.storage.repository import LedgerRepository, StateConflict, TaskTransaction
 
+from .provider_simulation import simulate_provider_proposal
 from .service import GoogleTestCalendarService
 
 
@@ -229,6 +230,9 @@ class GoogleTestOutboxStager:
                            and proposal.end_at <= slot.end_at
                            for slot in observed.free_slots)):
             raise StateConflict("GOOGLE_OBSERVED_SLOT_UNAVAILABLE")
+        provider_simulation = simulate_provider_proposal(
+            observation=observed, proposal=proposal, manifest=manifest, now=now,
+        )
         with self._repo.write_task(task_id) as tx:
             task, manifest, snap = tx.task, tx.manifest, tx.snapshot
             if (not isinstance(task, Task)
@@ -301,6 +305,7 @@ class GoogleTestOutboxStager:
             tx.persist_office_execution_authorization(authority, now=now)
             tx.bind_google_test_action(
                 action_hash=action_hash, connection_ref=connection_ref,
-                observation=observed, request_hash=request_hash, now=now,
+                observation=observed, request_hash=request_hash,
+                provider_simulation=provider_simulation, now=now,
             )
         return StagedGoogleTestIntent(task_id=task_id, action_hash=action_hash)
