@@ -18,14 +18,27 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from safe_agent.canonical import sha256
+from safe_agent.contracts.actions import CalendarCreateEvent
 from safe_agent.contracts.base import require_aware
 from safe_agent.contracts.control import Approval, Task, TaskManifest
 from safe_agent.evidence.ledger import (
-    EventKind, LedgerEvent, TaskSnapshot, reduce_event, replay, seal_event,
+    EventKind,
+    LedgerEvent,
+    TaskSnapshot,
+    reduce_event,
+    replay,
+    seal_event,
 )
 from safe_agent.storage.models import (
-    ApprovalRow, Base, LedgerRow, ManifestRow, ProjectionRow, ProposalRow,
-    ReferenceRow, SimulationRow, TaskRow,
+    ApprovalRow,
+    Base,
+    LedgerRow,
+    ManifestRow,
+    ProjectionRow,
+    ProposalRow,
+    ReferenceRow,
+    SimulationRow,
+    TaskRow,
 )
 from safe_agent.virtual_office.models import CalendarProjection, CalendarSimulation
 
@@ -126,8 +139,6 @@ class TaskTransaction:
         return _unpack(Approval, row.approval_json)
 
     def read_active_proposal(self) -> CalendarCreateEvent | None:
-        from safe_agent.contracts.actions import CalendarCreateEvent
-
         current = self.snapshot
         row = self.session.get(ProposalRow, (self.row.task_id, current.cycles_used))
         if row is None or row.proposal_hash != current.proposal_hash:
