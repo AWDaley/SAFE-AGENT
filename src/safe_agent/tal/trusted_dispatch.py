@@ -10,6 +10,8 @@ from datetime import datetime
 from importlib import import_module
 
 from safe_agent.canonical import sha256
+from safe_agent.storage.repository import LedgerRepository
+from safe_agent.tal.office_audit import TrustedTALOfficeAuditMirror
 from safe_agent.contracts.actions import CalendarCreateEvent
 from safe_agent.contracts.control import Approval, Task, TaskManifest
 from safe_agent.evidence.ledger import OfficePhase, TaskSnapshot
@@ -27,6 +29,23 @@ class TrustedTALOfficeDispatchCheck:
     deadline, budget, and independent read-back checks. TAL's result is never an
     executable permit; `authorizes_execution` must remain False.
     """
+
+    def __init__(self, *, office_journal: object | None = None) -> None:
+        # When set, the real upstream runtime journals the admission before a
+        # new synthetic effect. Real provider types are still prohibited.
+        self._office_journal = office_journal
+        self._audit = (TrustedTALOfficeAuditMirror(office_journal)
+                       if office_journal is not None else None)
+
+    @property
+    def has_audit(self) -> bool:
+        return self._audit is not None
+
+    def reconcile_audit(self, repo: LedgerRepository, task_id: str,
+                        *, now: datetime) -> str | None:
+        if self._audit is None:
+            return None
+        return self._audit.reconcile(repo, task_id, now=now)
 
     def require(
         self, *, action_hash: str, task: Task, manifest: TaskManifest,
@@ -132,10 +151,12 @@ class TrustedTALOfficeDispatchCheck:
                 expected_state_version=snapshot.state_version,
                 outbox_action_hash=action_hash,
             )
+            options = ({"office_journal": self._office_journal}
+                       if self._office_journal is not None else {})
             runtime = upstream_runtime.TALRuntime(
                 upstream_storage.InMemoryEventStore(),
                 upstream_adapter.FakeToolRegistry(),
-                clock=lambda: now,
+                clock=lambda: now, **options,
             )
             decision = runtime.apply_proposal(
                 task.task_id, command, actor_id=task.initiator_id,
@@ -146,7 +167,22 @@ class TrustedTALOfficeDispatchCheck:
                     or decision.grant_hash != grant.grant_hash
                     or decision.state_version != snapshot.state_version):
                 raise TALOfficeDispatchDenied("TAL_OFFICE_RUNTIME_DENIED")
+            if self._office_journal is not None:
+                upstream_journal = import_module("tal.office_journal")
+                if not isinstance(self._office_journal, upstream_journal.SQLiteOfficeJournal):
+                    raise TALOfficeDispatchDenied("TAL_OFFICE_JOURNAL_TYPE_INVALID")
+                recorded = self._office_journal.replay(action_hash)
+                if (recorded.state not in {
+                        upstream_journal.OfficeJournalKind.ADMISSION,
+                        upstream_journal.OfficeJournalKind.OUTCOME_UNKNOWN,
+                    } or self._office_journal.events(action_hash)[0].reason_code != "TRUSTED_ADMISSION_ONLY"
+                        or recorded.task_id != task.task_id
+                        or recorded.source_manifest_hash != task.manifest_hash
+                        or recorded.source_proposal_hash != sha256(proposal)):
+                    raise TALOfficeDispatchDenied("TAL_OFFICE_JOURNAL_NOT_ADMITTED")
         except TALOfficeDispatchDenied:
             raise
-        except (ImportError, AttributeError, TypeError, ValueError, RuntimeError) as exc:
+        except Exception as exc:
+            # The trusted extension must fail closed on missing/corrupted TAL or
+            # SQLite errors. Never expose provider/SQL details to the model.
             raise TALOfficeDispatchDenied("TAL_OFFICE_RUNTIME_UNAVAILABLE") from exc
