@@ -805,7 +805,8 @@ class LedgerRepository:
         raw provider IDs or HTTP calls are returned.
         """
         from safe_agent.integrations.google_calendar.provider_simulation import (
-            GoogleProviderSimulationInvalid, GoogleTestProviderSimulation,
+            GoogleProviderSimulationInvalid,
+            GoogleTestProviderSimulation,
         )
 
         with self._sessions.begin() as session:
