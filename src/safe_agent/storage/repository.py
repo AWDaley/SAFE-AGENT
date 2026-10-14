@@ -21,6 +21,7 @@ from sqlalchemy.pool import StaticPool
 from safe_agent.canonical import sha256
 from safe_agent.contracts.actions import CalendarCreateEvent
 from safe_agent.contracts.base import require_aware
+from safe_agent.contracts.operator import OperatorInboxPage
 from safe_agent.contracts.control import (
     Approval,
     ExecutionOutcome,
@@ -890,13 +891,13 @@ class LedgerRepository:
 
     def list_operator_tasks(
         self, organization_id: str, *, after: str | None = None, limit: int = 20,
-    ) -> "OperatorInboxPage":
+    ) -> OperatorInboxPage:
         """Bounded, strictly tenant-filtered task snapshots; no private bindings.
 
         Lexical task-ID cursor is stable across inserts and never names a
         cross-tenant record. Caller must enforce authenticated task:read.
         """
-        from safe_agent.contracts.operator import OperatorInboxItem, OperatorInboxPage
+        from safe_agent.contracts.operator import OperatorInboxItem
 
         if not 1 <= limit <= 50:
             raise ValueError("operator inbox page must contain 1 to 50 entries")
