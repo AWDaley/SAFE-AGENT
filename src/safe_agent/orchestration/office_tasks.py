@@ -202,6 +202,8 @@ class TrustedOfficeTasks:
             assert isinstance(parsed, CalendarCreateEvent | InternalTaskCreateProposal)
             if snap.simulation_ref != parsed.simulation_ref:
                 return reject("SIMULATION_NOT_ACTIVE")
+            projection: CalendarProjection | TaskListProjection
+            simulation: CalendarSimulation | InternalTaskSimulation
             try:
                 if isinstance(parsed, InternalTaskCreateProposal):
                     projection, simulation = tx.task_preview(parsed.simulation_ref)
@@ -310,6 +312,8 @@ class TrustedOfficeTasks:
                         or approval.proposal_hash != snap.proposal_hash
                         or now >= approval.expires_at):
                     return deny("APPROVAL_EXPIRED_OR_INVALID")
+            projection: CalendarProjection | TaskListProjection
+            simulation: CalendarSimulation | InternalTaskSimulation
             if isinstance(proposal, InternalTaskCreateProposal):
                 projection, simulation = tx.task_preview(proposal.simulation_ref)
             else:

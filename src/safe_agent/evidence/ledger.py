@@ -92,9 +92,9 @@ def seal_event(*, task_id: str, organization_id: str, actor_id: str,
     """Compute a deterministic event digest from explicit trusted inputs."""
     m3_kinds = {EventKind.ACTION_INTENT_RECORDED,
                 EventKind.ACTION_VERIFIED, EventKind.ACTION_UNVERIFIED}
-    event_schema_version = (
-        "safe_agent.ledger_event.v2" if kind in m3_kinds else "safe_agent.ledger_event.v1"
-    )
+    event_schema_version: Literal[
+        "safe_agent.ledger_event.v1", "safe_agent.ledger_event.v2"
+    ] = "safe_agent.ledger_event.v2" if kind in m3_kinds else "safe_agent.ledger_event.v1"
     basis = {
         "schema_version": event_schema_version,
         "task_id": task_id,
