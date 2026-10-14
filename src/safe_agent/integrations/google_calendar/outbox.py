@@ -179,8 +179,8 @@ class GoogleTestOutboxStager:
         worker must revalidate all source and TAL conditions before new writes.
         """
         now = require_aware(now)
-        for scope in ("task:read", "task:execute", "connection:read"):
-            principal.require(scope, principal.organization_id, now)  # type: ignore[arg-type]
+        for permission in ("task:read", "task:execute", "connection:read"):
+            principal.require(permission, principal.organization_id, now)  # type: ignore[arg-type]
         # Local simulation remains advisory. Do not treat the synthetic source
         # as provider authority; a separate fresh Google observation is required.
         ready = self._coordinator.revalidate_offline_readiness(
