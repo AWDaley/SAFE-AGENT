@@ -103,15 +103,15 @@ def inspect_m5_release(root: Path) -> M5ReleaseGateReport:
             problems.append("CI_M5_RELEASE_CHECK_MISSING")
     except OSError:
         pass
-    for path, marker in (
+    for doc_path, marker in (
         ("README.md", "M5 LIVE ACCEPTANCE: BLOCKED"),
         ("docs/M5_RELEASE_GATE.md", "LIVE ACCEPTANCE: BLOCKED"),
     ):
         try:
-            if marker not in (root / path).read_text(encoding="utf-8"):
-                problems.append("M5_LIVE_BLOCK_NOT_DOCUMENTED:" + path)
+            if marker not in (root / doc_path).read_text(encoding="utf-8"):
+                problems.append("M5_LIVE_BLOCK_NOT_DOCUMENTED:" + doc_path)
         except OSError:
-            problems.append("M5_LIVE_BLOCK_DOC_MISSING:" + path)
+            problems.append("M5_LIVE_BLOCK_DOC_MISSING:" + doc_path)
     # This report never changes to LIVE_ACCEPTED on local claims. GitHub CI
     # never receives OAuth secrets and cannot authenticate a real booking.
     return M5ReleaseGateReport(
