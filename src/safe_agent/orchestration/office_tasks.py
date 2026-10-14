@@ -403,12 +403,12 @@ class TrustedOfficeTasks:
             if isinstance(proposal, InternalTaskCreateProposal):
                 if not isinstance(manifest, InternalTaskManifest):
                     raise StateConflict("internal proposal manifest mismatch")
-                projection, simulation = tx.task_preview(proposal.simulation_ref)
-                change = simulation.change_diff.after
-                if (proposal.projection_rev != projection.revision
-                        or proposal.simulation_ref != simulation.simulation_ref
-                        or simulation.conflicts
-                        or simulation.expected_postconditions != ("task_created",)
+                task_projection, task_simulation = tx.task_preview(proposal.simulation_ref)
+                change = task_simulation.change_diff.after
+                if (proposal.projection_rev != task_projection.revision
+                        or proposal.simulation_ref != task_simulation.simulation_ref
+                        or task_simulation.conflicts
+                        or task_simulation.expected_postconditions != ("task_created",)
                         or proposal.customer_ref != manifest.customer_ref
                         or proposal.task_code != manifest.task_code
                         or change.customer_ref != proposal.customer_ref
