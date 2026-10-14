@@ -21,12 +21,12 @@ from safe_agent.integrations.google_calendar.recovery import (
 from safe_agent.storage.models import OutboxRow
 from tests.m2.conftest import NOW
 from tests.m5.conftest import CALENDAR
-from tests.m5.test_google_test_outbox import stage, staging as source_staging
+from tests.m5.test_google_test_outbox import stage, staging as source_staging  # noqa: F401
 
 
 @pytest.fixture(name="staging")
-def _staging_alias(source_staging):
-    return source_staging
+def _staging_alias(request: pytest.FixtureRequest):
+    return request.getfixturevalue("source_staging")
 
 
 def worker(env, *, max_attempts=3, mapping=None):
