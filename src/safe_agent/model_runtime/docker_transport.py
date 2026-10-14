@@ -233,7 +233,9 @@ class DockerIsolatedTextGenerator:
             "--network=none", "--read-only", "--cap-drop=ALL",
             "--security-opt=no-new-privileges:true",
             "--user=65534:65534",
-            "--pid=private", "--ipc=none", "--cgroupns=private",
+            # Docker's default is an isolated PID namespace; the explicit
+            # '--pid=private' value is invalid on supported Docker Engine.
+            "--ipc=none", "--cgroupns=private",
             f"--pids-limit={policy.pids_limit}",
             f"--memory={mib}m", f"--memory-swap={mib}m",
             f"--cpus={policy.cpu_millicores / 1000:.3f}",

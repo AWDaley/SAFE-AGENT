@@ -112,12 +112,13 @@ def test_host_forwards_only_minimized_canonical_prompt_and_docker_fences(monkeyp
     for exact in (
         "--network=none", "--read-only", "--cap-drop=ALL",
         "--security-opt=no-new-privileges:true",
-        "--user=65534:65534", "--pid=private", "--ipc=none",
+        "--user=65534:65534", "--ipc=none",
         "--cgroupns=private", "--log-driver=none", "--workdir=/",
         "-i", "--pids-limit=32", "--memory=128m", "--memory-swap=128m",
         "--cpus=0.500",
     ):
         assert exact in args
+    assert not any(arg.startswith("--pid=") for arg in args)
     assert args[-1] == PIN
     assert sum(a.startswith("--cidfile=") for a in args) == 1
     assert not any(x in args for x in (
