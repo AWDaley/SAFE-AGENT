@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 from importlib import import_module
 from secrets import token_hex
+from typing import Any
 
 import httpx
 
@@ -65,7 +66,7 @@ class _Dispatch:
     manifest: TaskManifest
     proposal: CalendarCreateEvent
     snapshot: TaskSnapshot
-    authority: object
+    authority: Any
     tal_action: object
     binding: dict[str, str]
     intent: GoogleTestEventIntent

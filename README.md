@@ -157,3 +157,12 @@ python scripts/export_m5_schemas.py --check
 ```
 
 See [M5 delivery/limitations](docs/M5_DELIVERY.md), [test-account setup](docs/M5_GOOGLE_TEST_SETUP.md), and [ADR 0005](docs/adr/0005-google-calendar-test-boundary.md). Do not use a production/personal calendar or put client secrets, provider IDs or refresh tokens in agent context or source control.
+
+## PR3: offline Google Calendar readback and recovery (not live)
+
+The privileged OfflineGoogleTestRecoveryWorker uses HTTP MockTransport ONLY
+and cannot reach Google services. It requires the TAL-bound outbox, exact
+private calendar mapping and post-write independent readback; ambiguous effects
+are reconciled or escalated without blindly retrying inserts. See
+[offline recovery limitations](docs/M5_GOOGLE_RECOVERY.md). Real Google writes
+remain disabled, pending PR4 acceptance and security review.
