@@ -17,7 +17,6 @@ from tests.m2.conftest import NOW
 from tests.m4.test_recovery import stage_calendar
 
 
-
 def test_tal_import_error_blocks_new_synthetic_dispatch(kit, monkeypatch) -> None:
     """Absence of the TAL runtime never silently falls back to local authority."""
     stage_hash, adapter = stage_calendar(kit)
