@@ -404,16 +404,16 @@ class TrustedOfficeTasks:
                 if not isinstance(manifest, InternalTaskManifest):
                     raise StateConflict("internal proposal manifest mismatch")
                 task_projection, task_simulation = tx.task_preview(proposal.simulation_ref)
-                change = task_simulation.change_diff.after
+                task_change = task_simulation.change_diff.after
                 if (proposal.projection_rev != task_projection.revision
                         or proposal.simulation_ref != task_simulation.simulation_ref
                         or task_simulation.conflicts
                         or task_simulation.expected_postconditions != ("task_created",)
                         or proposal.customer_ref != manifest.customer_ref
                         or proposal.task_code != manifest.task_code
-                        or change.customer_ref != proposal.customer_ref
-                        or change.task_code != proposal.task_code
-                        or change.due_at != proposal.due_at):
+                        or task_change.customer_ref != proposal.customer_ref
+                        or task_change.task_code != proposal.task_code
+                        or task_change.due_at != proposal.due_at):
                     raise StateConflict("operator internal preview not verified")
                 return InternalTaskOperatorPreview(
                     task_id=task_id, proposal_hash=snapshot.proposal_hash,
