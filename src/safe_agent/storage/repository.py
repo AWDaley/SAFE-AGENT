@@ -736,6 +736,25 @@ class LedgerRepository:
                     or row.calendar_ref != authority.authorization_json.get("calendar_ref")
                     or authority.authorization_hash != authority.authorization_json.get("authorization_hash")):
                 raise StateConflict("GOOGLE_OUTBOX_BINDING_INTEGRITY_ERROR")
+            snap = _unpack(TaskSnapshot, task.snapshot_json)
+            proposal_row = session.get(ProposalRow, (task_id, snap.cycles_used))
+            if proposal_row is None:
+                raise StateConflict("GOOGLE_BOUND_PROPOSAL_NOT_FOUND")
+            proposal = _unpack(CalendarCreateEvent, proposal_row.proposal_json)
+            if (sha256(proposal) != proposal_row.proposal_hash
+                    or proposal_row.proposal_hash != outbox.proposal_hash):
+                raise StateConflict("GOOGLE_BOUND_PROPOSAL_TAMPERED")
+            expected_request_hash = sha256({
+                "provider": "google_test", "action_hash": action_hash,
+                "manifest_hash": outbox.manifest_hash,
+                "proposal_hash": outbox.proposal_hash,
+                "connection_ref": row.connection_id,
+                "calendar_ref": row.calendar_ref,
+                "start_at": proposal.start_at, "end_at": proposal.end_at,
+                "time_zone": proposal.time_zone,
+            })
+            if row.provider_request_hash != expected_request_hash:
+                raise StateConflict("GOOGLE_OUTBOX_REQUEST_HASH_TAMPERED")
             connection = session.get(GoogleTestConnectionRow, row.connection_id)
             if (connection is None or connection.revoked
                     or connection.organization_id != row.organization_id
@@ -857,6 +876,23 @@ class LedgerRepository:
                 if (outbox.action_hash != intent.payload["action_hash"]
                         or outbox.proposal_hash != persisted.proposal_hash):
                     raise ValueError("outbox not bound to ledger intent")
+                if outbox.provider_kind == "google_test":
+                    binding = session.get(GoogleTestOutboxBindingRow, outbox.action_hash)
+                    auth = session.get(
+                        OfficeExecutionAuthorizationRow, outbox.action_hash)
+                    if (binding is None or auth is None
+                            or binding.task_id != task_id
+                            or binding.organization_id != persisted.organization_id
+                            or binding.initiator_id != persisted.initiator_id
+                            or binding.observation_revision != outbox.source_revision
+                            or binding.observation_hash != outbox.source_hash
+                            or auth.task_id != task_id
+                            or auth.authorization_json.get("outbox_action_hash") != outbox.action_hash
+                            or auth.authorization_hash != auth.authorization_json.get(
+                                "authorization_hash")):
+                        raise ValueError("Google outbox authorization/binding replay mismatch")
+                elif outbox.provider_kind != "synthetic":
+                    raise ValueError("unsupported outbox provider kind")
                 if (persisted.phase is OfficePhase.COMPLETED and outbox.status != "VERIFIED"):
                     raise ValueError("completed action outbox not verified")
                 if (persisted.phase is OfficePhase.NEEDS_REVIEW
