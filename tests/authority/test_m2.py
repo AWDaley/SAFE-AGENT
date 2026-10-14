@@ -6,11 +6,11 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from safe_agent.authority.ledger import AuditLedger
-from safe_agent.authority.policy import OfficeAdmission, pin_manifest, ManifestMismatch
+from safe_agent.authority.policy import ManifestMismatch, OfficeAdmission, pin_manifest
 from safe_agent.authority.service import AdmissionService
 from safe_agent.canonical import sha256
 from safe_agent.contracts.actions import CalendarCreateEvent
-from safe_agent.contracts.control import Task, TaskManifest, TaskState, DecisionStatus, Approval
+from safe_agent.contracts.control import Approval, DecisionStatus, Task, TaskManifest, TaskState
 
 NOW=datetime(2026,10,13,18,tzinfo=UTC)
 START=NOW+timedelta(days=1)
@@ -86,7 +86,7 @@ def test_persistent_replay_and_tamper(tmp_path):
     reopened.close()
     with sqlite3.connect(path) as raw:
         raw.execute("UPDATE events SET event_json=? WHERE task_id='task_1' AND sequence=2",('{"oops":1}',))
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError):
         AuditLedger(path).replay(task.task_id)
 
 def test_duplicate_registration_rejected(tmp_path):
