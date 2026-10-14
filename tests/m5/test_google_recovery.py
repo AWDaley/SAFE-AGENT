@@ -22,7 +22,8 @@ from safe_agent.integrations.google_calendar.recovery import (
 from safe_agent.storage.models import OutboxRow
 from tests.m2.conftest import NOW
 from tests.m5.conftest import CALENDAR
-from tests.m5.test_google_test_outbox import stage, staging as source_staging  # noqa: F401
+from tests.m5.test_google_test_outbox import stage
+from tests.m5.test_google_test_outbox import staging as source_staging
 
 
 @pytest.fixture(name="staging")
