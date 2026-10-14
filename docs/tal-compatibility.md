@@ -1,5 +1,13 @@
 # SAFE-AGENT ↔ TAL compatibility matrix (M0)
 
+
+> **Historical implementation snapshot.** This note records an earlier
+> stage and its then-current upstream SHA; some earlier "not implemented" text
+> is superseded. As of PR5, the only currently pinned TAL source is
+> [`ci/tal-office-commit.sha`](../ci/tal-office-commit.sha), with experimental
+> trusted office authorization and mock-only Google execution. **M5 LIVE
+> ACCEPTANCE: BLOCKED.** See [M5_RELEASE_GATE.md](M5_RELEASE_GATE.md).
+
 **TAL source inspected:** https://github.com/AWDaley/TervoroAgenticLanguage-TAL-
 at `23d48c4a4c66ab4d7ef722794f755f0bfcd753d4`.
 

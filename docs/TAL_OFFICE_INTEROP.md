@@ -1,5 +1,13 @@
 # TAL office calendar admission interoperability — staged integration
 
+
+> **Historical implementation snapshot.** This note records an earlier
+> stage and its then-current upstream SHA; some earlier "not implemented" text
+> is superseded. As of PR5, the only currently pinned TAL source is
+> [`ci/tal-office-commit.sha`](../ci/tal-office-commit.sha), with experimental
+> trusted office authorization and mock-only Google execution. **M5 LIVE
+> ACCEPTANCE: BLOCKED.** See [M5_RELEASE_GATE.md](M5_RELEASE_GATE.md).
+
 **Status:** offline admission interoperability only; **real Google Calendar writes remain disabled**.
 
 **Pinned upstream:** `AWDaley/TervoroAgenticLanguage-TAL-` commit

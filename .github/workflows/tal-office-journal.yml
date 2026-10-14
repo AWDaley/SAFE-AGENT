@@ -17,7 +17,8 @@ jobs:
         run: |
           python -m pip install -r requirements.lock
           python -m pip install -e '.[dev]'
-          python -m pip install 'git+https://github.com/AWDaley/TervoroAgenticLanguage-TAL-.git@e9d09ef47c0e0e18f3955f9c58f7a8941baf6c38'
+          TAL_SHA="$(python scripts/read_tal_pin.py)"
+          python -m pip install "git+https://github.com/AWDaley/TervoroAgenticLanguage-TAL-.git@${TAL_SHA}"
       - name: TAL office journal and legacy runtime tests
         run: |
           python -m pytest -q tests/m4/test_tal_office_journal.py tests/m4/test_tal_runtime_dispatch.py tests/m5/test_upstream_office_bridge.py tests/m5/test_tal_execution_authority.py tests/m5/test_google_test_outbox.py tests/m5/test_google_recovery.py tests/m5/test_google_provider_binding.py tests/m5/test_google_acceptance_preflight.py

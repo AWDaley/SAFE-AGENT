@@ -1,5 +1,13 @@
 # TAL office journal ↔ SAFE-AGENT outbox (M5 continuation)
 
+
+> **Historical implementation snapshot.** This note records an earlier
+> stage and its then-current upstream SHA; some earlier "not implemented" text
+> is superseded. As of PR5, the only currently pinned TAL source is
+> [`ci/tal-office-commit.sha`](../ci/tal-office-commit.sha), with experimental
+> trusted office authorization and mock-only Google execution. **M5 LIVE
+> ACCEPTANCE: BLOCKED.** See [M5_RELEASE_GATE.md](M5_RELEASE_GATE.md).
+
 **Scope:** synthetic calendar execution only. No Google Calendar write path was added.
 
 ## Trusted sequence
@@ -20,12 +28,13 @@ Neither TAL's office admission decision nor this journal supplies executable bea
 
 ## Tests
 
-CI pins upstream TAL at `fc989bd403a5291e0b0e0d8ea8ec94766c69b601` and runs integration tests for success, lost-response/restart recovery, transient rate limiting, tampered journal, unavailable post-commit audit, and refusal to fabricate historical admission. Run:
+Current CI resolves its one reviewed upstream revision from `ci/tal-office-commit.sha` and runs integration tests for success, lost-response/restart recovery, transient rate limiting, tampered journal, unavailable post-commit audit, and refusal to fabricate historical admission. Run:
 
 ```bash
 pip install -r requirements.lock
 pip install -e '.[dev]'
-pip install 'git+https://github.com/AWDaley/TervoroAgenticLanguage-TAL-.git@fc989bd403a5291e0b0e0d8ea8ec94766c69b601'
+TAL_SHA="$(python scripts/read_tal_pin.py)"
+pip install "git+https://github.com/AWDaley/TervoroAgenticLanguage-TAL-.git@${TAL_SHA}"
 pytest -q tests/m4/test_tal_office_journal.py
 ```
 
