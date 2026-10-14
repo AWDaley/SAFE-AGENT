@@ -27,13 +27,13 @@ from safe_agent.contracts.internal import (
     InternalTaskRecord,
     parse_office_proposal_json,
 )
-from safe_agent.contracts.planning import PlanningLease
 from safe_agent.contracts.operator import (
     CalendarOperatorPreview,
     InternalTaskOperatorPreview,
     OperatorInboxPage,
     OperatorProposalPreview,
 )
+from safe_agent.contracts.planning import PlanningLease
 from safe_agent.evidence.ledger import EventKind, OfficePhase, TaskSnapshot
 from safe_agent.orchestration.runner import PlanningResult
 from safe_agent.security.principal import AccessDenied, Principal

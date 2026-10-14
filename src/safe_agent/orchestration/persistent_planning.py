@@ -12,6 +12,7 @@ from typing import Callable
 
 from safe_agent.agent.fake import FakePlanner
 from safe_agent.agent.json_planner import ClosedJsonPlanner
+from safe_agent.broker.references import ReferenceDenied
 from safe_agent.contracts.base import require_aware
 from safe_agent.contracts.planning import (
     PlanningCommand,
@@ -28,7 +29,6 @@ from safe_agent.security.principal import Principal
 from safe_agent.storage.planning import PlanningWorkspaceStore
 from safe_agent.storage.repository import StateConflict
 from safe_agent.virtual_office.service import StaleProjection, UnissuedProjection
-from safe_agent.broker.references import ReferenceDenied
 
 
 class TrustedPersistentPlanning:

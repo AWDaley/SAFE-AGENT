@@ -18,13 +18,13 @@ from safe_agent.canonical import sha256
 from safe_agent.contracts.actions import CalendarCreateEvent, RequestClarification
 from safe_agent.contracts.base import Digest, Identifier, StrictModel, require_aware
 from safe_agent.contracts.control import DecisionStatus, Task, TaskManifest
-from safe_agent.contracts.planning import PlanningLease
 from safe_agent.contracts.internal import (
     InternalTaskCreateProposal,
     InternalTaskManifest,
     InternalTaskRecord,
 )
 from safe_agent.contracts.office import SimulatedChange
+from safe_agent.contracts.planning import PlanningLease
 from safe_agent.evidence.ledger import OfficePhase
 from safe_agent.execution.synthetic import SyntheticExecutionGateway
 from safe_agent.orchestration.office_tasks import TrustedOfficeTasks

@@ -20,7 +20,8 @@ from safe_agent.orchestration.office_tasks import TrustedOfficeTasks
 from safe_agent.orchestration.persistent_planning import TrustedPersistentPlanning
 from safe_agent.orchestration.synthetic_workflow import TrustedSyntheticWorkflow
 from safe_agent.orchestration.task_provisioning import (
-    TrustedSyntheticOption, TrustedTaskProvisioner,
+    TrustedSyntheticOption,
+    TrustedTaskProvisioner,
 )
 from safe_agent.security.principal import Principal
 from safe_agent.storage.planning import PlanningWorkspaceStore
