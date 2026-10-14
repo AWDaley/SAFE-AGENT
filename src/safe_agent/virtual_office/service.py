@@ -395,3 +395,21 @@ class VirtualOffice:
             expected_postconditions=("task_created",) if not unique_conflicts else (),
             simulation_hash=sha256({**preimage, "simulation_ref": ref}),
         )
+
+    def trusted_projection_fingerprint(self, projection: CalendarProjection, *, now: datetime) -> str:
+        """Internal precommit evidence; never exposes the source's private record fields.
+
+        The gateway must also compare against the *current fake provider read*, not
+        merely this cache, because the authoritative fake source may have changed.
+        """
+        self._check_projection(projection, now=require_aware(now))
+        return self._source_fingerprints[projection.revision]
+
+
+    def trusted_task_projection_fingerprint(self, projection: TaskListProjection,
+                                           *, now: datetime) -> str:
+        if self._task_observations.get(projection.revision) != projection:
+            raise UnissuedProjection("unrecognized or altered task projection")
+        if now < projection.fetched_at or now >= projection.expires_at:
+            raise StaleProjection("task projection expired")
+        return self._task_fingerprints[projection.revision]

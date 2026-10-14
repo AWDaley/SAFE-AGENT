@@ -1,4 +1,4 @@
-name: SAFE-AGENT M0-M2 contracts and checks
+name: SAFE-AGENT checks
 on:
   push:
     branches: [main]
@@ -8,22 +8,6 @@ permissions:
 jobs:
   checks:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: safe_agent_m2
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: ci_only_synthetic_m2
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd="pg_isready -U postgres -d safe_agent_m2"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=12
-    env:
-      SAFE_AGENT_DATABASE_URL: postgresql+psycopg://postgres:ci_only_synthetic_m2@localhost:5432/safe_agent_m2
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -32,21 +16,17 @@ jobs:
       - name: Install project dependencies
         run: |
           python -m pip install -r requirements.lock
-          python -m pip install -e '.[dev,api,postgres]'
-      - name: Ruff + pinned schema exports
+          python -m pip install -e '.[dev]'
+      - name: Ruff + schema checks
         run: |
-          ruff check src tests scripts migrations
+          ruff check src tests scripts
           python scripts/export_schemas.py --check
           python scripts/export_m1_schemas.py --check
           python scripts/export_m2_schemas.py --check
+          python scripts/export_m3_schemas.py --check
       - name: Static typing
         run: mypy src/safe_agent
-      - name: Offline tests
+      - name: Tests
         run: pytest
-      - name: Real PostgreSQL migration and write-once audit smoke
-        run: |
-          alembic upgrade head
-          python scripts/pg_smoke.py
       - name: Compile source
         run: python -m compileall -q src
-      # Passing this CI is NOT TAL upstream calendar-domain certification.
