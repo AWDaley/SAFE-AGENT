@@ -46,3 +46,21 @@ calendar-specific TAL authority has been implemented.
 
 **Result:** verified TAL source code exists; calendar-domain compatibility is
 **blocked/unimplemented**. The M0 planner is intentionally non-effectful.
+
+
+## M2 update — provisional office-domain policy (2026-10-13)
+
+M2 adds `safe_agent.tal.office_gate.OfficeGate` and deterministic
+`compile_office_grant`, but they operate **only** on synthetic workflows.
+The upstream TAL v0.3 invoice-only `TALRuntime.apply_proposal` has not been
+extended, imported, or called for calendar operations. Its `ToolProposal`
+discriminator, invoice tool enum and event schema remain incompatible with
+the SAFE-AGENT office domain. The M2 `ACTION_ELIGIBLE` event is not an upstream
+TAL permit. `UnconfiguredTALAuthority` still denies all real writes.
+
+M2 introduces a separate provisional office ledger whose events replay
+independently. It does not reuse or replace upstream TAL's invoice ledger.
+Before enabling any provider writes: implement TAL calendar domain pack and
+upstream conformance fixtures; ensure the single external authorization gate
+uses upstream TAL and verifies current business/provider state; do not rely on
+M2's synthetic policy result as a privileged execution token.

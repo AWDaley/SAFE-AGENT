@@ -1,4 +1,4 @@
-# M0–M1 security test matrix
+# M0–M2 security test matrix
 
 Statuses describe **implemented synthetic tests**, not guarantees about an unbuilt
 live system. Later conformance suites must inspect actual adapter effect counters.
@@ -25,3 +25,20 @@ live system. Later conformance suites must inspect actual adapter effect counter
 
 Unimplemented checks **must not** be marked PASS or used to claim enterprise
 information-security or compliance certification.
+
+
+## M2 evaluated controls (synthetic environment only)
+
+| ID | M2 result | Evidence |
+| --- | --- | --- |
+| TAL-01 | PASS synthetic; one accepted proposal/cycle and no effect dispatcher | `tests/m2/test_gate_and_ledger.py` |
+| TAL-02 | PASS synthetic; denied proposals append audit events only | `tests/m2/test_security_boundaries.py` |
+| TAL-03 | PASS; exact proposal hash, manifest, approver identity and expiry checked | `tests/m2/test_planner_bridge.py` and approval tests |
+| REP-01 | PASS synthetic; hash-chain replay and persisted projection comparison | `test_ledger_tampering_and_deleted_events_detected` |
+| SEC-04 | PASS synthetic; broker HMAC export/restore and revoked reference rejection | `test_signed_broker_bindings_survive_restart_and_reject_tampering` |
+| API-01 | PASS local; auth bearer token and tenant/role isolation | `test_operator_api_prevents_cross_tenant_access_and_self_approval` |
+| DB-01 | PASS isolated PostgreSQL CI; migration and immutability triggers | `scripts/pg_smoke.py` (requires hosted CI) |
+| TAL-UPSTREAM-CALENDAR | **BLOCKED**; not calendar-domain TAL v0.3 conformance | `docs/tal-compatibility.md` |
+| M3-DISPATCH | **NOT IMPLEMENTED**; zero real effects possible | No provider adapters or dispatch method |
+
+These results do not certify production data security or real-world compliance.

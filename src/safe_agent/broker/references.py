@@ -142,3 +142,40 @@ class ReferenceBroker:
         if record is None:
             raise ReferenceDenied("reference scope denied")
         self._records[handle] = record.model_copy(update={"revoked": True})
+
+    def trusted_export(self, *, task_id: str) -> tuple[dict[str, object], ...]:
+        """Export signed *private* bindings exclusively to protected persistence.
+
+        NEVER serialize this return value in an agent prompt, HTTP response or
+        evidence payload. HMAC detects accidental or malicious DB-row tampering.
+        """
+        records: list[dict[str, object]] = []
+        for handle, record in sorted(self._records.items()):
+            if record.task_id != task_id:
+                continue
+            protected = record.model_dump(mode="json")
+            signature = hmac.new(self._key, canonical_json(protected), hashlib.sha256).hexdigest()
+            records.append({"handle": handle, "record": protected, "mac": signature})
+        return tuple(records)
+
+    def trusted_import(self, protected_records: tuple[dict[str, object], ...]) -> None:
+        """Verify integrity before restoring privileged mappings after a restart."""
+        for entry in protected_records:
+            if set(entry) != {"handle", "record", "mac"}:
+                raise ReferenceDenied("reference scope denied")
+            payload, mac, handle = entry["record"], entry["mac"], entry["handle"]
+            if not isinstance(payload, dict) or not isinstance(mac, str) or not isinstance(handle, str):
+                raise ReferenceDenied("reference scope denied")
+            expected = hmac.new(self._key, canonical_json(payload), hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(expected, mac):
+                raise ReferenceDenied("reference scope denied")
+            record = _ReferenceRecord.model_validate_json(
+                canonical_json(payload).decode("utf-8")
+            )
+            if record.handle != handle:
+                raise ReferenceDenied("reference scope denied")
+            existing = self._records.get(handle)
+            if existing is not None and existing != record:
+                raise ReferenceDenied("reference scope denied")
+            self._records[handle] = record
+        self._serial = max(self._serial, len(self._records))

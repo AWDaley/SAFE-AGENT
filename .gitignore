@@ -12,3 +12,7 @@ dist/
 .env.*
 !.env.example
 *.sqlite3
+*.sqlite
+*.db
+.venv/
+.pytest_cache/
