@@ -5,7 +5,7 @@ endpoints. Task onboarding remains a privileged internal provisioning step.
 """
 
 from datetime import UTC, datetime
-from typing import Annotated, Callable
+from typing import TYPE_CHECKING, Annotated, Callable
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -15,9 +15,13 @@ from safe_agent.orchestration.office_tasks import ApprovalInput, TrustedOfficeTa
 from safe_agent.security.principal import AccessDenied, Principal, SignedOperatorTokens
 from safe_agent.storage.repository import MissingTask, StateConflict
 
+if TYPE_CHECKING:
+    from safe_agent.integrations.google_calendar.oauth import GoogleOAuthService
+
 
 def create_app(coordinator: TrustedOfficeTasks, authenticator: SignedOperatorTokens,
-               *, clock: Callable[[], datetime] = lambda: datetime.now(UTC)) -> FastAPI:
+               *, clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+               google_test_oauth: "GoogleOAuthService | None" = None) -> FastAPI:
     app = FastAPI(title="SAFE-AGENT M2 Local Operator", version="0.2.0")
     bearer = HTTPBearer(auto_error=False)
 
@@ -79,4 +83,10 @@ def create_app(coordinator: TrustedOfficeTasks, authenticator: SignedOperatorTok
         except StateConflict as error:
             raise HTTPException(status_code=409, detail="approval state mismatch") from error
 
+    if google_test_oauth is not None:
+        from safe_agent.integrations.google_calendar.http import create_google_test_router
+
+        app.include_router(create_google_test_router(
+            google_test_oauth, authenticator, clock=clock,
+        ))
     return app
