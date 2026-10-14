@@ -200,3 +200,20 @@ The offline gate does **not** itself run tests; rely on the CI job outcomes.
 A passing offline gate never marks live Google writes or production authorized.
 Read the [M5 release decision and merge order](docs/M5_RELEASE_GATE.md) and
 [operator acceptance requirements](docs/M5_ACCEPTANCE_READINESS.md).
+
+## M6 operator workspace (offline-only, stacked PR)
+
+The opt-in local operator dashboard lists authenticated organization-scoped
+SAFE tasks, displays stored synthetic proposal previews and replayable audit
+events, and allows separately authorized human approval/denial. It does not
+create tasks, mint operator tokens, contact external calendars, or dispatch
+provider writes. The browser retains the local token in page memory only.
+
+Install optional API dependencies, configure trusted local onboarding/token
+issuance, then set `enable_operator_ui=True` in
+`safe_agent.api.create_app(...)` and open `/operator`. See
+[operator inbox scope and security](docs/M6_OPERATOR_INBOX.md).
+
+**M5 LIVE ACCEPTANCE: BLOCKED.** The previous PR1–PR5 implementation stack
+is still open for human review; this M6 demonstration does not satisfy the
+Google hosted acceptance criterion or permit production deployment.

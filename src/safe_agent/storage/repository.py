@@ -33,6 +33,7 @@ from safe_agent.contracts.internal import (
     InternalTaskManifest,
     InternalTaskRecord,
 )
+from safe_agent.contracts.operator import OperatorInboxPage
 from safe_agent.evidence.ledger import (
     EventKind,
     LedgerEvent,
@@ -887,6 +888,44 @@ class LedgerRepository:
                 "authorization_hash": authority.authorization_hash,
                 "provider_kind": outbox.provider_kind,
             }
+
+    def list_operator_tasks(
+        self, organization_id: str, *, after: str | None = None, limit: int = 20,
+    ) -> OperatorInboxPage:
+        """Bounded, strictly tenant-filtered task snapshots; no private bindings.
+
+        Lexical task-ID cursor is stable across inserts and never names a
+        cross-tenant record. Caller must enforce authenticated task:read.
+        """
+        from safe_agent.contracts.operator import OperatorInboxItem
+
+        if not 1 <= limit <= 50:
+            raise ValueError("operator inbox page must contain 1 to 50 entries")
+        query = select(TaskRow).where(TaskRow.organization_id == organization_id)
+        if after is not None:
+            query = query.where(TaskRow.task_id > after)
+        query = query.order_by(TaskRow.task_id).limit(limit + 1)
+        with self._sessions() as session:
+            rows = session.scalars(query).all()
+            visible = rows[:limit]
+            items: list[OperatorInboxItem] = []
+            for row in visible:
+                snapshot = _unpack(TaskSnapshot, row.snapshot_json)
+                if (snapshot.task_id != row.task_id
+                        or snapshot.organization_id != organization_id
+                        or snapshot.state_version != row.state_version
+                        or snapshot.ledger_sequence != row.ledger_sequence):
+                    raise StateConflict("operator inbox snapshot integrity failed")
+                items.append(OperatorInboxItem(
+                    task_id=snapshot.task_id, phase=snapshot.phase,
+                    state_version=snapshot.state_version,
+                    has_proposal=snapshot.proposal_hash is not None,
+                    approval_pending=snapshot.phase is OfficePhase.AWAITING_APPROVAL,
+                ))
+            return OperatorInboxPage(
+                items=tuple(items),
+                next_cursor=visible[-1].task_id if len(rows) > limit else None,
+            )
 
     def read_task(self, task_id: str) -> TaskSnapshot:
         with self._sessions() as session:
