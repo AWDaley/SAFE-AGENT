@@ -44,6 +44,21 @@
         </aside>
 
         <div class="detail-stack">
+          <section class="panel" id="assignmentPanel" hidden aria-labelledby="assignmentTitle">
+            <p class="eyebrow">Trusted synthetic intake</p>
+            <h2 id="assignmentTitle">Assign an office task</h2>
+            <p class="muted smaller">Only server-authorized workflows are listed. Assignment creates an immutable task and scoped reference bindings; it does not run planning or perform an external action.</p>
+            <form id="assignmentForm" autocomplete="off">
+              <label for="taskOption">Permitted workflow</label>
+              <select id="taskOption" required></select>
+              <label for="windowStart">Allowed window start (your browser time zone)</label>
+              <input id="windowStart" type="datetime-local" required>
+              <label for="windowEnd">Allowed window end (your browser time zone)</label>
+              <input id="windowEnd" type="datetime-local" required>
+              <p class="muted smaller" id="optionPolicy">Option policy</p>
+              <button id="assignBtn" class="primary" type="submit">Assign synthetic task</button>
+            </form>
+          </section>
           <section class="panel" aria-labelledby="detailTitle">
             <p class="eyebrow">Trusted task state</p><h2 id="detailTitle">Select a task</h2>
             <p id="detailLead" class="muted">Select a task to inspect its state and verified synthetic preview.</p>

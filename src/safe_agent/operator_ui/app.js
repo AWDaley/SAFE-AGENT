@@ -9,6 +9,8 @@
   let activeSnapshot = null;
   let activePreview = null;
   let requestGeneration = 0;
+  let taskOptions = [];
+  let intakeNonce = "";
 
   const node = (id) => document.getElementById(id);
   const setText = (id, value) => { node(id).textContent = value == null ? "—" : String(value); };
@@ -28,6 +30,8 @@
     activeTask = null;
     activeSnapshot = null;
     activePreview = null;
+    taskOptions = [];
+    intakeNonce = "";
     requestGeneration += 1;
     node("workspace").hidden = true;
     node("signInPanel").hidden = false;
@@ -37,6 +41,8 @@
     node("previewPanel").hidden = true;
     node("eventsPanel").hidden = true;
     node("taskFacts").hidden = true;
+    node("assignmentPanel").hidden = true;
+    node("taskOption").replaceChildren();
     status("Session cleared from page memory.");
   };
 
@@ -90,6 +96,73 @@
     inbox = inbox.concat(data.items);
     after = data.next_cursor || null;
     drawInbox();
+  }
+
+  function updateTaskPolicy() {
+    const selected = taskOptions.find((opt) => opt.option_id === node("taskOption").value);
+    if (!selected) { setText("optionPolicy", "No permitted workflow selected."); return; }
+    setText("optionPolicy", selected.workflow + " · " +
+      selected.time_zone + " target time zone · " +
+      "Up to " + selected.max_window_minutes + " minutes per request, " +
+      selected.max_ahead_days + " days ahead · " +
+      (selected.requires_approval ? "Human approval required" : "No approval required") +
+      ". Times entered here use your browser time zone (" +
+      Intl.DateTimeFormat().resolvedOptions().timeZone + ").");
+  }
+
+  async function loadTaskOptions() {
+    node("assignmentPanel").hidden = true;
+    let data;
+    try { data = await request("/v1/task-options"); }
+    catch (_) { return; }  // Optional API; review-only deployments have no intake.
+    if (data.schema_version !== "safe_agent.task_options.v1" ||
+        !Array.isArray(data.options)) return;
+    taskOptions = data.options;
+    const field = node("taskOption");
+    field.replaceChildren();
+    for (const opt of taskOptions) {
+      const element = document.createElement("option");
+      element.value = opt.option_id;
+      element.textContent = opt.display_name;
+      field.appendChild(element);
+    }
+    node("assignmentPanel").hidden = taskOptions.length === 0;
+    updateTaskPolicy();
+  }
+
+  async function assignTask(event) {
+    event.preventDefault();
+    const start = new Date(node("windowStart").value);
+    const end = new Date(node("windowEnd").value);
+    if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) ||
+        start >= end) { status("Choose a valid future time window."); return; }
+    if (!intakeNonce) {
+      if (!globalThis.crypto || !globalThis.crypto.randomUUID) {
+        status("Task assignment requires a secure local browser context.");
+        return;
+      }
+      intakeNonce = "req_" + globalThis.crypto.randomUUID().replaceAll("-", "");
+    }
+    node("assignBtn").disabled = true;
+    try {
+      const created = await request("/v1/tasks", "POST", {
+        schema_version: "safe_agent.task_intake.v1",
+        option_id: node("taskOption").value,
+        idempotency_key: intakeNonce,
+        allowed_start: start.toISOString(),
+        allowed_end: end.toISOString()
+      });
+      if (created.schema_version !== "safe_agent.task_intake_receipt.v1" ||
+          created.synthetic_only !== true || created.provider_write_authorized !== false) {
+        throw new Error("Unexpected task intake response.");
+      }
+      intakeNonce = "";
+      await loadInbox(true);
+      await selectTask(created.task_id);
+      status("Synthetic task assigned. No planning or provider effect was dispatched.");
+    } catch (error) {
+      status(error.message + " You may retry this unchanged request safely.");
+    } finally { node("assignBtn").disabled = false; }
   }
 
   function drawFacts(container, entries) {
@@ -249,6 +322,7 @@
     token = entered;
     try {
       await loadInbox(true);
+      await loadTaskOptions();
       node("signInPanel").hidden = true;
       node("workspace").hidden = false;
       status("Connected for scoped task review. No live Google writes enabled.");
@@ -257,6 +331,13 @@
       status(error.message);
     }
   });
+  node("assignmentForm").addEventListener("submit", (event) => { void assignTask(event); });
+  for (const field of ["taskOption", "windowStart", "windowEnd"]) {
+    node(field).addEventListener("change", () => {
+      intakeNonce = "";
+      updateTaskPolicy();
+    });
+  }
   node("disconnectBtn").addEventListener("click", disconnect);
   node("refreshBtn").addEventListener("click", async () => {
     try { await loadInbox(true); status("Inbox refreshed."); } catch (error) { status(error.message); }

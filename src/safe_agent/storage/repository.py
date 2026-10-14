@@ -8,6 +8,7 @@ protect concurrent proposals; SQLite tests use a single local writer.
 from __future__ import annotations
 
 import json
+import re
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -57,6 +58,7 @@ from safe_agent.storage.models import (
     ProposalRow,
     ReferenceRow,
     SimulationRow,
+    TaskIntakeRow,
     TaskRow,
 )
 from safe_agent.virtual_office.models import (
@@ -550,15 +552,73 @@ class LedgerRepository:
             raise ValueError("production repository requires PostgreSQL/psycopg")
         return cls(create_engine(url, pool_pre_ping=True))
 
+    def find_task_intake(
+        self, organization_id: str, initiator_id: str, key: str, *,
+        request_hash: str,
+    ) -> TaskSnapshot | None:
+        """Return the same authorized task on exact idempotent replay; never recreate."""
+        with self._sessions() as session:
+            intake = session.get(TaskIntakeRow, (organization_id, initiator_id, key))
+            if intake is None:
+                return None
+            if intake.request_hash != request_hash:
+                raise StateConflict("idempotency key already used for a different request")
+            task = session.get(TaskRow, intake.task_id)
+            if (task is None or task.organization_id != organization_id
+                    or task.initiator_id != initiator_id):
+                raise StateConflict("task intake integrity failure")
+            snapshot = _unpack(TaskSnapshot, task.snapshot_json)
+            if (snapshot.task_id != task.task_id
+                    or snapshot.organization_id != organization_id
+                    or snapshot.initiator_id != initiator_id
+                    or snapshot.manifest_hash != task.manifest_hash):
+                raise StateConflict("task intake snapshot integrity failure")
+            return snapshot
+
     def create_task(self, task: Task | InternalTaskRecord,
                     manifest: TaskManifest | InternalTaskManifest, *, actor: str,
-                    now: datetime) -> TaskSnapshot:
+                    now: datetime, protected_references: tuple[dict[str, object], ...] = (),
+                    intake_key: str | None = None, intake_hash: str | None = None,
+                    ) -> TaskSnapshot:
         if (task.task_id != manifest.task_id or task.organization_id != manifest.organization_id
                 or task.manifest_id != manifest.manifest_id
                 or task.initiator_id != manifest.initiator_id
                 or task.manifest_hash != sha256(manifest)):
             raise ValueError("task is not bound to immutable manifest")
         now = require_aware(now)
+        if (intake_key is None) != (intake_hash is None):
+            raise ValueError("incomplete idempotency binding")
+        if intake_key is not None and not protected_references:
+            raise StateConflict("new intake requires atomic private reference bindings")
+        expected: dict[str, str] = {}
+        if protected_references:
+            operation = ("calendar.create_event" if isinstance(manifest, TaskManifest)
+                         else "tasks.create")
+            expected[manifest.customer_ref] = "customer"
+            if isinstance(manifest, TaskManifest):
+                expected[manifest.calendar_ref] = "calendar"
+            if len(protected_references) != len(expected):
+                raise StateConflict("missing task-scoped private reference")
+            seen: set[str] = set()
+            for item in protected_references:
+                if set(item) != {"handle", "record", "mac"}:
+                    raise StateConflict("invalid private reference envelope")
+                record = item["record"]
+                handle, mac = item["handle"], item["mac"]
+                if (not isinstance(record, dict)
+                        or not isinstance(handle, str) or handle in seen
+                        or not isinstance(mac, str) or re.fullmatch(r"[0-9a-f]{64}", mac) is None
+                        or expected.get(handle) != record.get("resource_kind")
+                        or record.get("handle") != handle
+                        or record.get("organization_id") != task.organization_id
+                        or record.get("initiator_id") != task.initiator_id
+                        or record.get("task_id") != task.task_id
+                        or record.get("revoked") is not False
+                        or operation not in record.get("permitted_operations", ())):
+                    raise StateConflict("task private reference mismatch")
+                seen.add(handle)
+            if seen != set(expected):
+                raise StateConflict("private references do not match manifest")
         with self._sessions.begin() as session:
             if session.get(TaskRow, task.task_id) is not None:
                 raise StateConflict("task already registered")
@@ -595,6 +655,25 @@ class LedgerRepository:
                 organization_id=task.organization_id, event_hash=event.event_hash,
                 previous_event_hash=None, event_json=_pack(event),
             ))
+            for entry in protected_references:
+                record = entry["record"]
+                assert isinstance(record, dict)
+                handle = entry["handle"]
+                assert isinstance(handle, str)
+                session.add(ReferenceRow(
+                    handle=handle, task_id=task.task_id,
+                    organization_id=task.organization_id,
+                    initiator_id=task.initiator_id,
+                    kind=str(record["resource_kind"]),
+                    binding_json=entry, revoked=False,
+                ))
+            if intake_key is not None:
+                assert intake_hash is not None
+                session.add(TaskIntakeRow(
+                    organization_id=task.organization_id, initiator_id=task.initiator_id,
+                    idempotency_key=intake_key, request_hash=intake_hash,
+                    task_id=task.task_id, created_at=now,
+                ))
         return initial
 
     @contextmanager
