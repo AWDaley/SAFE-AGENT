@@ -19,6 +19,9 @@ google-test = ["httpx==0.28.1", "cryptography==46.0.4"]
 [project.scripts]
 safe-agent = "safe_agent.__main__:main"
 
+[tool.setuptools.package-data]
+"safe_agent.operator_ui" = ["index.html", "app.js", "styles.css"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

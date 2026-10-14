@@ -33,6 +33,7 @@ from safe_agent.contracts.internal import (
     InternalTaskManifest,
     InternalTaskRecord,
 )
+from safe_agent.contracts.operator import OperatorInboxPage
 from safe_agent.evidence.ledger import (
     EventKind,
     LedgerEvent,
@@ -46,6 +47,8 @@ from safe_agent.storage.models import (
     ApprovalRow,
     Base,
     ExecutionRow,
+    GoogleTestConnectionRow,
+    GoogleTestOutboxBindingRow,
     LedgerRow,
     ManifestRow,
     OfficeExecutionAuthorizationRow,
@@ -107,6 +110,7 @@ class OutboxClaim:
     attempts: int
     preceding_status: str
     worker_id: str
+    provider_kind: str = "synthetic"
 
 
 class TaskTransaction:
@@ -225,12 +229,15 @@ class TaskTransaction:
     def write_execution_intent(
         self, action_hash: str, proposal_hash: str, *, now: datetime,
         operation: str, source_revision: str, source_hash: str,
+        provider_kind: str = "synthetic",
     ) -> None:
         """One transaction: action row + leased-worker outbox + signed ledger later."""
         if self.snapshot.phase is not OfficePhase.READY_TO_COMMIT:
             raise StateConflict("execution intent requires ready task")
-        if operation not in {"calendar.create_event", "tasks.create"}:
-            raise StateConflict("unsupported synthetic outbox operation")
+        if (operation not in {"calendar.create_event", "tasks.create"}
+                or provider_kind not in {"synthetic", "google_test"}
+                or (provider_kind == "google_test" and operation != "calendar.create_event")):
+            raise StateConflict("unsupported provider/operation combination")
         effect_id = "fake_action_" + action_hash[7:39]
         if (self.session.get(ExecutionRow, effect_id) is not None
                 or self.session.get(OutboxRow, action_hash) is not None):
@@ -245,8 +252,9 @@ class TaskTransaction:
             action_hash=action_hash, task_id=self.row.task_id,
             organization_id=self.row.organization_id,
             proposal_hash=proposal_hash, manifest_hash=self.row.manifest_hash,
-            operation=operation, source_revision=source_revision,
-            source_hash=source_hash, status="QUEUED", attempts=0,
+            operation=operation, provider_kind=provider_kind,
+            source_revision=source_revision, source_hash=source_hash,
+            status="QUEUED", attempts=0,
             lease_owner=None, lease_until=None, next_attempt_at=now.astimezone(UTC),
             last_reason=None, created_at=now.astimezone(UTC),
         ))
@@ -318,6 +326,106 @@ class TaskTransaction:
             organization_id=task.organization_id,
             authorization_hash=record.authorization_hash,
             authorization_json=raw, recorded_at=require_aware(now).astimezone(UTC),
+        ))
+        self.session.flush()
+
+    def bind_google_test_action(
+        self, *, action_hash: str, connection_ref: str,
+        observation: object, request_hash: str,
+        provider_simulation: object, now: datetime,
+    ) -> None:
+        """Pin an allowlisted, actor-owned test connection in the SAME outbox tx.
+
+        Caller must have fetched the observation through the trusted Google
+        service, which separately validates OAuth scope/calendar allowlist.
+        Neither this binding nor the TAL record can dispatch a provider write.
+        """
+        from safe_agent.integrations.google_calendar.contracts import (
+            GoogleCalendarObservation,
+            GoogleTestEventIntent,
+        )
+        from safe_agent.integrations.google_calendar.oauth import GOOGLE_SCOPES
+        from safe_agent.integrations.google_calendar.provider_simulation import (
+            GoogleTestProviderSimulation,
+            simulate_provider_proposal,
+        )
+
+        now = require_aware(now)
+        if (type(observation) is not GoogleCalendarObservation
+                or type(provider_simulation) is not GoogleTestProviderSimulation):
+            raise StateConflict("GOOGLE_TRUSTED_PROVIDER_EVIDENCE_REQUIRED")
+        provider_simulation.verify_hash()
+        task, manifest, snapshot = self.task, self.manifest, self.snapshot
+        if (not isinstance(task, Task) or not isinstance(manifest, TaskManifest)
+                or snapshot.phase is not OfficePhase.EXECUTING):
+            raise StateConflict("GOOGLE_ACTION_NOT_EXECUTING")
+        proposal = self.read_active_proposal()
+        outbox = self.read_outbox(action_hash)
+        auth = self.session.get(OfficeExecutionAuthorizationRow, action_hash)
+        connection = self.session.get(
+            GoogleTestConnectionRow, connection_ref, with_for_update=True)
+        if (not isinstance(proposal, CalendarCreateEvent)
+                or sha256(proposal) != outbox.proposal_hash
+                or outbox.provider_kind != "google_test"
+                or outbox.operation != "calendar.create_event"
+                or outbox.status != "QUEUED" or outbox.attempts != 0
+                or outbox.lease_owner is not None
+                or auth is None or auth.task_id != task.task_id
+                or auth.authorization_json.get("outbox_action_hash") != action_hash
+                or auth.authorization_hash != auth.authorization_json.get("authorization_hash")
+                or connection is None or connection.revoked
+                or connection.organization_id != task.organization_id
+                or connection.actor_id != task.initiator_id
+                or set(connection.scopes.split()) != GOOGLE_SCOPES):
+            raise StateConflict("GOOGLE_CONNECTION_OR_AUTHORITY_NOT_BOUND")
+        if (observation.organization_id != task.organization_id
+                or observation.task_id != task.task_id
+                or observation.calendar_ref != manifest.calendar_ref
+                or observation.connection_ref != connection_ref
+                or observation.advisory_only is not True
+                or now < observation.fetched_at or now >= observation.expires_at
+                or observation.from_at > proposal.start_at
+                or observation.until_at < proposal.end_at
+                or not any(slot.start_at <= proposal.start_at and
+                           proposal.end_at <= slot.end_at
+                           for slot in observation.free_slots)
+                or outbox.source_revision != observation.revision
+                or outbox.source_hash != sha256(observation)):
+            raise StateConflict("GOOGLE_OBSERVATION_NOT_BOUND")
+        expected_request_hash = sha256({
+            "provider": "google_test", "action_hash": action_hash,
+            "manifest_hash": task.manifest_hash,
+            "proposal_hash": outbox.proposal_hash,
+            "connection_ref": connection_ref,
+            "calendar_ref": manifest.calendar_ref,
+            "start_at": proposal.start_at, "end_at": proposal.end_at,
+            "time_zone": proposal.time_zone,
+        })
+        if request_hash != expected_request_hash:
+            raise StateConflict("GOOGLE_REQUEST_HASH_MISMATCH")
+        expected_simulation = simulate_provider_proposal(
+            observation=observation, proposal=proposal, manifest=manifest, now=now,
+        )
+        if provider_simulation != expected_simulation:
+            raise StateConflict("GOOGLE_PROVIDER_SIMULATION_MISMATCH")
+        GoogleTestEventIntent(
+            action_hash=action_hash, request_hash=request_hash,
+            start_at=proposal.start_at, end_at=proposal.end_at,
+            time_zone=proposal.time_zone,
+        )
+        if self.session.get(GoogleTestOutboxBindingRow, action_hash) is not None:
+            raise StateConflict("GOOGLE_ACTION_ALREADY_BOUND")
+        self.session.add(GoogleTestOutboxBindingRow(
+            action_hash=action_hash, task_id=task.task_id,
+            organization_id=task.organization_id,
+            initiator_id=task.initiator_id, connection_id=connection_ref,
+            calendar_ref=manifest.calendar_ref,
+            observation_revision=observation.revision,
+            observation_hash=sha256(observation),
+            provider_request_hash=request_hash,
+            provider_simulation_hash=expected_simulation.simulation_hash,
+            provider_simulation_json=expected_simulation.model_dump(mode="json"),
+            recorded_at=now.astimezone(UTC),
         ))
         self.session.flush()
 
@@ -511,8 +619,15 @@ class LedgerRepository:
             raise ValueError("invalid worker or bounded lease")
         tick = now.astimezone(UTC)
         with self._sessions.begin() as session:
+            google_binding_exists = (
+                select(GoogleTestOutboxBindingRow.action_hash)
+                .where(GoogleTestOutboxBindingRow.action_hash == OutboxRow.action_hash)
+                .exists()
+            )
             choices = [
+                ~google_binding_exists,
                 OutboxRow.status.in_(("QUEUED", "OUTCOME_UNKNOWN", "RETRY_WAIT", "LEASED")),
+                OutboxRow.provider_kind == "synthetic",
                 OutboxRow.next_attempt_at <= tick,
                 or_(OutboxRow.lease_until.is_(None), OutboxRow.lease_until <= tick),
             ]
@@ -529,6 +644,8 @@ class LedgerRepository:
             attempts = row.attempts
             claimed = session.execute(update(OutboxRow).where(
                 OutboxRow.action_hash == row.action_hash,
+                ~google_binding_exists,
+                OutboxRow.provider_kind == "synthetic",
                 OutboxRow.status == previous, OutboxRow.attempts == attempts,
                 OutboxRow.next_attempt_at <= tick,
                 or_(OutboxRow.lease_until.is_(None), OutboxRow.lease_until <= tick),
@@ -544,6 +661,73 @@ class LedgerRepository:
                 proposal_hash=row.proposal_hash, operation=row.operation,
                 source_revision=row.source_revision, source_hash=row.source_hash,
                 attempts=attempts + 1, preceding_status=previous, worker_id=worker_id,
+                provider_kind=row.provider_kind,
+            )
+
+    def claim_google_test_action(
+        self, *, worker_id: str, now: datetime,
+        lease: timedelta = timedelta(seconds=30),
+        task_id: str | None = None,
+    ) -> OutboxClaim | None:
+        """Offline Google worker lease; never accessible to synthetic dispatchers.
+
+        Requires BOTH sealed TAL authority and the provider-specific SQL binding.
+        Every lease increments attempts. A second lease is reconciliation-only,
+        even after a crash before the first provider POST.
+        """
+        now = require_aware(now)
+        if not worker_id or not timedelta(0) < lease <= timedelta(minutes=5):
+            raise ValueError("invalid bounded worker lease")
+        tick = now.astimezone(UTC)
+        with self._sessions.begin() as session:
+            has_binding = select(GoogleTestOutboxBindingRow.action_hash).where(
+                GoogleTestOutboxBindingRow.action_hash == OutboxRow.action_hash
+            ).exists()
+            has_authority = select(OfficeExecutionAuthorizationRow.action_hash).where(
+                OfficeExecutionAuthorizationRow.action_hash == OutboxRow.action_hash
+            ).exists()
+            constraints = [
+                OutboxRow.provider_kind == "google_test",
+                OutboxRow.operation == "calendar.create_event",
+                OutboxRow.status.in_(("QUEUED", "OUTCOME_UNKNOWN", "LEASED")),
+                has_binding, has_authority,
+                OutboxRow.next_attempt_at <= tick,
+                or_(OutboxRow.lease_until.is_(None), OutboxRow.lease_until <= tick),
+            ]
+            if task_id is not None:
+                constraints.append(OutboxRow.task_id == task_id)
+            query = select(OutboxRow).where(*constraints).order_by(
+                OutboxRow.created_at, OutboxRow.action_hash
+            ).limit(1)
+            if session.bind is not None and session.bind.dialect.name == "postgresql":
+                query = query.with_for_update(skip_locked=True)
+            row = session.scalar(query)
+            if row is None:
+                return None
+            prior, attempts = row.status, row.attempts
+            updated = session.execute(update(OutboxRow).where(
+                OutboxRow.action_hash == row.action_hash,
+                OutboxRow.provider_kind == "google_test",
+                OutboxRow.operation == "calendar.create_event",
+                OutboxRow.status == prior, OutboxRow.attempts == attempts,
+                has_binding, has_authority,
+                OutboxRow.next_attempt_at <= tick,
+                or_(OutboxRow.lease_until.is_(None), OutboxRow.lease_until <= tick),
+            ).values(
+                status="LEASED", attempts=attempts + 1,
+                lease_owner=worker_id, lease_until=tick + lease,
+            ).returning(OutboxRow.action_hash).execution_options(
+                synchronize_session=False,
+            ))
+            if updated.scalar_one_or_none() != row.action_hash:
+                return None
+            return OutboxClaim(
+                action_hash=row.action_hash, task_id=row.task_id,
+                organization_id=row.organization_id, manifest_hash=row.manifest_hash,
+                proposal_hash=row.proposal_hash, operation=row.operation,
+                source_revision=row.source_revision, source_hash=row.source_hash,
+                attempts=attempts + 1, preceding_status=prior,
+                worker_id=worker_id, provider_kind="google_test",
             )
 
     def release_action_unknown(self, claim: OutboxClaim, *, now: datetime,
@@ -576,7 +760,8 @@ class LedgerRepository:
                 raise MissingTask("no durable action for task")
             return {
                 "action_hash": row.action_hash, "task_id": row.task_id,
-                "status": row.status, "attempts": row.attempts,
+                "status": row.status, "provider_kind": row.provider_kind,
+                "attempts": row.attempts,
                 "last_reason": row.last_reason,
             }
 
@@ -611,6 +796,136 @@ class LedgerRepository:
                     or record.operation != outbox.operation):
                 raise StateConflict("TAL_AUTHORIZATION_TAMPERED")
             return record
+
+    def read_google_test_action_binding(
+        self, task_id: str, action_hash: str,
+    ) -> dict[str, str]:
+        """Private, integrity-checked connection/outbox metadata for future worker.
+
+        Never expose this method in an operator/agent API. No OAuth credentials,
+        raw provider IDs or HTTP calls are returned.
+        """
+        from safe_agent.integrations.google_calendar.provider_simulation import (
+            GoogleProviderSimulationInvalid,
+            GoogleTestProviderSimulation,
+        )
+
+        with self._sessions.begin() as session:
+            task = session.get(TaskRow, task_id)
+            outbox = session.get(OutboxRow, action_hash)
+            row = session.get(GoogleTestOutboxBindingRow, action_hash)
+            authority = session.get(OfficeExecutionAuthorizationRow, action_hash)
+            if (task is None or outbox is None or row is None or authority is None
+                    or outbox.task_id != task_id or row.task_id != task_id
+                    or authority.task_id != task_id
+                    or row.organization_id != task.organization_id
+                    or row.initiator_id != task.initiator_id
+                    or outbox.organization_id != task.organization_id
+                    or outbox.provider_kind != "google_test"
+                    or outbox.operation != "calendar.create_event"
+                    or outbox.proposal_hash != authority.authorization_json.get("source_proposal_hash")
+                    or row.observation_revision != outbox.source_revision
+                    or row.observation_hash != outbox.source_hash
+                    or row.calendar_ref != authority.authorization_json.get("calendar_ref")
+                    or authority.authorization_hash != authority.authorization_json.get("authorization_hash")):
+                raise StateConflict("GOOGLE_OUTBOX_BINDING_INTEGRITY_ERROR")
+            snap = _unpack(TaskSnapshot, task.snapshot_json)
+            proposal_row = session.get(ProposalRow, (task_id, snap.cycles_used))
+            if proposal_row is None:
+                raise StateConflict("GOOGLE_BOUND_PROPOSAL_NOT_FOUND")
+            proposal = _unpack(CalendarCreateEvent, proposal_row.proposal_json)
+            if (sha256(proposal) != proposal_row.proposal_hash
+                    or proposal_row.proposal_hash != outbox.proposal_hash):
+                raise StateConflict("GOOGLE_BOUND_PROPOSAL_TAMPERED")
+            expected_request_hash = sha256({
+                "provider": "google_test", "action_hash": action_hash,
+                "manifest_hash": outbox.manifest_hash,
+                "proposal_hash": outbox.proposal_hash,
+                "connection_ref": row.connection_id,
+                "calendar_ref": row.calendar_ref,
+                "start_at": proposal.start_at, "end_at": proposal.end_at,
+                "time_zone": proposal.time_zone,
+            })
+            if row.provider_request_hash != expected_request_hash:
+                raise StateConflict("GOOGLE_OUTBOX_REQUEST_HASH_TAMPERED")
+            try:
+                if row.provider_simulation_json is None or row.provider_simulation_hash is None:
+                    raise GoogleProviderSimulationInvalid("PROVIDER_SIMULATION_NOT_RECORDED")
+                simulation = GoogleTestProviderSimulation.model_validate_json(
+                    json.dumps(row.provider_simulation_json),
+                )
+                simulation.verify_hash()
+                if (simulation.simulation_hash != row.provider_simulation_hash
+                        or simulation.provenance != "google_test_calendar"
+                        or simulation.observation_revision != outbox.source_revision
+                        or simulation.observation_hash != outbox.source_hash
+                        or simulation.proposal_hash != outbox.proposal_hash
+                        or simulation.organization_id != row.organization_id
+                        or simulation.task_id != task_id
+                        or simulation.calendar_ref != row.calendar_ref
+                        or simulation.connection_ref != row.connection_id
+                        or simulation.start_at != proposal.start_at
+                        or simulation.end_at != proposal.end_at):
+                    raise GoogleProviderSimulationInvalid("GOOGLE_PROVIDER_SIMULATION_MISMATCH")
+            except (ValueError, TypeError) as error:
+                raise StateConflict("GOOGLE_PROVIDER_SIMULATION_INTEGRITY_ERROR") from error
+            connection = session.get(GoogleTestConnectionRow, row.connection_id)
+            if (connection is None or connection.revoked
+                    or connection.organization_id != row.organization_id
+                    or connection.actor_id != row.initiator_id):
+                raise StateConflict("GOOGLE_BOUND_CONNECTION_UNAVAILABLE")
+            return {
+                "action_hash": row.action_hash,
+                "task_id": row.task_id,
+                "organization_id": row.organization_id,
+                "initiator_id": row.initiator_id,
+                "connection_ref": row.connection_id,
+                "calendar_ref": row.calendar_ref,
+                "observation_revision": row.observation_revision,
+                "observation_hash": row.observation_hash,
+                "provider_request_hash": row.provider_request_hash,
+                "provider_simulation_hash": row.provider_simulation_hash,
+                "authorization_hash": authority.authorization_hash,
+                "provider_kind": outbox.provider_kind,
+            }
+
+    def list_operator_tasks(
+        self, organization_id: str, *, after: str | None = None, limit: int = 20,
+    ) -> OperatorInboxPage:
+        """Bounded, strictly tenant-filtered task snapshots; no private bindings.
+
+        Lexical task-ID cursor is stable across inserts and never names a
+        cross-tenant record. Caller must enforce authenticated task:read.
+        """
+        from safe_agent.contracts.operator import OperatorInboxItem
+
+        if not 1 <= limit <= 50:
+            raise ValueError("operator inbox page must contain 1 to 50 entries")
+        query = select(TaskRow).where(TaskRow.organization_id == organization_id)
+        if after is not None:
+            query = query.where(TaskRow.task_id > after)
+        query = query.order_by(TaskRow.task_id).limit(limit + 1)
+        with self._sessions() as session:
+            rows = session.scalars(query).all()
+            visible = rows[:limit]
+            items: list[OperatorInboxItem] = []
+            for row in visible:
+                snapshot = _unpack(TaskSnapshot, row.snapshot_json)
+                if (snapshot.task_id != row.task_id
+                        or snapshot.organization_id != organization_id
+                        or snapshot.state_version != row.state_version
+                        or snapshot.ledger_sequence != row.ledger_sequence):
+                    raise StateConflict("operator inbox snapshot integrity failed")
+                items.append(OperatorInboxItem(
+                    task_id=snapshot.task_id, phase=snapshot.phase,
+                    state_version=snapshot.state_version,
+                    has_proposal=snapshot.proposal_hash is not None,
+                    approval_pending=snapshot.phase is OfficePhase.AWAITING_APPROVAL,
+                ))
+            return OperatorInboxPage(
+                items=tuple(items),
+                next_cursor=visible[-1].task_id if len(rows) > limit else None,
+            )
 
     def read_task(self, task_id: str) -> TaskSnapshot:
         with self._sessions() as session:
@@ -714,6 +1029,43 @@ class LedgerRepository:
                 if (outbox.action_hash != intent.payload["action_hash"]
                         or outbox.proposal_hash != persisted.proposal_hash):
                     raise ValueError("outbox not bound to ledger intent")
+                if outbox.provider_kind == "google_test":
+                    from safe_agent.integrations.google_calendar.provider_simulation import (
+                        GoogleTestProviderSimulation,
+                    )
+                    binding = session.get(GoogleTestOutboxBindingRow, outbox.action_hash)
+                    auth = session.get(
+                        OfficeExecutionAuthorizationRow, outbox.action_hash)
+                    if (binding is None or auth is None
+                            or binding.task_id != task_id
+                            or binding.organization_id != persisted.organization_id
+                            or binding.initiator_id != persisted.initiator_id
+                            or binding.observation_revision != outbox.source_revision
+                            or binding.observation_hash != outbox.source_hash
+                            or auth.task_id != task_id
+                            or auth.authorization_json.get("outbox_action_hash") != outbox.action_hash
+                            or auth.authorization_hash != auth.authorization_json.get(
+                                "authorization_hash")
+                            or binding.provider_simulation_json is None
+                            or binding.provider_simulation_hash is None):
+                        raise ValueError("Google outbox authorization/binding replay mismatch")
+                    try:
+                        sim = GoogleTestProviderSimulation.model_validate_json(
+                            json.dumps(binding.provider_simulation_json),
+                        )
+                        sim.verify_hash()
+                        if (sim.simulation_hash != binding.provider_simulation_hash
+                                or sim.observation_revision != outbox.source_revision
+                                or sim.observation_hash != outbox.source_hash
+                                or sim.proposal_hash != outbox.proposal_hash
+                                or sim.calendar_ref != binding.calendar_ref
+                                or sim.connection_ref != binding.connection_id
+                                or sim.task_id != task_id):
+                            raise ValueError("provider simulation binding mismatch")
+                    except (ValueError, TypeError) as error:
+                        raise ValueError("Google provider simulation replay mismatch") from error
+                elif outbox.provider_kind != "synthetic":
+                    raise ValueError("unsupported outbox provider kind")
                 if (persisted.phase is OfficePhase.COMPLETED and outbox.status != "VERIFIED"):
                     raise ValueError("completed action outbox not verified")
                 if (persisted.phase is OfficePhase.NEEDS_REVIEW

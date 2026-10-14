@@ -30,6 +30,12 @@ jobs:
         run: mypy src/safe_agent
       - name: Tests
         run: pytest
+      - name: M6 operator inbox tests and browser syntax
+        run: |
+          pytest -q tests/m6
+          node --check src/safe_agent/operator_ui/app.js
+      - name: M5 offline release preparation (live gate stays blocked)
+        run: python scripts/check_m5_release.py --mode offline
       - name: Compile source
         run: python -m compileall -q src
       - name: Synthetic M4 process-restart recovery smoke
@@ -42,7 +48,7 @@ jobs:
           SAFE_AGENT_DATABASE_URL: sqlite+pysqlite:///./ci-m4-migration.sqlite
         run: |
           alembic upgrade head
-          python -c "from sqlalchemy import create_engine, inspect; e=create_engine('sqlite+pysqlite:///./ci-m4-migration.sqlite'); assert {'safe_action_outbox', 'safe_fake_provider_effects', 'safe_fake_provider_state', 'safe_google_test_connections', 'safe_google_oauth_pending'} <= set(inspect(e).get_table_names())"
+          python -c "from sqlalchemy import create_engine, inspect; e=create_engine('sqlite+pysqlite:///./ci-m4-migration.sqlite'); assert {'safe_action_outbox', 'safe_fake_provider_effects', 'safe_fake_provider_state', 'safe_google_test_connections', 'safe_google_oauth_pending', 'safe_office_execution_authorizations', 'safe_google_test_outbox_bindings'} <= set(inspect(e).get_table_names()); assert {'provider_simulation_hash', 'provider_simulation_json'} <= {x['name'] for x in inspect(e).get_columns('safe_google_test_outbox_bindings')}"
 
   tal-office-interop:
     runs-on: ubuntu-latest
@@ -55,6 +61,7 @@ jobs:
         run: |
           python -m pip install -r requirements.lock
           python -m pip install -e '.[dev]'
-          python -m pip install 'git+https://github.com/AWDaley/TervoroAgenticLanguage-TAL-.git@e9d09ef47c0e0e18f3955f9c58f7a8941baf6c38'
+          TAL_SHA="$(python scripts/read_tal_pin.py)"
+          python -m pip install "git+https://github.com/AWDaley/TervoroAgenticLanguage-TAL-.git@${TAL_SHA}"
       - name: Verify TAL office-domain interoperability
-        run: pytest -q tests/m5/test_upstream_office_bridge.py tests/m4/test_tal_runtime_dispatch.py tests/m5/test_tal_execution_authority.py
+        run: pytest -q tests/m4/test_tal_office_journal.py tests/m5/test_upstream_office_bridge.py tests/m4/test_tal_runtime_dispatch.py tests/m5/test_tal_execution_authority.py tests/m5/test_google_test_outbox.py tests/m5/test_google_recovery.py tests/m5/test_google_provider_binding.py tests/m5/test_google_acceptance_preflight.py

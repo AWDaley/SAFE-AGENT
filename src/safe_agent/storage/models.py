@@ -140,6 +140,8 @@ class OutboxRow(Base):
     proposal_hash: Mapped[str] = mapped_column(String(72), nullable=False)
     manifest_hash: Mapped[str] = mapped_column(String(72), nullable=False)
     operation: Mapped[str] = mapped_column(String(48), nullable=False)
+    provider_kind: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="synthetic", server_default="synthetic")
     source_revision: Mapped[str] = mapped_column(String(128), nullable=False)
     source_hash: Mapped[str] = mapped_column(String(72), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -182,6 +184,33 @@ class FakeProviderEffectRow(Base):
     operation: Mapped[str] = mapped_column(String(48), nullable=False)
     request_hash: Mapped[str] = mapped_column(String(72), nullable=False)
     effect_ref: Mapped[str] = mapped_column(String(128), nullable=False)
+
+
+class GoogleTestOutboxBindingRow(Base):
+    """Trusted-only Google test connection and observation tied to ONE SAFE outbox.
+
+    The exact provider calendar ID and OAuth credentials remain exclusively in
+    the encrypted GoogleTestConnectionRow vault. This is not a public DTO.
+    """
+
+    __tablename__ = "safe_google_test_outbox_bindings"
+    action_hash: Mapped[str] = mapped_column(
+        String(72), ForeignKey("safe_action_outbox.action_hash"), primary_key=True)
+    task_id: Mapped[str] = mapped_column(
+        String(128), ForeignKey("safe_tasks.task_id"), nullable=False, unique=True)
+    organization_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    initiator_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    connection_id: Mapped[str] = mapped_column(
+        String(128), ForeignKey("safe_google_test_connections.connection_id"),
+        nullable=False)
+    calendar_ref: Mapped[str] = mapped_column(String(128), nullable=False)
+    observation_revision: Mapped[str] = mapped_column(String(72), nullable=False)
+    observation_hash: Mapped[str] = mapped_column(String(72), nullable=False)
+    provider_request_hash: Mapped[str] = mapped_column(String(72), nullable=False)
+    # Nullable for historical PR2 intents: they fail closed until re-staged.
+    provider_simulation_hash: Mapped[str | None] = mapped_column(String(72))
+    provider_simulation_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class GoogleOAuthPendingRow(Base):

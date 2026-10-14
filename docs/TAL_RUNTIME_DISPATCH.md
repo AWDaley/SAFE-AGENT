@@ -1,5 +1,13 @@
 # TALRuntime at SAFE-AGENT's durable synthetic outbox
 
+
+> **Historical implementation snapshot.** This note records an earlier
+> stage and its then-current upstream SHA; some earlier "not implemented" text
+> is superseded. As of PR5, the only currently pinned TAL source is
+> [`ci/tal-office-commit.sha`](../ci/tal-office-commit.sha), with experimental
+> trusted office authorization and mock-only Google execution. **M5 LIVE
+> ACCEPTANCE: BLOCKED.** See [M5_RELEASE_GATE.md](M5_RELEASE_GATE.md).
+
 **Status:** Additional, opt-in M5 interoperability check. Real Google provider writes remain disabled.
 
 **Upstream requirement:** TAL commit `c869390752f4a142e0a9605bb211a827510d1cff` (calendar runtime action). This change exercises the **actual `TALRuntime.apply_proposal` office branch** rather than only the preview-oriented `tal.office.admit_office_calendar` function. The runtime requires trusted run/actor identity, a pinned state version, and an `EXECUTING` outbox phase. The sealed `OfficeRuntimeAction` also contains the hash of an already-persisted leased outbox action. TAL independently evaluates calendar bounds, approval binding, budgets, and signed-grant hash integrity. Its decision still declares `authorizes_execution=False`.

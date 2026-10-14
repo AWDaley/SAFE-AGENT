@@ -1,6 +1,16 @@
 # M5 — Google Calendar isolated-test connector (implementation report)
 
-**Status: connector code and offline HTTP contract tests implemented. Real Google validation NOT performed. Real provider writes remain blocked.**
+**Status update (October 14, 2026, PR5): M5 LIVE ACCEPTANCE: BLOCKED.**
+The original connector report below describes an earlier M5 snapshot. Stacked
+PRs #13–#16 add a TAL office execution-authorization contract, a Google-bound
+SQL outbox, an **offline-only** recovery worker and provider-originated advisory
+simulation. Their mock-provider tests do not verify any actual Google account.
+PR5 consolidates the shared pinned TAL revision and explicit release gate.
+See [current gate](M5_RELEASE_GATE.md), [read-only acceptance readiness](M5_ACCEPTANCE_READINESS.md)
+and the PR3 [mock recovery report](M5_GOOGLE_RECOVERY.md).
+
+**Historical M5 connector status:** code and offline HTTP contract tests implemented.
+No real provider write has occurred; live acceptance remains unverified.
 
 **Baseline:** `AWDaley/SAFE-AGENT` M4 main at `584f8259a2f22037ee0041466985f3ff9ff0b881`.
 
@@ -38,7 +48,7 @@ This milestone adds a narrowly scoped Google Calendar implementation without rep
 | Event lookup | `GET /calendars/{id}/events/{eventId}` | Yes, tested via simulated HTTP | 404 after timeout does not prove that no effect occurred |
 | Event insert | `POST /calendars/{id}/events` | Trusted low-level request with mock validation | NO live dispatch; IDs reduce retry ambiguity but collisions are not guaranteed to be atomically detected |
 | Conditional reservation | No general calendar-wide atomic reserve-and-create operation | Not supported | Recheck still races with other writers; escalate conflicts, never claim atomicity |
-| End-to-end task completion | Trusted TAL + outbox + independent verifier | **Not connected to Google** | Blocked pending upstream TAL calendar domain and live test-account acceptance |
+| End-to-end task completion | Trusted TAL + outbox + independent verifier | **Connected only through MockTransport (PR3)** | Real-provider write/readback remains blocked; simulated completion does not satisfy M5 exit |
 
 ## Required checks before M5 live-test acceptance
 
@@ -66,8 +76,8 @@ pytest -q
 ## Unresolved blockers
 
 - No actual Google OAuth connection or real API call was performed in this environment; no user-supplied OAuth app client or test calendar is available.
-- Upstream TAL remains invoice-domain-only; Google writes are not authorized in SAFE-AGENT.
-- Dedicated operator connect/callback UI, persistent deployment-secret rotation, durable Google provider adapter/outbox integration, and Google-hosted acceptance tests are still required.
+- Upstream TAL now exposes a typed experimental office runtime admission and protected execution-authorization record. These are **not** bearer permissions, and Google live writes remain disabled.
+- The optional authenticated OAuth browser callback and protected Google outbox are implemented but require reviewed deployment wiring, real disposable-account consent, independent live acceptance, durable cross-store audit alerting and secret-rotation validation.
 - Provider's event ID duplicate detection and free/busy are **not** atomic slot locking; ambiguous remote effects must remain `OUTCOME_UNKNOWN`/`NEEDS_REVIEW` until reconciled.
 
 **Exit judgment:** M5 provider interface and offline contract-test work delivered; **live integration exit gate outstanding**. See ADR 0005 and `docs/M5_GOOGLE_TEST_SETUP.md`.
