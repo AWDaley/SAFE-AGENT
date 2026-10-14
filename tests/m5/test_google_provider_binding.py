@@ -10,10 +10,7 @@ pytest.importorskip("tal.office_execution")
 
 from safe_agent.canonical import sha256
 from safe_agent.evidence.ledger import OfficePhase
-from safe_agent.integrations.google_calendar.provider_simulation import (
-    GoogleProviderSimulationInvalid,
-    simulate_provider_proposal,
-)
+from safe_agent.integrations.google_calendar.provider_simulation import GoogleProviderSimulationInvalid
 from safe_agent.storage.models import GoogleTestOutboxBindingRow
 from safe_agent.storage.repository import StateConflict
 from tests.m2.conftest import NOW

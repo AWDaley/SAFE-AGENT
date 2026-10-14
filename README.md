@@ -166,3 +166,12 @@ private calendar mapping and post-write independent readback; ambiguous effects
 are reconciled or escalated without blindly retrying inserts. See
 [offline recovery limitations](docs/M5_GOOGLE_RECOVERY.md). Real Google writes
 remain disabled, pending PR4 acceptance and security review.
+
+## PR4: provider-sourced simulation and read-only acceptance preflight
+
+The stacked PR4 branch adds a provider-originated, hash-bound advisory simulation
+for test Google outbox intents, plus a strictly read-only operator acceptance
+preflight. It cannot authorize or perform live Google inserts. See
+[PR4 acceptance readiness and blockers](docs/M5_ACCEPTANCE_READINESS.md).
+**M5 live acceptance remains BLOCKED** until a disposable account, reviewed
+worker and independently verified event-readback evidence are supplied.
