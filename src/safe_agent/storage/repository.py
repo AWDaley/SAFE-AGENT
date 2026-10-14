@@ -46,6 +46,8 @@ from safe_agent.storage.models import (
     ApprovalRow,
     Base,
     ExecutionRow,
+    GoogleTestConnectionRow,
+    GoogleTestOutboxBindingRow,
     LedgerRow,
     ManifestRow,
     OfficeExecutionAuthorizationRow,
@@ -107,6 +109,7 @@ class OutboxClaim:
     attempts: int
     preceding_status: str
     worker_id: str
+    provider_kind: str = "synthetic"
 
 
 class TaskTransaction:
@@ -225,12 +228,15 @@ class TaskTransaction:
     def write_execution_intent(
         self, action_hash: str, proposal_hash: str, *, now: datetime,
         operation: str, source_revision: str, source_hash: str,
+        provider_kind: str = "synthetic",
     ) -> None:
         """One transaction: action row + leased-worker outbox + signed ledger later."""
         if self.snapshot.phase is not OfficePhase.READY_TO_COMMIT:
             raise StateConflict("execution intent requires ready task")
-        if operation not in {"calendar.create_event", "tasks.create"}:
-            raise StateConflict("unsupported synthetic outbox operation")
+        if (operation not in {"calendar.create_event", "tasks.create"}
+                or provider_kind not in {"synthetic", "google_test"}
+                or (provider_kind == "google_test" and operation != "calendar.create_event")):
+            raise StateConflict("unsupported provider/operation combination")
         effect_id = "fake_action_" + action_hash[7:39]
         if (self.session.get(ExecutionRow, effect_id) is not None
                 or self.session.get(OutboxRow, action_hash) is not None):
@@ -245,8 +251,9 @@ class TaskTransaction:
             action_hash=action_hash, task_id=self.row.task_id,
             organization_id=self.row.organization_id,
             proposal_hash=proposal_hash, manifest_hash=self.row.manifest_hash,
-            operation=operation, source_revision=source_revision,
-            source_hash=source_hash, status="QUEUED", attempts=0,
+            operation=operation, provider_kind=provider_kind,
+            source_revision=source_revision, source_hash=source_hash,
+            status="QUEUED", attempts=0,
             lease_owner=None, lease_until=None, next_attempt_at=now.astimezone(UTC),
             last_reason=None, created_at=now.astimezone(UTC),
         ))
@@ -513,6 +520,7 @@ class LedgerRepository:
         with self._sessions.begin() as session:
             choices = [
                 OutboxRow.status.in_(("QUEUED", "OUTCOME_UNKNOWN", "RETRY_WAIT", "LEASED")),
+                OutboxRow.provider_kind == "synthetic",
                 OutboxRow.next_attempt_at <= tick,
                 or_(OutboxRow.lease_until.is_(None), OutboxRow.lease_until <= tick),
             ]
@@ -529,6 +537,7 @@ class LedgerRepository:
             attempts = row.attempts
             claimed = session.execute(update(OutboxRow).where(
                 OutboxRow.action_hash == row.action_hash,
+                OutboxRow.provider_kind == "synthetic",
                 OutboxRow.status == previous, OutboxRow.attempts == attempts,
                 OutboxRow.next_attempt_at <= tick,
                 or_(OutboxRow.lease_until.is_(None), OutboxRow.lease_until <= tick),
@@ -544,6 +553,7 @@ class LedgerRepository:
                 proposal_hash=row.proposal_hash, operation=row.operation,
                 source_revision=row.source_revision, source_hash=row.source_hash,
                 attempts=attempts + 1, preceding_status=previous, worker_id=worker_id,
+                provider_kind=row.provider_kind,
             )
 
     def release_action_unknown(self, claim: OutboxClaim, *, now: datetime,

@@ -157,7 +157,10 @@ class SyntheticRecoveryWorker:
         with self._repo.write_task(claim.task_id) as tx:
             task, manifest, snap = tx.task, tx.manifest, tx.snapshot
             outbox = tx.read_outbox(claim.action_hash)
-            if (outbox.status != "LEASED" or outbox.lease_owner != claim.worker_id
+            if (claim.provider_kind != "synthetic"
+                    or outbox.provider_kind != "synthetic"
+                    or outbox.status != "LEASED"
+                    or outbox.lease_owner != claim.worker_id
                     or snap.phase is not OfficePhase.EXECUTING
                     or snap.proposal_hash != claim.proposal_hash
                     or task.manifest_hash != claim.manifest_hash
