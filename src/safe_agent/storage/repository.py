@@ -19,12 +19,18 @@ from sqlalchemy.pool import StaticPool
 
 from safe_agent.canonical import sha256
 from safe_agent.contracts.actions import CalendarCreateEvent
-from safe_agent.contracts.internal import (
-    InternalTaskRecord, InternalTaskManifest, InternalTaskCreateProposal,
-)
 from safe_agent.contracts.base import require_aware
 from safe_agent.contracts.control import (
-    Approval, Task, TaskManifest, ExecutionOutcome, ExecutionReceipt,
+    Approval,
+    ExecutionOutcome,
+    ExecutionReceipt,
+    Task,
+    TaskManifest,
+)
+from safe_agent.contracts.internal import (
+    InternalTaskCreateProposal,
+    InternalTaskManifest,
+    InternalTaskRecord,
 )
 from safe_agent.evidence.ledger import (
     EventKind,
@@ -38,17 +44,20 @@ from safe_agent.evidence.ledger import (
 from safe_agent.storage.models import (
     ApprovalRow,
     Base,
+    ExecutionRow,
     LedgerRow,
     ManifestRow,
     ProjectionRow,
     ProposalRow,
     ReferenceRow,
-    ExecutionRow,
     SimulationRow,
     TaskRow,
 )
 from safe_agent.virtual_office.models import (
-    CalendarProjection, CalendarSimulation, TaskListProjection, InternalTaskSimulation,
+    CalendarProjection,
+    CalendarSimulation,
+    InternalTaskSimulation,
+    TaskListProjection,
 )
 
 M = TypeVar("M", bound=BaseModel)

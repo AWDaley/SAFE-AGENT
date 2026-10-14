@@ -9,17 +9,10 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from safe_agent.execution.synthetic import SyntheticExecutionGateway
-
 from pydantic import Field, field_validator
 
 from safe_agent.canonical import sha256
 from safe_agent.contracts.actions import CalendarCreateEvent, RequestClarification
-from safe_agent.contracts.internal import (
-    InternalTaskCreateProposal, InternalTaskManifest, InternalTaskRecord,
-    parse_office_proposal_json,
-)
 from safe_agent.contracts.base import Digest, StrictModel, require_aware
 from safe_agent.contracts.control import (
     ActionDecision,
@@ -28,6 +21,12 @@ from safe_agent.contracts.control import (
     Task,
     TaskManifest,
 )
+from safe_agent.contracts.internal import (
+    InternalTaskCreateProposal,
+    InternalTaskManifest,
+    InternalTaskRecord,
+    parse_office_proposal_json,
+)
 from safe_agent.evidence.ledger import EventKind, OfficePhase, TaskSnapshot
 from safe_agent.orchestration.runner import PlanningResult
 from safe_agent.security.principal import AccessDenied, Principal
@@ -35,8 +34,14 @@ from safe_agent.storage.repository import LedgerRepository, StateConflict
 from safe_agent.tal.office_gate import OfficeGate
 from safe_agent.virtual_office import VirtualOffice
 from safe_agent.virtual_office.models import (
-    CalendarProjection, CalendarSimulation, TaskListProjection, InternalTaskSimulation,
+    CalendarProjection,
+    CalendarSimulation,
+    InternalTaskSimulation,
+    TaskListProjection,
 )
+
+if TYPE_CHECKING:
+    from safe_agent.execution.synthetic import SyntheticExecutionGateway
 
 
 class ApprovalInput(StrictModel):

@@ -151,8 +151,9 @@ class FakeCalendarAdapter:
             if (start_at >= end_at
                     or (end_at - start_at).total_seconds() != template.duration_minutes * 60):
                 raise FakeCalendarConflict("invalid appointment duration")
-            from safe_agent.virtual_office.timezones import checked_instant
             from zoneinfo import ZoneInfo
+
+            from safe_agent.virtual_office.timezones import checked_instant
             try:
                 checked_instant(start_at, ZoneInfo(calendar.time_zone))
                 checked_instant(end_at, ZoneInfo(calendar.time_zone))

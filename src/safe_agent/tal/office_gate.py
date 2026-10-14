@@ -14,14 +14,19 @@ from typing import Literal
 from safe_agent.broker import BrokerScope, ReferenceBroker, ReferenceDenied, ResourceKind
 from safe_agent.canonical import sha256
 from safe_agent.contracts.actions import CalendarCreateEvent
-from safe_agent.contracts.internal import (
-    InternalTaskCreateProposal, InternalTaskManifest, InternalTaskRecord,
-)
 from safe_agent.contracts.base import Digest, Identifier, StrictModel, require_aware
 from safe_agent.contracts.control import ActionDecision, DecisionStatus, Task, TaskManifest
+from safe_agent.contracts.internal import (
+    InternalTaskCreateProposal,
+    InternalTaskManifest,
+    InternalTaskRecord,
+)
 from safe_agent.evidence.ledger import OfficePhase, TaskSnapshot
 from safe_agent.virtual_office.models import (
-    CalendarProjection, CalendarSimulation, TaskListProjection, InternalTaskSimulation,
+    CalendarProjection,
+    CalendarSimulation,
+    InternalTaskSimulation,
+    TaskListProjection,
 )
 
 

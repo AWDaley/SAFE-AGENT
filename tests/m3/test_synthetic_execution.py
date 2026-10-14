@@ -15,7 +15,7 @@ from safe_agent.security.principal import AccessDenied
 from safe_agent.storage.models import ExecutionRow
 from safe_agent.storage.repository import StateConflict
 from safe_agent.tal.office_gate import OfficeGate
-from tests.m2.conftest import NOW, SLOT_END, SLOT_START, arrange, kit  # noqa: F401
+from tests.m2.conftest import NOW, SLOT_END, SLOT_START, arrange
 
 
 def install(kit):

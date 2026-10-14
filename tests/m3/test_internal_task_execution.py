@@ -12,7 +12,9 @@ from safe_agent.broker import BrokerScope, ResourceKind
 from safe_agent.canonical import sha256
 from safe_agent.contracts.control import DecisionStatus, ExecutionOutcome, TaskBudget
 from safe_agent.contracts.internal import (
-    InternalTaskCreateProposal, InternalTaskManifest, InternalTaskRecord,
+    InternalTaskCreateProposal,
+    InternalTaskManifest,
+    InternalTaskRecord,
 )
 from safe_agent.evidence.ledger import EventKind, OfficePhase
 from safe_agent.execution.synthetic import SyntheticExecutionGateway
@@ -21,7 +23,7 @@ from safe_agent.storage.models import ExecutionRow
 from safe_agent.storage.repository import StateConflict
 from safe_agent.tal.office_gate import OfficeGate
 from safe_agent.virtual_office.models import InternalTaskChange, ObserveTasks
-from tests.m2.conftest import NOW, kit  # noqa: F401
+from tests.m2.conftest import NOW
 
 
 def make_task_flow(kit, *, approval=False, task_id="task_internal"):

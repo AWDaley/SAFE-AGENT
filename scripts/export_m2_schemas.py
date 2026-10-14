@@ -6,7 +6,7 @@ import argparse
 from pathlib import Path
 
 from safe_agent.canonical import canonical_json
-from safe_agent.evidence.legacy_m2 import LedgerEvent, TaskSnapshot, Principal
+from safe_agent.evidence.legacy_m2 import LedgerEvent, Principal, TaskSnapshot
 from safe_agent.orchestration.office_tasks import ApprovalInput
 from safe_agent.tal.office_gate import CompiledOfficeGrant
 

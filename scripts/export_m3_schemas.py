@@ -6,7 +6,9 @@ from pathlib import Path
 
 from safe_agent.canonical import canonical_json
 from safe_agent.contracts.internal import (
-    InternalTaskCreateProposal, InternalTaskManifest, InternalTaskRecord,
+    InternalTaskCreateProposal,
+    InternalTaskManifest,
+    InternalTaskRecord,
 )
 from safe_agent.evidence.ledger import LedgerEvent, TaskSnapshot
 

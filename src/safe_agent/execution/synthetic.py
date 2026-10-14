@@ -15,16 +15,18 @@ from safe_agent.adapters.fake_calendar import FakeCalendarAdapter
 from safe_agent.adapters.fake_tasks import FakeInternalTaskAdapter
 from safe_agent.broker import BrokerScope, ReferenceBroker, ResourceKind
 from safe_agent.canonical import sha256
-from safe_agent.contracts.base import require_aware
 from safe_agent.contracts.actions import CalendarCreateEvent
-from safe_agent.contracts.internal import (
-    InternalTaskCreateProposal, InternalTaskManifest, InternalTaskRecord,
-)
+from safe_agent.contracts.base import require_aware
 from safe_agent.contracts.control import (
-    TaskManifest,
+    DecisionStatus,
     ExecutionOutcome,
     ExecutionReceipt,
-    DecisionStatus,
+    TaskManifest,
+)
+from safe_agent.contracts.internal import (
+    InternalTaskCreateProposal,
+    InternalTaskManifest,
+    InternalTaskRecord,
 )
 from safe_agent.evidence.ledger import EventKind, OfficePhase
 from safe_agent.security.principal import AccessDenied, Principal
@@ -188,7 +190,7 @@ class SyntheticExecutionGateway:
             with self._repo.write_task(task_id) as tx:
                 if (tx.snapshot.phase is not OfficePhase.EXECUTING
                         or tx.snapshot.proposal_hash != proposal_hash):
-                    raise StateConflict("execution intent no longer owns this task")
+                    raise StateConflict("execution intent no longer owns this task") from None
                 tx.write_execution_outcome(action_hash, outcome="OUTCOME_UNKNOWN",
                                            receipt_json=unknown.model_dump(mode="json"))
                 tx.append(
@@ -329,7 +331,7 @@ class SyntheticExecutionGateway:
             with self._repo.write_task(task_id) as tx:
                 if (tx.snapshot.phase is not OfficePhase.EXECUTING
                         or tx.snapshot.proposal_hash != proposal_hash):
-                    raise StateConflict("internal task intent no longer owns task")
+                    raise StateConflict("internal task intent no longer owns task") from None
                 tx.write_execution_outcome(action_hash, outcome="OUTCOME_UNKNOWN",
                                            receipt_json=unknown.model_dump(mode="json"))
                 tx.append(

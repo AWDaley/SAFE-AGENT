@@ -7,7 +7,11 @@ from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
 
-from safe_agent.contracts.actions import CalendarCreateEvent, RequestClarification, parse_proposal_json
+from safe_agent.contracts.actions import (
+    CalendarCreateEvent,
+    RequestClarification,
+    parse_proposal_json,
+)
 from safe_agent.contracts.base import Digest, Identifier, StrictModel, require_aware
 from safe_agent.contracts.control import TaskBudget
 
