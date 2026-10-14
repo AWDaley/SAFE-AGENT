@@ -70,12 +70,13 @@ class TrustedPersistentPlanning:
             raise StateConflict("there has been no bounded planning attempt")
         if view.status not in ("PREPARED", "NEEDS_CLARIFICATION", "READY", "EXHAUSTED"):
             raise StateConflict("planning lease remains pending")
-        return PlanningReceipt(
-            task_id=view.task_id, status=view.status,
-            workspace_version=view.workspace_version,
-            attempts_used=view.attempts_used, max_attempts=view.max_attempts,
-            reason_code=view.last_reason, proposal_hash=view.proposal_hash,
-        )
+        return PlanningReceipt.model_validate({
+            "task_id": view.task_id, "status": view.status,
+            "workspace_version": view.workspace_version,
+            "attempts_used": view.attempts_used,
+            "max_attempts": view.max_attempts,
+            "reason_code": view.last_reason, "proposal_hash": view.proposal_hash,
+        })
 
     def plan(
         self, principal: Principal, task_id: str, body: PlanningCommand, *,
@@ -102,9 +103,9 @@ class TrustedPersistentPlanning:
         except NoPermittedSyntheticSlot as error:
             # Never return or persist free-form model questions.
             reason: PlanningReason = (
-                str(error) if str(error) in ("NO_AVAILABLE_SLOT", "INSUFFICIENT_CONTEXT")
+                "INSUFFICIENT_CONTEXT" if str(error) == "INSUFFICIENT_CONTEXT"
                 else "NO_AVAILABLE_SLOT"
-            )  # type: ignore[assignment]
+            )
             self._store.fail(
                 lease, result_kind="NEEDS_CLARIFICATION",
                 reason_code=reason, now=self._clock(),
