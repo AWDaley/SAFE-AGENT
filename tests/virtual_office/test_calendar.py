@@ -10,7 +10,12 @@ from pydantic import ValidationError
 
 from safe_agent.canonical import sha256
 from safe_agent.contracts.office import SimulatedChange
-from safe_agent.virtual_office import StaleProjection, SyntheticOfficeState, UnissuedProjection, VirtualOffice
+from safe_agent.virtual_office import (
+    StaleProjection,
+    SyntheticOfficeState,
+    UnissuedProjection,
+    VirtualOffice,
+)
 from safe_agent.virtual_office.models import ObserveCalendar
 
 
