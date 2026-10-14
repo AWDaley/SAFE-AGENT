@@ -604,7 +604,13 @@ class LedgerRepository:
             raise ValueError("invalid worker or bounded lease")
         tick = now.astimezone(UTC)
         with self._sessions.begin() as session:
+            google_binding_exists = (
+                select(GoogleTestOutboxBindingRow.action_hash)
+                .where(GoogleTestOutboxBindingRow.action_hash == OutboxRow.action_hash)
+                .exists()
+            )
             choices = [
+                ~google_binding_exists,
                 OutboxRow.status.in_(("QUEUED", "OUTCOME_UNKNOWN", "RETRY_WAIT", "LEASED")),
                 OutboxRow.provider_kind == "synthetic",
                 OutboxRow.next_attempt_at <= tick,
@@ -623,6 +629,7 @@ class LedgerRepository:
             attempts = row.attempts
             claimed = session.execute(update(OutboxRow).where(
                 OutboxRow.action_hash == row.action_hash,
+                ~google_binding_exists,
                 OutboxRow.provider_kind == "synthetic",
                 OutboxRow.status == previous, OutboxRow.attempts == attempts,
                 OutboxRow.next_attempt_at <= tick,

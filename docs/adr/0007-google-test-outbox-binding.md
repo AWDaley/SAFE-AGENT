@@ -9,7 +9,11 @@ The existing SAFE-AGENT action outbox is the SINGLE durable execution plane.
 Versioned `provider_kind` separates `synthetic` from `google_test`. The
 original `SyntheticRecoveryWorker` and `LedgerRepository.claim_action` ONLY
 claim `synthetic` actions, using both an SQL select and conditional update
-filter. The worker additionally rejects a non-synthetic claim. Future Google
+filter. The worker additionally rejects a non-synthetic claim. As a
+second independent fence, the claim query and worker refuse any action with a
+persisted Google test binding, even if an outbox provider tag is accidentally
+changed to synthetic. The binding therefore cannot fall back to the fake
+provider through a corrupted discriminator. Future Google
 execution requires a separate explicitly reviewed trusted worker, not a
 generic adapter injected into M4's fake writer.
 

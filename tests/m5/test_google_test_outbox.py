@@ -30,7 +30,7 @@ from safe_agent.integrations.google_calendar.outbox import GoogleTestOutboxStage
 from safe_agent.integrations.google_calendar.service import GoogleTestCalendarService
 from safe_agent.orchestration.office_tasks import ApprovalInput
 from safe_agent.security.principal import AccessDenied
-from safe_agent.storage.models import GoogleTestOutboxBindingRow
+from safe_agent.storage.models import GoogleTestOutboxBindingRow, OutboxRow
 from safe_agent.storage.repository import MissingTask, StateConflict
 from tests.m2.conftest import NOW, arrange
 from tests.m5.conftest import CALENDAR, SimulatedGoogle
@@ -259,3 +259,26 @@ def test_approval_binding_expired_before_staging(kit):
     assert denied.decision is DecisionStatus.DENIED
     with pytest.raises(MissingTask):
         kit["repo"].read_outbox("task_m2")
+
+
+
+def test_corrupted_provider_tag_never_routes_google_action_to_synthetic_worker(staging):
+    """Defense in depth: an accidental provider tag flip cannot bypass the binding."""
+    receipt = stage(staging)
+    kit = staging["kit"]
+    repo = kit["repo"]
+    # Simulate an inconsistent outbox row. Even if a tag is changed, the
+    # independently stored immutable connection binding forbids fake dispatch.
+    with repo._sessions.begin() as session:
+        session.execute(update(OutboxRow).where(
+            OutboxRow.action_hash == receipt.action_hash,
+        ).values(provider_kind="synthetic"))
+    assert repo.claim_action(
+        worker_id="synthetic_worker", task_id="task_m2", now=NOW,
+    ) is None
+    adapter = FakeCalendarAdapter(kit["office"]._source)
+    worker = SyntheticRecoveryWorker(repo, kit["broker"], adapter)
+    assert worker.process_one(task_id="task_m2", now=NOW) is None
+    assert repo.read_outbox("task_m2")["attempts"] == 0
+    assert adapter.effect_count == 0
+    assert staging["sim"].insert_calls == 0
