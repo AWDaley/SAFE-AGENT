@@ -26,10 +26,12 @@ from safe_agent.integrations.google_calendar.oauth import (
     OAuthClientConfig,
 )
 from safe_agent.integrations.google_calendar.outbox import GoogleTestOutboxStager
+from safe_agent.integrations.google_calendar.errors import GoogleConnectionDenied
 from safe_agent.integrations.google_calendar.service import GoogleTestCalendarService
 from safe_agent.orchestration.office_tasks import ApprovalInput
 from safe_agent.storage.models import GoogleTestOutboxBindingRow
 from safe_agent.storage.repository import MissingTask, StateConflict
+from safe_agent.security.principal import AccessDenied
 from tests.m2.conftest import NOW, arrange
 from tests.m5.conftest import CALENDAR, SimulatedGoogle
 
@@ -139,12 +141,12 @@ def test_provider_busy_interval_blocks_all_sql_intents(staging):
 
 def test_wrong_actor_tenant_and_connection_are_not_authority(staging):
     bad_actor = staging["actor"].model_copy(update={"actor_id": "different_actor"})
-    with pytest.raises(Exception):
+    with pytest.raises(AccessDenied):
         stage(staging, principal=bad_actor)
     bad_org = staging["actor"].model_copy(update={"organization_id": "other_org"})
-    with pytest.raises(Exception):
+    with pytest.raises(AccessDenied):
         stage(staging, principal=bad_org)
-    with pytest.raises(Exception):
+    with pytest.raises(GoogleConnectionDenied):
         stage(staging, connection="gtest_missing_connection")
     assert staging["kit"]["repo"].read_task("task_m2").phase is OfficePhase.READY_TO_COMMIT
     assert staging["sim"].insert_calls == 0
@@ -154,7 +156,7 @@ def test_revoked_oauth_connection_never_creates_intent(staging):
     staging["vault"].revoke_local(
         principal=staging["actor"], connection_id=staging["connection"], now=NOW,
     )
-    with pytest.raises(Exception):
+    with pytest.raises(GoogleConnectionDenied):
         stage(staging)
     with pytest.raises(MissingTask):
         staging["kit"]["repo"].read_outbox("task_m2")
@@ -183,9 +185,9 @@ def test_missing_tal_rolls_back_outbox_ledger_and_binding(staging, monkeypatch):
 
 def test_stale_state_version_and_expired_preview_are_rejected(staging):
     stale_version = staging["kit"]["repo"].read_task("task_m2").state_version - 1
-    with pytest.raises(Exception):
+    with pytest.raises(AccessDenied):
         stage(staging, version=stale_version)
-    with pytest.raises(Exception):
+    with pytest.raises(StateConflict):
         stage(staging, now=NOW + timedelta(minutes=11))
     assert staging["kit"]["repo"].read_task("task_m2").phase is OfficePhase.READY_TO_COMMIT
     assert staging["sim"].insert_calls == 0
