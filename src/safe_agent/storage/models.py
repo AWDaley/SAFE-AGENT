@@ -127,3 +127,43 @@ class LedgerRow(Base):
     previous_event_hash: Mapped[str | None] = mapped_column(String(72))
     event_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     __table_args__ = (Index("ix_safe_ledger_org_task", "organization_id", "task_id"),)
+
+
+class OutboxRow(Base):
+    """Trusted dispatch command: no raw customer/provider IDs in this table."""
+
+    __tablename__ = "safe_action_outbox"
+    action_hash: Mapped[str] = mapped_column(String(72), primary_key=True)
+    task_id: Mapped[str] = mapped_column(ForeignKey("safe_tasks.task_id"), nullable=False, unique=True)
+    organization_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    proposal_hash: Mapped[str] = mapped_column(String(72), nullable=False)
+    manifest_hash: Mapped[str] = mapped_column(String(72), nullable=False)
+    operation: Mapped[str] = mapped_column(String(48), nullable=False)
+    source_revision: Mapped[str] = mapped_column(String(128), nullable=False)
+    source_hash: Mapped[str] = mapped_column(String(72), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    lease_owner: Mapped[str | None] = mapped_column(String(128))
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_reason: Mapped[str | None] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (Index("ix_safe_outbox_ready", "status", "next_attempt_at"),)
+
+
+class FakeProviderRow(Base):
+    __tablename__ = "safe_fake_provider_state"
+    organization_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    state_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    state_hash: Mapped[str] = mapped_column(String(72), nullable=False)
+
+
+class FakeProviderEffectRow(Base):
+    __tablename__ = "safe_fake_provider_effects"
+    action_hash: Mapped[str] = mapped_column(String(72), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    operation: Mapped[str] = mapped_column(String(48), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(72), nullable=False)
+    effect_ref: Mapped[str] = mapped_column(String(128), nullable=False)

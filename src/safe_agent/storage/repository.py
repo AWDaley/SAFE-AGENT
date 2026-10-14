@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import json
 from contextlib import contextmanager
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import timedelta
+from datetime import UTC, datetime
 from typing import Iterator, TypeVar
 
 from pydantic import BaseModel
-from sqlalchemy import Engine, create_engine, select
+from sqlalchemy import Engine, create_engine, or_, select, update
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -47,6 +49,7 @@ from safe_agent.storage.models import (
     ExecutionRow,
     LedgerRow,
     ManifestRow,
+    OutboxRow,
     ProjectionRow,
     ProposalRow,
     ReferenceRow,
@@ -89,6 +92,21 @@ class StateConflict(ValueError):
 
 class MissingTask(KeyError):
     pass
+
+
+@dataclass(frozen=True)
+class OutboxClaim:
+    action_hash: str
+    task_id: str
+    organization_id: str
+    manifest_hash: str
+    proposal_hash: str
+    operation: str
+    source_revision: str
+    source_hash: str
+    attempts: int
+    preceding_status: str
+    worker_id: str
 
 
 class TaskTransaction:
@@ -178,12 +196,44 @@ class TaskTransaction:
             proposal_json=_pack(proposal), recorded_at=now,
         ))
 
-    def write_execution_intent(self, action_hash: str, proposal_hash: str,
-                               *, now: datetime) -> None:
-        if self.snapshot.phase.value != "READY_TO_COMMIT":
+    def store_protected_references(self, entries: tuple[dict[str, object], ...]) -> None:
+        """Persist trusted HMAC records in the same transaction as an action intent."""
+        for entry in entries:
+            if set(entry) != {"handle", "record", "mac"}:
+                raise StateConflict("invalid trusted reference envelope")
+            record = entry["record"]
+            if not isinstance(record, dict):
+                raise StateConflict("invalid trusted reference")
+            if (record.get("organization_id") != self.row.organization_id
+                    or record.get("task_id") != self.row.task_id
+                    or record.get("initiator_id") != self.row.initiator_id):
+                raise StateConflict("reference scope mismatch")
+            handle = str(entry["handle"])
+            previous = self.session.get(ReferenceRow, handle)
+            if previous is None:
+                self.session.add(ReferenceRow(
+                    handle=handle, task_id=self.row.task_id,
+                    organization_id=self.row.organization_id,
+                    initiator_id=self.row.initiator_id,
+                    kind=str(record["resource_kind"]), binding_json=entry,
+                    revoked=bool(record["revoked"]),
+                ))
+            elif previous.binding_json != entry:
+                raise StateConflict("protected reference binding was changed")
+        self.session.flush()
+
+    def write_execution_intent(
+        self, action_hash: str, proposal_hash: str, *, now: datetime,
+        operation: str, source_revision: str, source_hash: str,
+    ) -> None:
+        """One transaction: action row + leased-worker outbox + signed ledger later."""
+        if self.snapshot.phase is not OfficePhase.READY_TO_COMMIT:
             raise StateConflict("execution intent requires ready task")
+        if operation not in {"calendar.create_event", "tasks.create"}:
+            raise StateConflict("unsupported synthetic outbox operation")
         effect_id = "fake_action_" + action_hash[7:39]
-        if self.session.get(ExecutionRow, effect_id) is not None:
+        if (self.session.get(ExecutionRow, effect_id) is not None
+                or self.session.get(OutboxRow, action_hash) is not None):
             raise StateConflict("action intent already exists")
         self.session.add(ExecutionRow(
             effect_id=effect_id, task_id=self.row.task_id,
@@ -191,19 +241,54 @@ class TaskTransaction:
             receipt_json={"action_hash": action_hash, "status": "INTENT_RECORDED"},
             recorded_at=now,
         ))
+        self.session.add(OutboxRow(
+            action_hash=action_hash, task_id=self.row.task_id,
+            organization_id=self.row.organization_id,
+            proposal_hash=proposal_hash, manifest_hash=self.row.manifest_hash,
+            operation=operation, source_revision=source_revision,
+            source_hash=source_hash, status="QUEUED", attempts=0,
+            lease_owner=None, lease_until=None, next_attempt_at=now.astimezone(UTC),
+            last_reason=None, created_at=now.astimezone(UTC),
+        ))
         self.session.flush()
+
+    def read_outbox(self, action_hash: str) -> OutboxRow:
+        record = self.session.get(OutboxRow, action_hash)
+        if record is None or record.task_id != self.row.task_id:
+            raise StateConflict("no outbox intent for task")
+        return record
 
     def write_execution_outcome(self, action_hash: str, *, outcome: str,
                                 receipt_json: dict[str, object]) -> None:
         effect_id = "fake_action_" + action_hash[7:39]
         record = self.session.get(ExecutionRow, effect_id)
         if (record is None or record.task_id != self.row.task_id
-                or record.outcome != "INTENT_RECORDED"):
+                or record.outcome not in {"INTENT_RECORDED", "OUTCOME_UNKNOWN"}):
             raise StateConflict("no pending execution intent")
         if outcome not in {"VERIFIED", "OUTCOME_UNKNOWN"}:
             raise StateConflict("invalid synthetic outcome")
         record.outcome = outcome
         record.receipt_json = receipt_json
+        outbox = self.read_outbox(action_hash)
+        if outcome == "VERIFIED":
+            outbox.status = "VERIFIED"
+            outbox.lease_owner = None
+            outbox.lease_until = None
+        elif outbox.status == "QUEUED":  # M3 legacy inline path.
+            outbox.status = "NEEDS_REVIEW"
+        self.session.flush()
+
+    def mark_outbox_terminal(self, action_hash: str, *, status: str, reason: str,
+                             owner: str | None = None) -> None:
+        row = self.read_outbox(action_hash)
+        if owner is not None and row.lease_owner != owner:
+            raise StateConflict("worker no longer owns the outbox lease")
+        if status not in {"NEEDS_REVIEW", "VERIFIED"}:
+            raise StateConflict("invalid outbox terminal status")
+        row.status = status
+        row.last_reason = reason
+        row.lease_owner = None
+        row.lease_until = None
         self.session.flush()
 
     def read_approval(self, approval_id: str) -> Approval | None:
@@ -344,6 +429,88 @@ class LedgerRepository:
                 raise MissingTask("unknown task")
             yield TaskTransaction(session, row)
 
+    def claim_action(self, *, worker_id: str, now: datetime,
+                     lease: timedelta = timedelta(seconds=30),
+                     task_id: str | None = None) -> OutboxClaim | None:
+        """Claim a durable command; expired leases are reconciled before any retry.
+
+        PostgreSQL uses SELECT FOR UPDATE SKIP LOCKED. SQLite test mode uses
+        a conditional UPDATE on attempts and status to reject concurrent claims.
+        """
+        now = require_aware(now)
+        if not worker_id or not timedelta(0) < lease <= timedelta(minutes=5):
+            raise ValueError("invalid worker or bounded lease")
+        tick = now.astimezone(UTC)
+        with self._sessions.begin() as session:
+            choices = [
+                OutboxRow.status.in_(("QUEUED", "OUTCOME_UNKNOWN", "RETRY_WAIT", "LEASED")),
+                OutboxRow.next_attempt_at <= tick,
+                or_(OutboxRow.lease_until.is_(None), OutboxRow.lease_until <= tick),
+            ]
+            if task_id is not None:
+                choices.append(OutboxRow.task_id == task_id)
+            query = (select(OutboxRow).where(*choices)
+                     .order_by(OutboxRow.created_at, OutboxRow.action_hash).limit(1))
+            if session.bind is not None and session.bind.dialect.name == "postgresql":
+                query = query.with_for_update(skip_locked=True)
+            row = session.scalar(query)
+            if row is None:
+                return None
+            previous = row.status
+            attempts = row.attempts
+            claimed = session.execute(update(OutboxRow).where(
+                OutboxRow.action_hash == row.action_hash,
+                OutboxRow.status == previous, OutboxRow.attempts == attempts,
+                OutboxRow.next_attempt_at <= tick,
+                or_(OutboxRow.lease_until.is_(None), OutboxRow.lease_until <= tick),
+            ).values(status="LEASED", attempts=attempts + 1,
+                     lease_owner=worker_id, lease_until=tick + lease)
+                .returning(OutboxRow.action_hash)
+                .execution_options(synchronize_session=False))
+            if claimed.scalar_one_or_none() != row.action_hash:
+                return None
+            return OutboxClaim(
+                action_hash=row.action_hash, task_id=row.task_id,
+                organization_id=row.organization_id, manifest_hash=row.manifest_hash,
+                proposal_hash=row.proposal_hash, operation=row.operation,
+                source_revision=row.source_revision, source_hash=row.source_hash,
+                attempts=attempts + 1, preceding_status=previous, worker_id=worker_id,
+            )
+
+    def release_action_unknown(self, claim: OutboxClaim, *, now: datetime,
+                               reason: str, delay: timedelta = timedelta(seconds=5)) -> None:
+        """Uncertain effect remains uncompleted and must be reconciled."""
+        with self.write_task(claim.task_id) as tx:
+            row = tx.read_outbox(claim.action_hash)
+            if row.status != "LEASED" or row.lease_owner != claim.worker_id:
+                raise StateConflict("worker no longer owns outbox claim")
+            receipt = ExecutionReceipt(
+                action_hash=claim.action_hash, manifest_hash=claim.manifest_hash,
+                outcome=ExecutionOutcome.OUTCOME_UNKNOWN,
+            )
+            tx.write_execution_outcome(
+                claim.action_hash, outcome="OUTCOME_UNKNOWN",
+                receipt_json=receipt.model_dump(mode="json"),
+            )
+            row.status = "OUTCOME_UNKNOWN"
+            row.last_reason = reason
+            row.next_attempt_at = now.astimezone(UTC) + delay
+            row.lease_owner = None
+            row.lease_until = None
+            tx.session.flush()
+
+    def read_outbox(self, task_id: str) -> dict[str, object]:
+        """Trusted operator/recovery summary without private resource bindings."""
+        with self._sessions() as session:
+            row = session.scalar(select(OutboxRow).where(OutboxRow.task_id == task_id))
+            if row is None:
+                raise MissingTask("no durable action for task")
+            return {
+                "action_hash": row.action_hash, "task_id": row.task_id,
+                "status": row.status, "attempts": row.attempts,
+                "last_reason": row.last_reason,
+            }
+
     def read_task(self, task_id: str) -> TaskSnapshot:
         with self._sessions() as session:
             row = session.get(TaskRow, task_id)
@@ -407,8 +574,14 @@ class LedgerRepository:
                         or effect.proposal_hash != persisted.proposal_hash):
                     raise ValueError("execution intent binding mismatch")
                 if persisted.phase is OfficePhase.EXECUTING:
-                    if effect.outcome != "INTENT_RECORDED":
+                    if effect.outcome not in {"INTENT_RECORDED", "OUTCOME_UNKNOWN"}:
                         raise ValueError("pending intent outcome mismatch")
+                    if effect.outcome == "OUTCOME_UNKNOWN":
+                        waiting = _unpack(ExecutionReceipt, effect.receipt_json)
+                        if (waiting.action_hash != intent.payload["action_hash"]
+                                or waiting.manifest_hash != persisted.manifest_hash
+                                or waiting.outcome is not ExecutionOutcome.OUTCOME_UNKNOWN):
+                            raise ValueError("unknown effect receipt integrity failure")
                 else:
                     receipt = _unpack(ExecutionReceipt, effect.receipt_json)
                     if (receipt.action_hash != intent.payload["action_hash"]
@@ -431,6 +604,22 @@ class LedgerRepository:
                         raise ValueError("uncertain outcome evidence mismatch")
             elif effects:
                 raise ValueError("execution record present before dispatch intent")
+        with self._sessions() as session:
+            outbox = session.scalar(select(OutboxRow).where(OutboxRow.task_id == task_id))
+            if persisted.phase in {OfficePhase.EXECUTING, OfficePhase.COMPLETED,
+                                   OfficePhase.NEEDS_REVIEW}:
+                if outbox is None or outbox.manifest_hash != persisted.manifest_hash:
+                    raise ValueError("outbox missing or manifest changed")
+                if (outbox.action_hash != intent.payload["action_hash"]
+                        or outbox.proposal_hash != persisted.proposal_hash):
+                    raise ValueError("outbox not bound to ledger intent")
+                if (persisted.phase is OfficePhase.COMPLETED and outbox.status != "VERIFIED"):
+                    raise ValueError("completed action outbox not verified")
+                if (persisted.phase is OfficePhase.NEEDS_REVIEW
+                        and outbox.status != "NEEDS_REVIEW"):
+                    raise ValueError("escalated outbox not marked for review")
+            elif outbox is not None:
+                raise ValueError("outbox exists before authority intent")
         return rebuilt
 
     def close(self) -> None:

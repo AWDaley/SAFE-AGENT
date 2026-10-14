@@ -345,6 +345,13 @@ class TrustedOfficeTasks:
         principal.require("task:audit", state.organization_id, now)
         return self._repo.read_events(task_id)
 
+    def execution_status(self, principal: Principal, task_id: str, *,
+                         now: datetime) -> dict[str, object]:
+        """Read-only, tenant-scoped outbox status for operator escalation."""
+        snap = self._repo.read_task(task_id)
+        principal.require("task:read", snap.organization_id, require_aware(now))
+        return self._repo.read_outbox(task_id)
+
     def replay(self, principal: Principal, task_id: str, *, now: datetime) -> TaskSnapshot:
         state = self._repo.read_task(task_id)
         principal.require("task:audit", state.organization_id, now)

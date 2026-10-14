@@ -12,6 +12,7 @@ from datetime import datetime
 from threading import RLock
 
 from safe_agent.canonical import sha256
+from safe_agent.storage.provider import DurableFakeProvider
 from safe_agent.virtual_office.service import _interval_overlaps, _working_intervals
 from safe_agent.virtual_office.state import (
     PrivateBooking,
@@ -73,18 +74,44 @@ class FakeCalendarAdapter:
     rather than silently replayed. Durable crash-safe reconciliation is M4.
     """
 
-    def __init__(self, source: SyntheticOfficeState) -> None:
+    def __init__(self, source: SyntheticOfficeState, *,
+                 durable_store: DurableFakeProvider | None = None) -> None:
         if source.schema_version != "safe_agent.synthetic_office.v1":
             raise ValueError("synthetic fixture only")
         self.__state = source
+        self._durable = durable_store
         self.__lock = RLock()
         self.__effects: dict[str, str] = {}
         self.__effect_count = 0
         self.__readback_error = False
 
     @property
+    def supports_idempotency(self) -> bool:
+        return self._durable is not None
+
+    def find_effect(self, *, organization_id: str, action_hash: str,
+                    request_hash: str | None = None) -> str | None:
+        if self._durable is not None:
+            return self._durable.find_effect(
+                organization_id=organization_id, action_hash=action_hash,
+                operation="calendar.create_event", request_hash=request_hash,
+            )
+        if organization_id != self.__state.organization_id:
+            raise FakeCalendarConflict("organization mismatch")
+        return self.__effects.get(action_hash)
+
+    @property
     def effect_count(self) -> int:
         with self.__lock:
+            if self._durable is not None:
+                from sqlalchemy import func, select
+                from safe_agent.storage.models import FakeProviderEffectRow
+                with self._durable._sessions() as session:
+                    return int(session.scalar(select(func.count()).select_from(
+                        FakeProviderEffectRow).where(
+                            FakeProviderEffectRow.organization_id == self.__state.organization_id,
+                            FakeProviderEffectRow.operation == "calendar.create_event",
+                        )) or 0)
             return self.__effect_count
 
     def reader(self) -> FakeCalendarReader:
@@ -96,6 +123,8 @@ class FakeCalendarAdapter:
     def synthetic_state(self) -> SyntheticOfficeState:
         """Trusted test/sync hook. Never return this object to a model."""
         with self.__lock:
+            if self._durable is not None:
+                return self._durable.snapshot(self.__state.organization_id)
             return self.__state
 
     def inject_readback_failure(self, active: bool) -> None:
@@ -105,16 +134,19 @@ class FakeCalendarAdapter:
     def replace_source_for_test(self, source: SyntheticOfficeState) -> None:
         """Trusted concurrency fixture. Never a model-facing operation."""
         with self.__lock:
+            if self._durable is not None:
+                raise FakeCalendarConflict("durable provider cannot be overwritten by test hook")
             if source.organization_id != self.__state.organization_id:
                 raise FakeCalendarConflict("synthetic organization mismatch")
             self.__state = source
 
     def _read_calendar(self, calendar_id: str, organization_id: str) -> TrustedCalendarRead:
         with self.__lock:
-            if organization_id != self.__state.organization_id:
+            state = self.synthetic_state()
+            if organization_id != state.organization_id:
                 raise FakeCalendarConflict("calendar outside permitted organization")
             try:
-                calendar = self.__state.calendar(calendar_id)
+                calendar = state.calendar(calendar_id)
             except StopIteration as error:
                 raise FakeCalendarConflict("unknown calendar") from error
             if calendar.organization_id != organization_id:
@@ -133,6 +165,29 @@ class FakeCalendarAdapter:
         start_at: datetime, end_at: datetime, template_id: str,
         expected_revision: str, expected_source_hash: str, action_hash: str,
     ) -> str:
+        if self._durable is not None:
+            request_hash = sha256({
+                "calendar_id": calendar_id, "organization_id": organization_id,
+                "customer_id": customer_id, "start_at": start_at, "end_at": end_at,
+                "template_id": template_id, "expected_revision": expected_revision,
+                "expected_source_hash": expected_source_hash,
+            })
+
+            def mutate(source: SyntheticOfficeState) -> tuple[SyntheticOfficeState, str]:
+                ephemeral = FakeCalendarAdapter(source)
+                ref = ephemeral._commit(
+                    calendar_id=calendar_id, organization_id=organization_id,
+                    customer_id=customer_id, start_at=start_at, end_at=end_at,
+                    template_id=template_id, expected_revision=expected_revision,
+                    expected_source_hash=expected_source_hash, action_hash=action_hash,
+                )
+                return ephemeral.synthetic_state(), ref
+
+            return self._durable.apply(
+                organization_id=organization_id, action_hash=action_hash,
+                operation="calendar.create_event", request_hash=request_hash,
+                mutation=mutate,
+            ).effect_ref
         with self.__lock:
             current = self._read_calendar(calendar_id, organization_id)
             calendar = current.calendar
