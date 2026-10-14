@@ -268,7 +268,7 @@ class TaskTransaction:
         raw = authorization.model_dump(mode="json")
         record = OfficeExecutionAuthorization.model_validate_json(__import__('json').dumps(raw))
         if (record != authorization or tal_sha256(
-                record.model_dump(mode="json", exclude={"authorization_hash"})
+                record.model_dump(mode="python", exclude={"authorization_hash"})
         ) != record.authorization_hash):
             raise StateConflict("TAL_AUTHORIZATION_HASH_INVALID")
         task, manifest, snapshot = self.task, self.manifest, self.snapshot
@@ -597,7 +597,7 @@ class LedgerRepository:
                 raise StateConflict("TAL_AUTHORIZATION_NOT_FOUND")
             record = OfficeExecutionAuthorization.model_validate_json(json.dumps(row.authorization_json))
             if (row.authorization_hash != record.authorization_hash
-                    or tal_sha256(record.model_dump(mode="json", exclude={
+                    or tal_sha256(record.model_dump(mode="python", exclude={
                         "authorization_hash"})) != record.authorization_hash
                     or record.outbox_action_hash != action_hash
                     or record.task_id != task_id
