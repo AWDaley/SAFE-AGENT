@@ -20,18 +20,18 @@ from safe_agent.contracts.control import DecisionStatus
 from safe_agent.evidence.ledger import OfficePhase
 from safe_agent.execution.recovery import SyntheticRecoveryWorker
 from safe_agent.integrations.google_calendar.client import GoogleCalendarHTTP
+from safe_agent.integrations.google_calendar.errors import GoogleConnectionDenied
 from safe_agent.integrations.google_calendar.oauth import (
     GoogleCredentialVault,
     GoogleOAuthService,
     OAuthClientConfig,
 )
 from safe_agent.integrations.google_calendar.outbox import GoogleTestOutboxStager
-from safe_agent.integrations.google_calendar.errors import GoogleConnectionDenied
 from safe_agent.integrations.google_calendar.service import GoogleTestCalendarService
 from safe_agent.orchestration.office_tasks import ApprovalInput
+from safe_agent.security.principal import AccessDenied
 from safe_agent.storage.models import GoogleTestOutboxBindingRow
 from safe_agent.storage.repository import MissingTask, StateConflict
-from safe_agent.security.principal import AccessDenied
 from tests.m2.conftest import NOW, arrange
 from tests.m5.conftest import CALENDAR, SimulatedGoogle
 
