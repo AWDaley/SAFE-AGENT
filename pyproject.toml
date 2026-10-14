@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tervoro-safe-agent"
+version = "0.1.0"
+description = "Contract-first, fail-closed foundation for the Tervoro SAFE-AGENT Virtual Office"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["pydantic==2.13.5"]
+
+[project.optional-dependencies]
+dev = ["pytest==9.0.2", "ruff==0.12.12", "mypy==1.17.1"]
+
+[project.scripts]
+safe-agent = "safe_agent.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+xfail_strict = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src/safe_agent"]
+warn_unused_configs = true
+check_untyped_defs = true
+
+[tool.uv]
+package = true

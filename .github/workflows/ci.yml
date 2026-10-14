@@ -1,0 +1,31 @@
+name: M0 contracts and checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned direct dependencies and project
+        run: |
+          python -m pip install -r requirements.lock
+          python -m pip install --no-deps -e .
+      - name: Ruff
+        run: |
+          ruff check src tests scripts
+          python scripts/export_schemas.py --check
+      - name: Static typing
+        run: mypy src/safe_agent
+      - name: Tests
+        run: pytest
+      - name: Compile source
+        run: python -m compileall -q src
+      # Do not report TAL v0.3 domain conformance until upstream office-domain
+      # fixtures and an importable pinned runtime have been wired in.
