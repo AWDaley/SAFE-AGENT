@@ -1,4 +1,4 @@
-name: M0 contracts and checks
+name: M0 + M1 contracts and checks
 on:
   push:
     branches: [main]
@@ -21,6 +21,7 @@ jobs:
         run: |
           ruff check src tests scripts
           python scripts/export_schemas.py --check
+          python scripts/export_m1_schemas.py --check
       - name: Static typing
         run: mypy src/safe_agent
       - name: Tests

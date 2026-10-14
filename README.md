@@ -1,71 +1,81 @@
 # TERVORO SAFE-AGENT
 
-A contract-first foundation for a privacy-minimized, TAL-governed office agent.
+A contract-first, privacy-minimized foundation for an autonomous office agent.
 
-**Status: M0 only.** The included synthetic planner can propose **one** typed
-appointment action from sanitized free/busy data, but **cannot authorize, create,
-modify or verify calendar events**. The trusted TAL office-domain integration,
-Virtual Office simulator, durable ledger, broker, and real provider adapters
-belong to later milestones.
+**Status: M1 complete — synthetic preview only.** SAFE-AGENT now exposes a
+versioned, sanitized Virtual Office, a trusted opaque-reference broker, and
+calendar/internal-task simulations. There are **no actual calendar or task
+writes** and no real provider, credentials or TAL authorization for this domain.
 
-## Architecture and development plan
+## Architecture and milestones
 
 - [System design](docs/SAFE_AGENT_DESIGN.md)
 - [MVP implementation plan](docs/MVP_IMPLEMENTATION_PLAN.md)
-- [M0 architecture decision](docs/adr/0001-mvp-scope.md)
+- [M1 delivery and reproducibility](docs/M1_DELIVERY.md)
+- [M1 architecture/security decision](docs/adr/0002-virtual-office-simulation.md)
+- [M0 foundation decision](docs/adr/0001-mvp-scope.md)
 - [Upstream TAL compatibility findings](docs/tal-compatibility.md)
 - [Security conformance coverage](docs/security-test-matrix.md)
 
-TAL source: [TervoroAgenticLanguage-TAL-](https://github.com/AWDaley/TervoroAgenticLanguage-TAL-)
-(commit `23d48c4a4c66ab4d7ef722794f755f0bfcd753d4`). It is a real
-invoice-domain harness, not yet an office-calendar adapter.
+Upstream TAL: [TervoroAgenticLanguage-TAL-](https://github.com/AWDaley/TervoroAgenticLanguage-TAL-)
+(commit `23d48c4a4c66ab4d7ef722794f755f0bfcd753d4`). The current published
+TAL invoice-domain pack is **not** yet a calendar action-gate integration.
 
-## Local M0 setup
+## Local setup
 
-Python 3.12+ required. From the repository root:
+Use Python 3.12+ from the repository root:
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate       # Windows: .venv\\Scripts\\activate
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 python -m pip install -r requirements.lock
 python -m pip install --no-deps -e .
-pytest
-python -m safe_agent demo
-python scripts/export_schemas.py --check
+pytest -q
 ruff check src tests scripts
 mypy src/safe_agent
+python scripts/export_schemas.py --check
+python scripts/export_m1_schemas.py --check
 ```
 
-The demo loads `fixtures/synthetic_office/demo.json` and emits a typed
-`PROPOSED_UNVERIFIED` result with a deterministic proposal hash. It **never**
-contacts Google Calendar, calls an actual TAL gateway, or performs a write.
+`requirements.lock` pins direct packages only, not their full transitive closure.
+A reviewed full lockfile is still a reproducibility follow-up.
 
-`requirements.lock` currently freezes direct development dependencies only;
-it is **not** a full transitive dependency lock. A fully resolved `uv.lock` is
-pending package-index access; see the M0 ADR for that open reproducibility gate.
+## Explore the Virtual Office
 
-## Optional dev database
+```bash
+python -m safe_agent virtual-office-demo
+python -m safe_agent demo                 # original M0 compatibility demo
+```
 
-`docker compose up -d postgres` starts a localhost-only PostgreSQL instance
-with **development-only** credentials. M0 code does not use it yet.
-Do not use synthetic defaults with real business data.
+The M1 demo loads private **synthetic** records into the trusted domain layer,
+mints scoped, non-bearer handles, computes free/busy slots, generates a fake
+planner proposal, and produces a read-only `CalendarSimulation`. The output is
+safe for a synthetic demonstration: no raw customer names or emails, no
+provider identifiers, and an explicit `SIMULATED_ONLY` state.
 
-## Security properties of M0
+The internal task-list simulator is also available to Python callers but
+`tasks.create` is **not** a TAL-authorized effect. Both simulators reject
+stale/altered projections, enforce typed inputs, and report conflicts.
 
-- Closed, strict, frozen, versioned Pydantic schemas. Unknown proposal operations,
-  unknown fields, duplicate JSON keys, invalid datetimes and multi-action arrays
-  fail closed at parsing.
-- Model-side interfaces expose safe references and free slots, **never** provider
-  credentials, raw customer names/emails, unrestricted shell, SQL or HTTP tools.
-- `TaskRunner` is only a planning shell; it does not create authority and cannot
-  set `COMPLETED`. A placeholder TAL interface always denies writes.
-- The local canonicalization helper is **provisional and non-authoritative**;
-  the official TAL manifest hash must be computed and verified by the pinned
-  upstream TAL core in a later integration milestone.
+## Security boundaries
 
-## Next milestone
+- Closed immutable Pydantic model contracts; schema export is versioned.
+- Handles are validated on every broker resolution for organization, actor,
+  task, operation, resource kind, expiry and revocation. Merely knowing one
+  never grants authority.
+- The planner receives only sanitized availability data and references.
+  Private synthetic customer information is never serialized to it.
+- Simulations are advisory, not holds/reservations or completion evidence.
+- M0's TAL boundary **still denies all execution requests** pending the M2
+  calendar domain contract and validation tests. No model-to-provider path exists.
+- Python module boundaries are not process sandboxing. Trusted components
+  require separate identities and enforced egress restrictions before real
+  providers or untrusted model code may be connected.
 
-**M1:** Implement synthetic customer and calendar projections, deterministic
-Virtual Office simulations, scoped reference broker, conflict handling, and
-replayable synthetic tests. No real provider integration until the TAL action
-gate, reconciliation and verification paths have passed conformance tests.
+For dev database only: `docker compose up -d postgres` starts a local test
+PostgreSQL instance; M1 does not use it. Never apply synthetic credentials or
+fixtures to real business systems.
+
+**Next: M2.** Integrate the upstream TAL action gate, immutable manifest
+validation, approval binding, durable evidence/replay, and tenant-authenticated
+trusted execution path without permitting an unverified effect.
