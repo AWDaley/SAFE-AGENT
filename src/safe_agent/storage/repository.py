@@ -649,6 +649,72 @@ class LedgerRepository:
                 provider_kind=row.provider_kind,
             )
 
+    def claim_google_test_action(
+        self, *, worker_id: str, now: datetime,
+        lease: timedelta = timedelta(seconds=30),
+        task_id: str | None = None,
+    ) -> OutboxClaim | None:
+        """Offline Google worker lease; never accessible to synthetic dispatchers.
+
+        Requires BOTH sealed TAL authority and the provider-specific SQL binding.
+        Every lease increments attempts. A second lease is reconciliation-only,
+        even after a crash before the first provider POST.
+        """
+        now = require_aware(now)
+        if not worker_id or not timedelta(0) < lease <= timedelta(minutes=5):
+            raise ValueError("invalid bounded worker lease")
+        tick = now.astimezone(UTC)
+        with self._sessions.begin() as session:
+            has_binding = select(GoogleTestOutboxBindingRow.action_hash).where(
+                GoogleTestOutboxBindingRow.action_hash == OutboxRow.action_hash
+            ).exists()
+            has_authority = select(OfficeExecutionAuthorizationRow.action_hash).where(
+                OfficeExecutionAuthorizationRow.action_hash == OutboxRow.action_hash
+            ).exists()
+            constraints = [
+                OutboxRow.provider_kind == "google_test",
+                OutboxRow.operation == "calendar.create_event",
+                OutboxRow.status.in_(("QUEUED", "OUTCOME_UNKNOWN", "LEASED")),
+                has_binding, has_authority,
+                OutboxRow.next_attempt_at <= tick,
+                or_(OutboxRow.lease_until.is_(None), OutboxRow.lease_until <= tick),
+            ]
+            if task_id is not None:
+                constraints.append(OutboxRow.task_id == task_id)
+            query = select(OutboxRow).where(*constraints).order_by(
+                OutboxRow.created_at, OutboxRow.action_hash
+            ).limit(1)
+            if session.bind is not None and session.bind.dialect.name == "postgresql":
+                query = query.with_for_update(skip_locked=True)
+            row = session.scalar(query)
+            if row is None:
+                return None
+            prior, attempts = row.status, row.attempts
+            updated = session.execute(update(OutboxRow).where(
+                OutboxRow.action_hash == row.action_hash,
+                OutboxRow.provider_kind == "google_test",
+                OutboxRow.operation == "calendar.create_event",
+                OutboxRow.status == prior, OutboxRow.attempts == attempts,
+                has_binding, has_authority,
+                OutboxRow.next_attempt_at <= tick,
+                or_(OutboxRow.lease_until.is_(None), OutboxRow.lease_until <= tick),
+            ).values(
+                status="LEASED", attempts=attempts + 1,
+                lease_owner=worker_id, lease_until=tick + lease,
+            ).returning(OutboxRow.action_hash).execution_options(
+                synchronize_session=False,
+            ))
+            if updated.scalar_one_or_none() != row.action_hash:
+                return None
+            return OutboxClaim(
+                action_hash=row.action_hash, task_id=row.task_id,
+                organization_id=row.organization_id, manifest_hash=row.manifest_hash,
+                proposal_hash=row.proposal_hash, operation=row.operation,
+                source_revision=row.source_revision, source_hash=row.source_hash,
+                attempts=attempts + 1, preceding_status=prior,
+                worker_id=worker_id, provider_kind="google_test",
+            )
+
     def release_action_unknown(self, claim: OutboxClaim, *, now: datetime,
                                reason: str, delay: timedelta = timedelta(seconds=5)) -> None:
         """Uncertain effect remains uncompleted and must be reconciled."""
