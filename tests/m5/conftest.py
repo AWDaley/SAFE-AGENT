@@ -21,6 +21,7 @@ from safe_agent.integrations.google_calendar.oauth import (
 from safe_agent.integrations.google_calendar.service import GoogleTestCalendarService
 from safe_agent.security.principal import Principal
 from safe_agent.storage.repository import LedgerRepository
+from tests.m2.conftest import kit  # noqa: F401
 
 NOW = datetime.fromisoformat("2026-10-14T13:00:00-04:00")
 START = datetime.fromisoformat("2026-10-15T13:00:00-04:00")
