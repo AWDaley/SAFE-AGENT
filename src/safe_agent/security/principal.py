@@ -13,7 +13,7 @@ import json
 from datetime import UTC, datetime
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import field_validator
 
 from safe_agent.canonical import canonical_json
 from safe_agent.contracts.base import Identifier, StrictModel, require_aware
