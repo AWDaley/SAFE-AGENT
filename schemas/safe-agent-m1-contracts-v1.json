@@ -1,0 +1,926 @@
+{
+  "contract_set": "safe_agent.m1.contracts.v1",
+  "contracts": {
+    "CalendarDiff": {
+      "$defs": {
+        "SimulatedChange": {
+          "additionalProperties": false,
+          "properties": {
+            "calendar_ref": {
+              "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+              "title": "Calendar Ref",
+              "type": "string"
+            },
+            "customer_ref": {
+              "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+              "title": "Customer Ref",
+              "type": "string"
+            },
+            "end_at": {
+              "format": "date-time",
+              "title": "End At",
+              "type": "string"
+            },
+            "operation": {
+              "const": "calendar.create_event",
+              "default": "calendar.create_event",
+              "title": "Operation",
+              "type": "string"
+            },
+            "start_at": {
+              "format": "date-time",
+              "title": "Start At",
+              "type": "string"
+            },
+            "template_id": {
+              "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+              "title": "Template Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "calendar_ref",
+            "customer_ref",
+            "start_at",
+            "end_at",
+            "template_id"
+          ],
+          "title": "SimulatedChange",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "$ref": "#/$defs/SimulatedChange"
+        },
+        "before": {
+          "default": null,
+          "title": "Before",
+          "type": "null"
+        },
+        "effect": {
+          "const": "would_create",
+          "default": "would_create",
+          "title": "Effect",
+          "type": "string"
+        }
+      },
+      "required": [
+        "after"
+      ],
+      "title": "CalendarDiff",
+      "type": "object"
+    },
+    "CalendarProjection": {
+      "$defs": {
+        "AvailableSlot": {
+          "additionalProperties": false,
+          "properties": {
+            "end_at": {
+              "format": "date-time",
+              "title": "End At",
+              "type": "string"
+            },
+            "start_at": {
+              "format": "date-time",
+              "title": "Start At",
+              "type": "string"
+            }
+          },
+          "required": [
+            "start_at",
+            "end_at"
+          ],
+          "title": "AvailableSlot",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "allowed_fields": {
+          "default": [
+            "calendar_ref",
+            "free_slots",
+            "time_zone"
+          ],
+          "items": {
+            "enum": [
+              "calendar_ref",
+              "free_slots",
+              "time_zone"
+            ],
+            "type": "string"
+          },
+          "title": "Allowed Fields",
+          "type": "array"
+        },
+        "calendar_ref": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+          "title": "Calendar Ref",
+          "type": "string"
+        },
+        "classification": {
+          "const": "availability_only",
+          "default": "availability_only",
+          "title": "Classification",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "fetched_at": {
+          "format": "date-time",
+          "title": "Fetched At",
+          "type": "string"
+        },
+        "free_slots": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/AvailableSlot"
+          },
+          "title": "Free Slots",
+          "type": "array"
+        },
+        "organization_id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+          "title": "Organization Id",
+          "type": "string"
+        },
+        "provenance": {
+          "const": "synthetic_fixture",
+          "default": "synthetic_fixture",
+          "title": "Provenance",
+          "type": "string"
+        },
+        "requested_from": {
+          "format": "date-time",
+          "title": "Requested From",
+          "type": "string"
+        },
+        "requested_until": {
+          "format": "date-time",
+          "title": "Requested Until",
+          "type": "string"
+        },
+        "revision": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+          "title": "Revision",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "safe_agent.calendar_projection.v1",
+          "default": "safe_agent.calendar_projection.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source": {
+          "const": "synthetic_calendar",
+          "default": "synthetic_calendar",
+          "title": "Source",
+          "type": "string"
+        },
+        "source_revision": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "time_zone": {
+          "title": "Time Zone",
+          "type": "string"
+        }
+      },
+      "required": [
+        "organization_id",
+        "task_id",
+        "calendar_ref",
+        "revision",
+        "source_revision",
+        "time_zone",
+        "requested_from",
+        "requested_until",
+        "fetched_at",
+        "expires_at"
+      ],
+      "title": "CalendarProjection",
+      "type": "object"
+    },
+    "CalendarSimulation": {
+      "$defs": {
+        "CalendarDiff": {
+          "additionalProperties": false,
+          "properties": {
+            "after": {
+              "$ref": "#/$defs/SimulatedChange"
+            },
+            "before": {
+              "default": null,
+              "title": "Before",
+              "type": "null"
+            },
+            "effect": {
+              "const": "would_create",
+              "default": "would_create",
+              "title": "Effect",
+              "type": "string"
+            }
+          },
+          "required": [
+            "after"
+          ],
+          "title": "CalendarDiff",
+          "type": "object"
+        },
+        "SimulatedChange": {
+          "additionalProperties": false,
+          "properties": {
+            "calendar_ref": {
+              "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+              "title": "Calendar Ref",
+              "type": "string"
+            },
+            "customer_ref": {
+              "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+              "title": "Customer Ref",
+              "type": "string"
+            },
+            "end_at": {
+              "format": "date-time",
+              "title": "End At",
+              "type": "string"
+            },
+            "operation": {
+              "const": "calendar.create_event",
+              "default": "calendar.create_event",
+              "title": "Operation",
+              "type": "string"
+            },
+            "start_at": {
+              "format": "date-time",
+              "title": "Start At",
+              "type": "string"
+            },
+            "template_id": {
+              "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+              "title": "Template Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "calendar_ref",
+            "customer_ref",
+            "start_at",
+            "end_at",
+            "template_id"
+          ],
+          "title": "SimulatedChange",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "advisory_only": {
+          "const": true,
+          "default": true,
+          "title": "Advisory Only",
+          "type": "boolean"
+        },
+        "assumptions": {
+          "default": [
+            "SOURCE_STATE_UNCHANGED",
+            "NO_PROVIDER_SIDE_HOLD"
+          ],
+          "items": {
+            "enum": [
+              "SOURCE_STATE_UNCHANGED",
+              "NO_PROVIDER_SIDE_HOLD"
+            ],
+            "type": "string"
+          },
+          "title": "Assumptions",
+          "type": "array"
+        },
+        "change_diff": {
+          "$ref": "#/$defs/CalendarDiff"
+        },
+        "conflicts": {
+          "default": [],
+          "items": {
+            "enum": [
+              "START_IN_PAST",
+              "OUTSIDE_REQUEST_WINDOW",
+              "OUTSIDE_OFFICE_HOURS",
+              "BOOKING_OVERLAP",
+              "UNKNOWN_TEMPLATE",
+              "TEMPLATE_DURATION_MISMATCH",
+              "DST_AMBIGUOUS",
+              "DST_NONEXISTENT",
+              "TIME_ZONE_MISMATCH"
+            ],
+            "type": "string"
+          },
+          "title": "Conflicts",
+          "type": "array"
+        },
+        "expected_postconditions": {
+          "default": [],
+          "items": {
+            "enum": [
+              "event_created",
+              "matching_time"
+            ],
+            "type": "string"
+          },
+          "title": "Expected Postconditions",
+          "type": "array"
+        },
+        "projection_rev": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+          "title": "Projection Rev",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "safe_agent.calendar_simulation.v1",
+          "default": "safe_agent.calendar_simulation.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "simulation_hash": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Simulation Hash",
+          "type": "string"
+        },
+        "simulation_ref": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+          "title": "Simulation Ref",
+          "type": "string"
+        },
+        "source_revision": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "warnings": {
+          "default": [
+            "NOT_A_RESERVATION",
+            "RECHECK_AT_COMMIT"
+          ],
+          "items": {
+            "enum": [
+              "NOT_A_RESERVATION",
+              "RECHECK_AT_COMMIT"
+            ],
+            "type": "string"
+          },
+          "title": "Warnings",
+          "type": "array"
+        }
+      },
+      "required": [
+        "simulation_ref",
+        "projection_rev",
+        "source_revision",
+        "change_diff",
+        "simulation_hash"
+      ],
+      "title": "CalendarSimulation",
+      "type": "object"
+    },
+    "InternalTaskChange": {
+      "additionalProperties": false,
+      "properties": {
+        "customer_ref": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+          "title": "Customer Ref",
+          "type": "string"
+        },
+        "due_at": {
+          "format": "date-time",
+          "title": "Due At",
+          "type": "string"
+        },
+        "operation": {
+          "const": "tasks.create",
+          "default": "tasks.create",
+          "title": "Operation",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "safe_agent.internal_task_change.v1",
+          "default": "safe_agent.internal_task_change.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "task_code": {
+          "enum": [
+            "call_back",
+            "prepare_documents",
+            "review_request"
+          ],
+          "title": "Task Code",
+          "type": "string"
+        }
+      },
+      "required": [
+        "customer_ref",
+        "task_code",
+        "due_at"
+      ],
+      "title": "InternalTaskChange",
+      "type": "object"
+    },
+    "InternalTaskSimulation": {
+      "$defs": {
+        "InternalTaskChange": {
+          "additionalProperties": false,
+          "properties": {
+            "customer_ref": {
+              "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+              "title": "Customer Ref",
+              "type": "string"
+            },
+            "due_at": {
+              "format": "date-time",
+              "title": "Due At",
+              "type": "string"
+            },
+            "operation": {
+              "const": "tasks.create",
+              "default": "tasks.create",
+              "title": "Operation",
+              "type": "string"
+            },
+            "schema_version": {
+              "const": "safe_agent.internal_task_change.v1",
+              "default": "safe_agent.internal_task_change.v1",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "task_code": {
+              "enum": [
+                "call_back",
+                "prepare_documents",
+                "review_request"
+              ],
+              "title": "Task Code",
+              "type": "string"
+            }
+          },
+          "required": [
+            "customer_ref",
+            "task_code",
+            "due_at"
+          ],
+          "title": "InternalTaskChange",
+          "type": "object"
+        },
+        "TaskDiff": {
+          "additionalProperties": false,
+          "properties": {
+            "after": {
+              "$ref": "#/$defs/InternalTaskChange"
+            },
+            "before": {
+              "default": null,
+              "title": "Before",
+              "type": "null"
+            },
+            "effect": {
+              "const": "would_create",
+              "default": "would_create",
+              "title": "Effect",
+              "type": "string"
+            }
+          },
+          "required": [
+            "after"
+          ],
+          "title": "TaskDiff",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "advisory_only": {
+          "const": true,
+          "default": true,
+          "title": "Advisory Only",
+          "type": "boolean"
+        },
+        "change_diff": {
+          "$ref": "#/$defs/TaskDiff"
+        },
+        "conflicts": {
+          "default": [],
+          "items": {
+            "enum": [
+              "DUPLICATE_TASK",
+              "DUE_DATE_NOT_FUTURE"
+            ],
+            "type": "string"
+          },
+          "title": "Conflicts",
+          "type": "array"
+        },
+        "expected_postconditions": {
+          "default": [],
+          "items": {
+            "const": "task_created",
+            "type": "string"
+          },
+          "title": "Expected Postconditions",
+          "type": "array"
+        },
+        "projection_rev": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+          "title": "Projection Rev",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "safe_agent.internal_task_simulation.v1",
+          "default": "safe_agent.internal_task_simulation.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "simulation_hash": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Simulation Hash",
+          "type": "string"
+        },
+        "simulation_ref": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+          "title": "Simulation Ref",
+          "type": "string"
+        },
+        "source_revision": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "warnings": {
+          "default": [
+            "NOT_A_COMMIT"
+          ],
+          "maxItems": 1,
+          "minItems": 1,
+          "prefixItems": [
+            {
+              "const": "NOT_A_COMMIT",
+              "type": "string"
+            }
+          ],
+          "title": "Warnings",
+          "type": "array"
+        }
+      },
+      "required": [
+        "simulation_ref",
+        "projection_rev",
+        "source_revision",
+        "change_diff",
+        "simulation_hash"
+      ],
+      "title": "InternalTaskSimulation",
+      "type": "object"
+    },
+    "ObserveCalendar": {
+      "additionalProperties": false,
+      "properties": {
+        "calendar_ref": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+          "title": "Calendar Ref",
+          "type": "string"
+        },
+        "customer_ref": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+          "title": "Customer Ref",
+          "type": "string"
+        },
+        "from_at": {
+          "format": "date-time",
+          "title": "From At",
+          "type": "string"
+        },
+        "initiator_id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+          "title": "Initiator Id",
+          "type": "string"
+        },
+        "organization_id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+          "title": "Organization Id",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "until_at": {
+          "format": "date-time",
+          "title": "Until At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "organization_id",
+        "initiator_id",
+        "task_id",
+        "calendar_ref",
+        "customer_ref",
+        "from_at",
+        "until_at"
+      ],
+      "title": "ObserveCalendar",
+      "type": "object"
+    },
+    "ObserveTasks": {
+      "additionalProperties": false,
+      "properties": {
+        "customer_ref": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+          "title": "Customer Ref",
+          "type": "string"
+        },
+        "initiator_id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+          "title": "Initiator Id",
+          "type": "string"
+        },
+        "organization_id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+          "title": "Organization Id",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "organization_id",
+        "initiator_id",
+        "task_id",
+        "customer_ref"
+      ],
+      "title": "ObserveTasks",
+      "type": "object"
+    },
+    "SafeTaskSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "due_at": {
+          "format": "date-time",
+          "title": "Due At",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "open",
+            "done"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "task_code": {
+          "enum": [
+            "call_back",
+            "prepare_documents",
+            "review_request"
+          ],
+          "title": "Task Code",
+          "type": "string"
+        },
+        "task_ref": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+          "title": "Task Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_ref",
+        "task_code",
+        "status",
+        "due_at"
+      ],
+      "title": "SafeTaskSummary",
+      "type": "object"
+    },
+    "TaskDiff": {
+      "$defs": {
+        "InternalTaskChange": {
+          "additionalProperties": false,
+          "properties": {
+            "customer_ref": {
+              "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+              "title": "Customer Ref",
+              "type": "string"
+            },
+            "due_at": {
+              "format": "date-time",
+              "title": "Due At",
+              "type": "string"
+            },
+            "operation": {
+              "const": "tasks.create",
+              "default": "tasks.create",
+              "title": "Operation",
+              "type": "string"
+            },
+            "schema_version": {
+              "const": "safe_agent.internal_task_change.v1",
+              "default": "safe_agent.internal_task_change.v1",
+              "title": "Schema Version",
+              "type": "string"
+            },
+            "task_code": {
+              "enum": [
+                "call_back",
+                "prepare_documents",
+                "review_request"
+              ],
+              "title": "Task Code",
+              "type": "string"
+            }
+          },
+          "required": [
+            "customer_ref",
+            "task_code",
+            "due_at"
+          ],
+          "title": "InternalTaskChange",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "$ref": "#/$defs/InternalTaskChange"
+        },
+        "before": {
+          "default": null,
+          "title": "Before",
+          "type": "null"
+        },
+        "effect": {
+          "const": "would_create",
+          "default": "would_create",
+          "title": "Effect",
+          "type": "string"
+        }
+      },
+      "required": [
+        "after"
+      ],
+      "title": "TaskDiff",
+      "type": "object"
+    },
+    "TaskListProjection": {
+      "$defs": {
+        "SafeTaskSummary": {
+          "additionalProperties": false,
+          "properties": {
+            "due_at": {
+              "format": "date-time",
+              "title": "Due At",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "open",
+                "done"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "task_code": {
+              "enum": [
+                "call_back",
+                "prepare_documents",
+                "review_request"
+              ],
+              "title": "Task Code",
+              "type": "string"
+            },
+            "task_ref": {
+              "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+              "title": "Task Ref",
+              "type": "string"
+            }
+          },
+          "required": [
+            "task_ref",
+            "task_code",
+            "status",
+            "due_at"
+          ],
+          "title": "SafeTaskSummary",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "allowed_fields": {
+          "default": [
+            "task_ref",
+            "task_code",
+            "status",
+            "due_at"
+          ],
+          "items": {
+            "enum": [
+              "task_ref",
+              "task_code",
+              "status",
+              "due_at"
+            ],
+            "type": "string"
+          },
+          "title": "Allowed Fields",
+          "type": "array"
+        },
+        "classification": {
+          "const": "task_metadata_only",
+          "default": "task_metadata_only",
+          "title": "Classification",
+          "type": "string"
+        },
+        "customer_ref": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+          "title": "Customer Ref",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "fetched_at": {
+          "format": "date-time",
+          "title": "Fetched At",
+          "type": "string"
+        },
+        "organization_id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+          "title": "Organization Id",
+          "type": "string"
+        },
+        "provenance": {
+          "const": "synthetic_fixture",
+          "default": "synthetic_fixture",
+          "title": "Provenance",
+          "type": "string"
+        },
+        "revision": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+          "title": "Revision",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "safe_agent.task_list_projection.v1",
+          "default": "safe_agent.task_list_projection.v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_revision": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+          "title": "Source Revision",
+          "type": "string"
+        },
+        "task_id": {
+          "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "tasks": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SafeTaskSummary"
+          },
+          "title": "Tasks",
+          "type": "array"
+        }
+      },
+      "required": [
+        "organization_id",
+        "task_id",
+        "customer_ref",
+        "revision",
+        "source_revision",
+        "fetched_at",
+        "expires_at"
+      ],
+      "title": "TaskListProjection",
+      "type": "object"
+    }
+  },
+  "note": "Advisory, side-effect-free Virtual Office schemas; no private data or authority."
+}
