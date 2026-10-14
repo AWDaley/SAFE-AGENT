@@ -19,6 +19,7 @@ jobs:
           python -m pip install -e '.[dev]'
       - name: Ruff + schema checks
         run: |
+          ruff check --diff src tests scripts
           ruff check src tests scripts
           python scripts/export_schemas.py --check
           python scripts/export_m1_schemas.py --check
@@ -30,3 +31,13 @@ jobs:
         run: pytest
       - name: Compile source
         run: python -m compileall -q src
+      - name: Synthetic M4 process-restart recovery smoke
+        run: |
+          python -m safe_agent m4-demo
+      - name: Migration head smoke (isolated SQLite fixture)
+        env:
+          SAFE_AGENT_DATABASE_URL: sqlite+pysqlite:///./ci-m4-migration.sqlite
+        run: |
+          alembic upgrade head
+          python -c "from sqlalchemy import create_engine, inspect; e=create_engine('sqlite+pysqlite:///./ci-m4-migration.sqlite'); assert {'safe_action_outbox', 'safe_fake_provider_effects', 'safe_fake_provider_state'} <= set(inspect(e).get_table_names())"
+

@@ -40,6 +40,16 @@ def create_app(coordinator: TrustedOfficeTasks, authenticator: SignedOperatorTok
         except (AccessDenied, MissingTask) as error:
             raise HTTPException(status_code=404, detail="task unavailable") from error
 
+    @app.get("/v1/tasks/{task_id}/execution")
+    def execution_status(
+        task_id: str, principal: Annotated[Principal, Depends(operator)],
+    ) -> dict[str, object]:
+        """Safe operator outcome: queued/uncertain/review/verified, never raw bindings."""
+        try:
+            return coordinator.execution_status(principal, task_id, now=clock())
+        except (AccessDenied, MissingTask) as error:
+            raise HTTPException(status_code=404, detail="task unavailable") from error
+
     @app.get("/v1/tasks/{task_id}/events")
     def events(task_id: str, principal: Annotated[Principal, Depends(operator)]) -> tuple[LedgerEvent, ...]:
         try:

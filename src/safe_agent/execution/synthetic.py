@@ -61,6 +61,34 @@ class SyntheticExecutionGateway:
         self, principal: Principal, task_id: str, *,
         now: datetime, expected_state_version: int,
     ) -> ExecutionReceipt:
+        """Trusted synchronous API; M4 durable mode enqueues then runs a worker."""
+        result = self._execute_impl(
+            principal, task_id, now=now,
+            expected_state_version=expected_state_version, enqueue_only=False,
+        )
+        assert isinstance(result, ExecutionReceipt)
+        return result
+
+    def enqueue(
+        self, principal: Principal, task_id: str, *,
+        now: datetime, expected_state_version: int,
+    ) -> str:
+        """Authorize and persist a durable outbox command without dispatching it."""
+        if not self._adapter.supports_idempotency and not (
+            self._task_adapter is not None and self._task_adapter.supports_idempotency
+        ):
+            raise StateConflict("M4 enqueue requires durable native-idempotent fake provider")
+        result = self._execute_impl(
+            principal, task_id, now=now,
+            expected_state_version=expected_state_version, enqueue_only=True,
+        )
+        assert isinstance(result, str)
+        return result
+
+    def _execute_impl(
+        self, principal: Principal, task_id: str, *,
+        now: datetime, expected_state_version: int, enqueue_only: bool,
+    ) -> ExecutionReceipt | str:
         """Commits at most one fake event; no automatic retry after intent.
 
         The first transaction validates and persists an intent; the second
@@ -70,7 +98,8 @@ class SyntheticExecutionGateway:
         now = require_aware(now)
         if isinstance(self._repo.read_task_record(task_id), InternalTaskRecord):
             return self._execute_internal(principal, task_id, now=now,
-                                          expected_state_version=expected_state_version)
+                                          expected_state_version=expected_state_version,
+                                          enqueue_only=enqueue_only)
         with self._repo.write_task(task_id) as tx:
             task, manifest, snap = tx.task, tx.manifest, tx.snapshot
             if not isinstance(manifest, TaskManifest):
@@ -139,7 +168,12 @@ class SyntheticExecutionGateway:
                 "task_id": task_id, "manifest_hash": task.manifest_hash,
                 "proposal_hash": snap.proposal_hash, "cycle": snap.cycles_used,
             })
-            tx.write_execution_intent(action_hash, snap.proposal_hash, now=now)
+            tx.store_protected_references(self._broker.trusted_export(task_id=task_id))
+            tx.write_execution_intent(
+                action_hash, snap.proposal_hash, now=now,
+                operation="calendar.create_event", source_revision=projection.source_revision,
+                source_hash=expected_hash,
+            )
             tx.append(
                 EventKind.ACTION_INTENT_RECORDED,
                 payload={"proposal_hash": snap.proposal_hash, "action_hash": action_hash},
@@ -147,6 +181,20 @@ class SyntheticExecutionGateway:
             )
             # Persisted before dispatch; an incomplete intent must not be rerun.
             proposal_hash = snap.proposal_hash
+
+        if enqueue_only:
+            if not self._adapter.supports_idempotency:
+                raise StateConflict("M4 calendar enqueue requires durable fake provider")
+            return action_hash
+        if self._adapter.supports_idempotency:
+            from safe_agent.execution.recovery import SyntheticRecoveryWorker
+            receipt = SyntheticRecoveryWorker(
+                self._repo, self._broker, self._adapter,
+                task_adapter=self._task_adapter, office=self._office,
+            ).process_one(task_id=task_id, now=now)
+            if receipt is None:
+                raise StateConflict("enqueued calendar action was not claimed")
+            return receipt
 
         effect_ref: str | None = None
         verification_hash: str | None = None
@@ -225,8 +273,8 @@ class SyntheticExecutionGateway:
 
     def _execute_internal(
         self, principal: Principal, task_id: str, *, now: datetime,
-        expected_state_version: int,
-    ) -> ExecutionReceipt:
+        expected_state_version: int, enqueue_only: bool,
+    ) -> ExecutionReceipt | str:
         """Same trusted gateway, durable intent and replay for tasks.create."""
         if self._task_adapter is None:
             raise StateConflict("synthetic internal task adapter is not configured")
@@ -293,13 +341,32 @@ class SyntheticExecutionGateway:
                 "task_id": task_id, "manifest_hash": task.manifest_hash,
                 "proposal_hash": snap.proposal_hash, "cycle": snap.cycles_used,
             })
-            tx.write_execution_intent(action_hash, snap.proposal_hash, now=now)
+            tx.store_protected_references(self._broker.trusted_export(task_id=task_id))
+            tx.write_execution_intent(
+                action_hash, snap.proposal_hash, now=now,
+                operation="tasks.create", source_revision=projection.source_revision,
+                source_hash=expected_hash,
+            )
             tx.append(
                 EventKind.ACTION_INTENT_RECORDED,
                 payload={"proposal_hash": snap.proposal_hash, "action_hash": action_hash},
                 actor="trusted_synthetic_gateway", now=now,
             )
             proposal_hash = snap.proposal_hash
+        if enqueue_only:
+            if not self._task_adapter.supports_idempotency:
+                raise StateConflict("M4 task enqueue requires durable fake provider")
+            return action_hash
+        if self._task_adapter.supports_idempotency:
+            from safe_agent.execution.recovery import SyntheticRecoveryWorker
+            receipt = SyntheticRecoveryWorker(
+                self._repo, self._broker, self._adapter,
+                task_adapter=self._task_adapter, office=self._office,
+            ).process_one(task_id=task_id, now=now)
+            if receipt is None:
+                raise StateConflict("enqueued task action was not claimed")
+            return receipt
+
         effect_ref: str | None = None
         verification_hash: str | None = None
         try:

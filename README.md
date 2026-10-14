@@ -129,3 +129,19 @@ See [`docs/M3_DELIVERY.md`](docs/M3_DELIVERY.md) for test and security limits.
 **No live writes:** the runtime rejects any adapter except its specific fake
 classes. The upstream TAL calendar domain pack, resilient outbox, real-provider
 read-back, and production sandbox are intentionally not present.
+
+## M4: durable synthetic recovery
+
+The M4 configuration durably queues trusted office intents, dispatches exclusively
+through `SyntheticRecoveryWorker` with expiring leases, and reconciles uncertain
+synthetic effects using the fake provider's persisted action-key registry. The
+existing in-memory M3 demo remains intentionally non-recoverable. The new M4
+demo injects a post-commit crash and restarts the ledger, provider and broker:
+
+```bash
+python -m safe_agent m4-demo
+```
+
+See [`docs/M4_DELIVERY.md`](docs/M4_DELIVERY.md) for the fault matrix,
+operator-facing outbox status (`/v1/tasks/{task_id}/execution`), and the remaining
+upstream TAL / real-provider constraints. **No production connector is enabled.**
