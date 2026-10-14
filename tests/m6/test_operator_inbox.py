@@ -8,7 +8,6 @@ from __future__ import annotations
 from datetime import timedelta
 from pathlib import Path
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import update
 

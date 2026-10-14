@@ -21,17 +21,17 @@ from safe_agent.contracts.control import (
     Task,
     TaskManifest,
 )
-from safe_agent.contracts.operator import (
-    CalendarOperatorPreview,
-    InternalTaskOperatorPreview,
-    OperatorInboxPage,
-    OperatorProposalPreview,
-)
 from safe_agent.contracts.internal import (
     InternalTaskCreateProposal,
     InternalTaskManifest,
     InternalTaskRecord,
     parse_office_proposal_json,
+)
+from safe_agent.contracts.operator import (
+    CalendarOperatorPreview,
+    InternalTaskOperatorPreview,
+    OperatorInboxPage,
+    OperatorProposalPreview,
 )
 from safe_agent.evidence.ledger import EventKind, OfficePhase, TaskSnapshot
 from safe_agent.orchestration.runner import PlanningResult
