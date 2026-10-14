@@ -72,6 +72,16 @@
             </dl>
           </section>
 
+          <section class="panel" id="workflowPanel" hidden aria-labelledby="workflowTitle">
+            <p class="eyebrow">Deterministic workflow</p>
+            <h2 id="workflowTitle">Prepare or queue</h2>
+            <p class="muted smaller">Preparation reads the synthetic Virtual Office and records a TAL-gated proposal. Queueing persists a synthetic outbox intent; only the separate trusted recovery worker performs an effect. Neither button can write to Google.</p>
+            <div class="decision-actions">
+              <button type="button" id="prepareTaskBtn" class="primary" hidden>Prepare synthetic proposal</button>
+              <button type="button" id="queueTaskBtn" hidden>Queue approved synthetic action</button>
+            </div>
+          </section>
+
           <section class="panel" id="previewPanel" hidden aria-labelledby="previewTitle">
             <p class="eyebrow">Review before approving</p>
             <h2 id="previewTitle">Proposed change</h2>

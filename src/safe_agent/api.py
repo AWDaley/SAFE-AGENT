@@ -21,8 +21,17 @@ from safe_agent.orchestration.task_provisioning import (
     OptionUnavailable,
     TrustedTaskProvisioner,
 )
+from safe_agent.orchestration.synthetic_workflow import (
+    NoPermittedSyntheticSlot,
+    SyntheticPreparationReceipt,
+    SyntheticQueueReceipt,
+    TrustedSyntheticWorkflow,
+    WorkflowVersionCommand,
+)
 from safe_agent.security.principal import AccessDenied, Principal, SignedOperatorTokens
 from safe_agent.storage.repository import MissingTask, StateConflict
+from safe_agent.broker.references import ReferenceDenied
+from safe_agent.virtual_office.service import StaleProjection, UnissuedProjection
 
 if TYPE_CHECKING:
     from safe_agent.integrations.google_calendar.oauth import GoogleOAuthService
@@ -32,7 +41,8 @@ def create_app(coordinator: TrustedOfficeTasks, authenticator: SignedOperatorTok
                *, clock: Callable[[], datetime] = lambda: datetime.now(UTC),
                google_test_oauth: "GoogleOAuthService | None" = None,
                enable_operator_ui: bool = False,
-               task_provisioner: TrustedTaskProvisioner | None = None) -> FastAPI:
+               task_provisioner: TrustedTaskProvisioner | None = None,
+               synthetic_workflow: TrustedSyntheticWorkflow | None = None) -> FastAPI:
     app = FastAPI(title="SAFE-AGENT M2 Local Operator", version="0.2.0")
     bearer = HTTPBearer(auto_error=False)
 
@@ -106,6 +116,48 @@ def create_app(coordinator: TrustedOfficeTasks, authenticator: SignedOperatorTok
             raise HTTPException(status_code=403, detail="operator scope denied") from error
         except StateConflict as error:
             raise HTTPException(status_code=409, detail="task inbox integrity failure") from error
+
+    if synthetic_workflow is not None:
+        @app.post("/v1/tasks/{task_id}/prepare")
+        def prepare_task(
+            task_id: str, body: WorkflowVersionCommand,
+            principal: Annotated[Principal, Depends(operator)],
+        ) -> SyntheticPreparationReceipt:
+            """Only assigned synthetic tasks; no provider dispatch from HTTP."""
+            try:
+                return synthetic_workflow.prepare(
+                    principal, task_id,
+                    expected_state_version=body.expected_state_version, now=clock(),
+                )
+            except (AccessDenied, MissingTask) as error:
+                raise HTTPException(status_code=404, detail="task unavailable") from error
+            except NoPermittedSyntheticSlot as error:
+                raise HTTPException(
+                    status_code=409, detail="no permitted synthetic option available",
+                ) from error
+            except (StateConflict, ReferenceDenied, StaleProjection,
+                    UnissuedProjection, ValueError) as error:
+                raise HTTPException(
+                    status_code=409, detail="synthetic preparation unavailable",
+                ) from error
+
+        @app.post("/v1/tasks/{task_id}/queue-synthetic")
+        def queue_synthetic(
+            task_id: str, body: WorkflowVersionCommand,
+            principal: Annotated[Principal, Depends(operator)],
+        ) -> SyntheticQueueReceipt:
+            """Stage only; a separate privileged recovery worker performs effects."""
+            try:
+                return synthetic_workflow.queue(
+                    principal, task_id,
+                    expected_state_version=body.expected_state_version, now=clock(),
+                )
+            except (AccessDenied, MissingTask) as error:
+                raise HTTPException(status_code=404, detail="task unavailable") from error
+            except (StateConflict, ReferenceDenied, ValueError) as error:
+                raise HTTPException(
+                    status_code=409, detail="synthetic queue unavailable",
+                ) from error
 
     @app.get("/v1/tasks/{task_id}/preview")
     def review_preview(

@@ -287,9 +287,11 @@ The M5 exit gate below is NOT satisfied.
 ### M6 — Operator UI, acceptance evaluation and packaging
 
 **Progress note (October 14, 2026):** M6-01 includes the merged review-only
-inbox and M6-01b's opt-in trusted synthetic task assignment. Assignment is not
-automatic planning or synthetic execution; the full end-to-end M6-01 gate is
-still open. See M6_TASK_INTAKE.md.
+inbox and M6-01b's opt-in trusted synthetic task assignment. M6-01c adds
+deterministic, atomic synthetic preparation, server-authorized outbox staging
+and independent fake-worker readback acceptance tests. Real Google acceptance,
+production identity, durable worker operation and model planning are still
+open. See M6_TASK_INTAKE.md and M6_SYNTHETIC_WORKFLOW.md.
 
 
 **Goal:** Provide a practical demonstration that an office user can understand and evaluate.

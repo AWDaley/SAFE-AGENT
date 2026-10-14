@@ -127,6 +127,16 @@ class VirtualOffice:
             raise ValueError("cross-organization synthetic snapshot")
         self._source = new_source
 
+    def trusted_template_duration(self, template_id: str, *, organization_id: str) -> int:
+        """Resolve a fixture-only template duration for the trusted orchestrator.
+
+        Never expose the synthetic source, customer metadata or this resolver
+        to the model; its planning input is the sanitized projection.
+        """
+        if self._source.organization_id != organization_id:
+            raise ValueError("synthetic organization mismatch")
+        return self._source.template(template_id).duration_minutes
+
     def _resolve(self, handle: str, *, tenant: str, actor: str, task: str,
                  operation: str, kind: ResourceKind, now: datetime) -> str:
         # Operation type narrowed by the caller to the two M1 literal operations.

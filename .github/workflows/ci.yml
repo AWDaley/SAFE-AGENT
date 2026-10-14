@@ -30,7 +30,7 @@ jobs:
         run: mypy src/safe_agent
       - name: Tests
         run: pytest
-      - name: M6 operator inbox tests and browser syntax
+      - name: M6 operator intake and synthetic workflow tests
         run: |
           pytest -q tests/m6
           node --check src/safe_agent/operator_ui/app.js
