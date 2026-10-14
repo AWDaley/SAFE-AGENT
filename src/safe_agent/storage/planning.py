@@ -43,7 +43,15 @@ def _assert_workspace(tx: TaskTransaction, row: PlanningWorkspaceRow) -> None:
             or row.initiator_id != task.initiator_id
             or row.manifest_hash != task.manifest_hash
             or row.attempts_used < 0 or row.attempts_used > row.max_attempts
-            or not 1 <= row.max_attempts <= 10 or row.workspace_version < 0):
+            or not 1 <= row.max_attempts <= 10 or row.workspace_version < 0
+            or row.status not in {
+                "READY", "RUNNING", "NEEDS_CLARIFICATION", "PREPARED", "EXHAUSTED",
+            }
+            or (row.active_attempt_id is None) != (row.lease_until is None)
+            or (row.status == "RUNNING") != (row.active_attempt_id is not None)
+            or (row.status == "EXHAUSTED"
+                and row.attempts_used != row.max_attempts)
+            or (row.status == "PREPARED" and row.proposal_hash is None)):
         raise StateConflict("planning workspace is not bound to immutable task authority")
 
 
@@ -98,7 +106,8 @@ def finish_planning_attempt(
             or attempt.task_state_version != lease.task_state_version
             or attempt.manifest_hash != lease.manifest_hash
             or attempt.mode != lease.mode
-            or _utc(attempt.lease_until) != lease.expires_at.astimezone(UTC)):
+            or _utc(attempt.lease_until) != lease.expires_at.astimezone(UTC)
+            or now < _utc(attempt.started_at)):
         raise StateConflict("planning attempt lease no longer matches task")
     _assert_workspace(tx, row)
     if result_kind == "PROPOSED":
@@ -243,12 +252,19 @@ class PlanningWorkspaceStore:
             _assert_workspace(tx, row)
             if row.mode != mode or row.workspace_version != expected_workspace_version:
                 raise StateConflict("planning workspace mode or version mismatch")
+            if row.status == "PREPARED":
+                raise StateConflict("existing planning proposal cannot be replayed")
             if row.active_attempt_id is not None:
                 if row.lease_until is None or now < _utc(row.lease_until):
                     raise StateConflict("planning attempt is already running")
                 lease_attempt = tx.session.get(PlanningAttemptRow, row.active_attempt_id)
-                if lease_attempt is None:
-                    raise StateConflict("active planning attempt evidence missing")
+                if (lease_attempt is None or row.status != "RUNNING"
+                        or lease_attempt.task_id != task_id
+                        or lease_attempt.manifest_hash != task.manifest_hash
+                        or lease_attempt.mode != mode
+                        or lease_attempt.attempt_number != row.attempts_used
+                        or _utc(lease_attempt.lease_until) != _utc(row.lease_until)):
+                    raise StateConflict("active planning attempt evidence mismatch")
                 _seal_outcome(
                     tx, lease_attempt, result_kind="LEASE_EXPIRED",
                     reason_code="LEASE_EXPIRED", proposal_hash=None, now=now,

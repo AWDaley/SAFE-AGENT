@@ -412,3 +412,60 @@ def test_planning_demo_never_uses_real_provider():
     assert result["task_phase"] == "AWAITING_APPROVAL"
     assert result["live_provider_writes_enabled"] is False
     assert result["m5_live_acceptance"] == "BLOCKED"
+
+
+def test_corrupted_expired_lease_cannot_consume_another_tasks_attempt(kit):
+    client, signer, employee, _, _, _, store = setup(
+        kit, max_attempts=2, lease_seconds=10,
+    )
+    first_task = new_task(client, signer, employee)
+    second_task = new_task(
+        client, signer, employee,
+        params={"idempotency_key": "req_" + "f" * 32},
+    )
+    first = store.begin(
+        employee, first_task, expected_task_version=0,
+        expected_workspace_version=0, mode="deterministic", now=NOW,
+    )
+    other = store.begin(
+        employee, second_task, expected_task_version=0,
+        expected_workspace_version=0, mode="deterministic", now=NOW,
+    )
+    assert first is not None and other is not None
+    # Simulate an invalid DB edit. A different task's attempt ID must never
+    # be converted into an abandoned outcome by this task's retry.
+    with kit["repo"]._sessions.begin() as db:
+        db.execute(
+            update(PlanningWorkspaceRow).where(
+                PlanningWorkspaceRow.task_id == first_task,
+            ).values(active_attempt_id=other.attempt_id)
+        )
+    with pytest.raises(StateConflict, match="evidence mismatch"):
+        store.begin(
+            employee, first_task, expected_task_version=0,
+            expected_workspace_version=1, mode="deterministic",
+            now=NOW + timedelta(seconds=11),
+        )
+    with kit["repo"]._sessions() as db:
+        assert db.scalars(select(PlanningOutcomeRow)).all() == []
+        unchanged = db.get(PlanningWorkspaceRow, second_task)
+        assert unchanged is not None and unchanged.active_attempt_id == other.attempt_id
+    assert kit["repo"].replay_task(first_task).phase is OfficePhase.ASSIGNED
+    assert kit["repo"].replay_task(second_task).phase is OfficePhase.ASSIGNED
+
+
+def test_planning_clock_cannot_finalize_before_attempt_was_issued(kit):
+    client, signer, employee, _, _, _, store = setup(kit)
+    task_id = new_task(client, signer, employee)
+    lease = store.begin(
+        employee, task_id, expected_task_version=0,
+        expected_workspace_version=0, mode="deterministic", now=NOW,
+    )
+    assert lease is not None
+    with pytest.raises(StateConflict):
+        store.fail(
+            lease, result_kind="RETRYABLE_FAILURE",
+            reason_code="MODEL_RESPONSE_REJECTED",
+            now=NOW - timedelta(seconds=1),
+        )
+    assert kit["repo"].replay_task(task_id).phase is OfficePhase.ASSIGNED
