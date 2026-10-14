@@ -49,6 +49,7 @@ from safe_agent.storage.models import (
     LedgerRow,
     ManifestRow,
     OutboxRow,
+    OfficeExecutionAuthorizationRow,
     ProjectionRow,
     ProposalRow,
     ReferenceRow,
@@ -248,6 +249,73 @@ class TaskTransaction:
             source_hash=source_hash, status="QUEUED", attempts=0,
             lease_owner=None, lease_until=None, next_attempt_at=now.astimezone(UTC),
             last_reason=None, created_at=now.astimezone(UTC),
+        ))
+        self.session.flush()
+
+    def persist_office_execution_authorization(
+        self, authorization: object, *, now: datetime,
+    ) -> None:
+        """Persist the TAL record in this outbox/ledger SQL transaction.
+
+        This does not dispatch or enable Google writes. Only trusted code with
+        the pinned upstream TAL package may invoke the operation.
+        """
+        from tal.office_execution import OfficeExecutionAuthorization
+        from tal.core import sha256 as tal_sha256
+
+        if type(authorization) is not OfficeExecutionAuthorization:
+            raise StateConflict("TAL_AUTHORIZATION_TYPE_INVALID")
+        raw = authorization.model_dump(mode="json")
+        record = OfficeExecutionAuthorization.model_validate(raw)
+        if (record != authorization or tal_sha256(
+                record.model_dump(mode="json", exclude={"authorization_hash"})
+        ) != record.authorization_hash):
+            raise StateConflict("TAL_AUTHORIZATION_HASH_INVALID")
+        task, manifest, snapshot = self.task, self.manifest, self.snapshot
+        proposal = self.read_active_proposal()
+        if not isinstance(task, Task) or not isinstance(manifest, TaskManifest):
+            raise StateConflict("TAL_AUTHORIZATION_CALENDAR_ONLY")
+        outbox = self.read_outbox(record.outbox_action_hash)
+        if (not isinstance(proposal, CalendarCreateEvent)
+                or snapshot.phase is not OfficePhase.EXECUTING
+                or record.organization_id != task.organization_id
+                or record.initiator_id != task.initiator_id
+                or record.task_id != task.task_id
+                or record.calendar_ref != manifest.calendar_ref
+                or record.source_manifest_hash != task.manifest_hash
+                or record.source_proposal_hash != sha256(proposal)
+                or record.outbox_action_hash != outbox.action_hash
+                or record.source_manifest_hash != outbox.manifest_hash
+                or record.source_proposal_hash != outbox.proposal_hash
+                or record.operation != outbox.operation
+                or record.state_version != snapshot.state_version
+                or record.cycles_used != snapshot.cycles_used
+                or record.effects_used != snapshot.external_effects
+                or record.max_cycles != manifest.budget.max_cycles
+                or record.max_external_effects != manifest.budget.max_external_effects
+                or record.issued_at > require_aware(now)
+                or record.expires_at <= require_aware(now)):
+            raise StateConflict("TAL_AUTHORIZATION_OUTBOX_BINDING_INVALID")
+        if manifest.requires_approval:
+            approval = self.read_approval(snapshot.approval_id) if snapshot.approval_id else None
+            if (approval is None or not approval.approved
+                    or record.approval_hash != tal_sha256(
+                        __import__("tal.office", fromlist=["OfficeApprovalEvidence"]).OfficeApprovalEvidence(
+                            approved=approval.approved, approver_id=approval.approver_id,
+                            manifest_hash=approval.manifest_hash,
+                            proposal_hash=approval.proposal_hash,
+                            expires_at=approval.expires_at))
+                    or record.approval_expires_at != approval.expires_at):
+                raise StateConflict("TAL_APPROVAL_BINDING_INVALID")
+        elif record.approval_hash is not None:
+            raise StateConflict("TAL_UNEXPECTED_APPROVAL")
+        if self.session.get(OfficeExecutionAuthorizationRow, record.outbox_action_hash):
+            raise StateConflict("TAL_AUTHORIZATION_DUPLICATE")
+        self.session.add(OfficeExecutionAuthorizationRow(
+            action_hash=record.outbox_action_hash, task_id=task.task_id,
+            organization_id=task.organization_id,
+            authorization_hash=record.authorization_hash,
+            authorization_json=raw, recorded_at=require_aware(now).astimezone(UTC),
         ))
         self.session.flush()
 
@@ -509,6 +577,36 @@ class LedgerRepository:
                 "status": row.status, "attempts": row.attempts,
                 "last_reason": row.last_reason,
             }
+
+    def read_office_execution_authorization(
+        self, task_id: str, action_hash: str,
+    ) -> object:
+        """Trusted protected lookup, not a model-visible or bearer permission."""
+        from tal.core import sha256 as tal_sha256
+        from tal.office_execution import OfficeExecutionAuthorization
+
+        with self._sessions.begin() as session:
+            task = session.get(TaskRow, task_id)
+            outbox = session.get(OutboxRow, action_hash)
+            row = session.get(OfficeExecutionAuthorizationRow, action_hash)
+            if (task is None or outbox is None or row is None
+                    or row.task_id != task_id or outbox.task_id != task_id
+                    or row.organization_id != task.organization_id
+                    or outbox.organization_id != task.organization_id
+                    or task.manifest_hash != outbox.manifest_hash):
+                raise StateConflict("TAL_AUTHORIZATION_NOT_FOUND")
+            record = OfficeExecutionAuthorization.model_validate(row.authorization_json)
+            if (row.authorization_hash != record.authorization_hash
+                    or tal_sha256(record.model_dump(mode="json", exclude={
+                        "authorization_hash"})) != record.authorization_hash
+                    or record.outbox_action_hash != action_hash
+                    or record.task_id != task_id
+                    or record.organization_id != outbox.organization_id
+                    or record.source_manifest_hash != outbox.manifest_hash
+                    or record.source_proposal_hash != outbox.proposal_hash
+                    or record.operation != outbox.operation):
+                raise StateConflict("TAL_AUTHORIZATION_TAMPERED")
+            return record
 
     def read_task(self, task_id: str) -> TaskSnapshot:
         with self._sessions() as session:
