@@ -10,8 +10,7 @@ from __future__ import annotations
 import json
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import timedelta
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Iterator, TypeVar
 
 from pydantic import BaseModel

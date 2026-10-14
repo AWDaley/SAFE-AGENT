@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from sqlalchemy import Engine, select, update
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import sessionmaker
 
 from safe_agent.canonical import sha256
 from safe_agent.storage.models import FakeProviderEffectRow, FakeProviderRow

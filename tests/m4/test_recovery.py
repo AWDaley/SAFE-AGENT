@@ -22,7 +22,6 @@ from tests.m2.conftest import NOW, arrange
 from tests.m3.test_internal_task_execution import make_task_flow
 from tests.m3.test_synthetic_execution import ready
 
-
 BROKER_SECRET = b"m2_test_private_broker_key_never_prod_000001"
 
 

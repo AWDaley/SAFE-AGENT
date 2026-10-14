@@ -26,7 +26,6 @@ from safe_agent.tal.office_gate import OfficeGate
 from safe_agent.virtual_office import SyntheticOfficeState, VirtualOffice
 from safe_agent.virtual_office.models import ObserveCalendar
 
-
 TEST_BROKER_KEY = b"M4_demo_synthetic_records_only_hmac_key_1122334455"
 
 

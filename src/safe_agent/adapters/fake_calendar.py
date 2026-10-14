@@ -105,6 +105,7 @@ class FakeCalendarAdapter:
         with self.__lock:
             if self._durable is not None:
                 from sqlalchemy import func, select
+
                 from safe_agent.storage.models import FakeProviderEffectRow
                 with self._durable._sessions() as session:
                     return int(session.scalar(select(func.count()).select_from(
