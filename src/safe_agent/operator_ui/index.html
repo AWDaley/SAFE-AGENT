@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>SAFE-AGENT · Operator workspace</title>
+  <link rel="stylesheet" href="/operator/assets/styles.css">
+  <script src="/operator/assets/app.js" defer></script>
+</head>
+<body>
+  <div class="site-shell">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark" aria-hidden="true">T</span>
+        <div><strong>TERVORO</strong><span>SAFE-AGENT · LOCAL OPERATOR</span></div>
+      </div>
+      <div class="environment"><span class="status-dot" aria-hidden="true"></span> Offline review only · No live provider actions</div>
+    </header>
+
+    <main>
+      <section class="signin" id="signInPanel" aria-labelledby="loginHeading">
+        <p class="eyebrow">Secure local workspace</p>
+        <h1 id="loginHeading">Operator sign-in</h1>
+        <p class="muted">Enter a trusted local operator bearer token. It stays in page memory only and is cleared when you disconnect. Do not use real production credentials.</p>
+        <form id="connectForm" autocomplete="off">
+          <label for="tokenInput">Local operator token</label>
+          <input id="tokenInput" type="password" required spellcheck="false" autocomplete="off" placeholder="Paste a local test token">
+          <button type="submit" class="primary">Open workspace</button>
+        </form>
+        <p class="muted smaller">Tokens are issued by a trusted operator backend. This page cannot create accounts, assign permissions, or execute Google writes.</p>
+      </section>
+
+      <section id="workspace" class="workspace" hidden aria-label="Operator workspace">
+        <aside class="inbox" aria-labelledby="inboxTitle">
+          <div class="panel-heading">
+            <div><p class="eyebrow">Work queue</p><h1 id="inboxTitle">Task inbox</h1></div>
+            <button id="disconnectBtn" class="quiet" type="button">Disconnect</button>
+          </div>
+          <p class="muted smaller">Organization-scoped, read-only task discovery.</p>
+          <div class="actions"><button id="refreshBtn" type="button">Refresh</button><span id="inboxCount" class="small-pill">0 tasks</span></div>
+          <ul id="taskList" class="task-list" aria-label="Available tasks"></ul>
+          <button id="loadMoreBtn" class="quiet wide" type="button" hidden>Load more tasks</button>
+          <p id="emptyInbox" class="muted" hidden>No tasks are available under this operator's current scope.</p>
+        </aside>
+
+        <div class="detail-stack">
+          <section class="panel" aria-labelledby="detailTitle">
+            <p class="eyebrow">Trusted task state</p><h2 id="detailTitle">Select a task</h2>
+            <p id="detailLead" class="muted">Select a task to inspect its state and verified synthetic preview.</p>
+            <dl id="taskFacts" class="fact-grid" hidden>
+              <div><dt>Phase</dt><dd id="taskPhase">—</dd></div>
+              <div><dt>State version</dt><dd id="taskVersion">—</dd></div>
+              <div><dt>Manifest digest</dt><dd id="taskManifest" class="hash">—</dd></div>
+              <div><dt>Proposal digest</dt><dd id="taskProposal" class="hash">—</dd></div>
+              <div><dt>Execution status</dt><dd id="taskExecution">—</dd></div>
+              <div><dt>Effects reported</dt><dd id="taskEffects">—</dd></div>
+            </dl>
+          </section>
+
+          <section class="panel" id="previewPanel" hidden aria-labelledby="previewTitle">
+            <p class="eyebrow">Review before approving</p>
+            <h2 id="previewTitle">Proposed change</h2>
+            <p class="warning">Advisory synthetic simulation · Not a reservation or provider verification</p>
+            <dl id="previewFacts" class="fact-grid"></dl>
+            <div id="decisionPanel" class="decision" hidden>
+              <h3>Human approval</h3>
+              <p class="muted smaller">Approvals are proposal-specific, version-bound and checked by the server. Approving here does not dispatch a provider effect.</p>
+              <label class="check-label"><input type="checkbox" id="reviewedCheck"> I reviewed the proposed operation and scoped references.</label>
+              <label for="expiresInput">Explicit approval expiration (your local time)</label>
+              <input id="expiresInput" type="datetime-local" required>
+              <div class="decision-actions">
+                <button type="button" id="approveBtn" class="primary" disabled>Approve proposal</button>
+                <button type="button" id="denyBtn" class="danger" disabled>Deny proposal</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel" id="eventsPanel" hidden aria-labelledby="auditTitle">
+            <div class="panel-heading"><div><p class="eyebrow">Evidence</p><h2 id="auditTitle">Audit timeline</h2></div><span class="small-pill">Read-only</span></div>
+            <p id="auditNotice" class="muted smaller">No events loaded.</p>
+            <ol id="eventList" class="timeline"></ol>
+          </section>
+        </div>
+      </section>
+    </main>
+    <div id="status" class="toast" role="status" aria-live="polite"></div>
+    <footer>SAFE-AGENT operator prototype · No model-visible credentials · M5 live acceptance remains blocked</footer>
+  </div>
+</body>
+</html>
