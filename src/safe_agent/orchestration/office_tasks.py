@@ -21,6 +21,12 @@ from safe_agent.contracts.control import (
     Task,
     TaskManifest,
 )
+from safe_agent.contracts.operator import (
+    CalendarOperatorPreview,
+    InternalTaskOperatorPreview,
+    OperatorInboxPage,
+    OperatorProposalPreview,
+)
 from safe_agent.contracts.internal import (
     InternalTaskCreateProposal,
     InternalTaskManifest,
@@ -334,6 +340,88 @@ class TrustedOfficeTasks:
                 reason_code="OFFLINE_READY_NOT_EXECUTABLE",
                 state_version=snap.state_version,
             )
+
+    def operator_inbox(
+        self, principal: Principal, *, now: datetime,
+        after: str | None = None, limit: int = 20,
+    ) -> OperatorInboxPage:
+        """Read-only, tenant-filtered operator inbox, requiring task:read."""
+        now = require_aware(now)
+        principal.require("task:read", principal.organization_id, now)
+        return self._repo.list_operator_tasks(
+            principal.organization_id, after=after, limit=limit,
+        )
+
+    def operator_proposal_preview(
+        self, principal: Principal, task_id: str, *, now: datetime,
+    ) -> OperatorProposalPreview:
+        """Preview only the persisted, scoped synthetic proposed change.
+
+        The preview is advisory, not a claim that Google has reserved a slot.
+        No new proposal, approval, external action or broker resolve occurs.
+        """
+        now = require_aware(now)
+        with self._repo.write_task(task_id) as tx:
+            task, snapshot, manifest = tx.task, tx.snapshot, tx.manifest
+            principal.require("task:read", task.organization_id, now)
+            if (snapshot.phase not in {
+                OfficePhase.AWAITING_APPROVAL, OfficePhase.READY_TO_COMMIT,
+                OfficePhase.EXECUTING, OfficePhase.COMPLETED, OfficePhase.NEEDS_REVIEW,
+            } or snapshot.proposal_hash is None):
+                raise StateConflict("no reviewable proposal for this task")
+            proposal = tx.read_active_proposal()
+            if proposal is None or sha256(proposal) != snapshot.proposal_hash:
+                raise StateConflict("operator preview has no trusted proposal")
+            if isinstance(proposal, CalendarCreateEvent):
+                if not isinstance(manifest, TaskManifest):
+                    raise StateConflict("calendar proposal manifest mismatch")
+                projection, simulation = tx.preview(proposal.simulation_ref)
+                change = simulation.change_diff.after
+                if (proposal.projection_rev != projection.revision
+                        or proposal.simulation_ref != simulation.simulation_ref
+                        or simulation.conflicts
+                        or simulation.expected_postconditions != (
+                            "event_created", "matching_time")
+                        or proposal.calendar_ref != manifest.calendar_ref
+                        or proposal.customer_ref != manifest.customer_ref
+                        or proposal.template_id != manifest.template_id
+                        or change.calendar_ref != proposal.calendar_ref
+                        or change.customer_ref != proposal.customer_ref
+                        or change.template_id != proposal.template_id
+                        or change.start_at != proposal.start_at
+                        or change.end_at != proposal.end_at):
+                    raise StateConflict("operator calendar preview not verified")
+                return CalendarOperatorPreview(
+                    task_id=task_id, proposal_hash=snapshot.proposal_hash,
+                    state_version=snapshot.state_version, phase=snapshot.phase,
+                    calendar_ref=proposal.calendar_ref, customer_ref=proposal.customer_ref,
+                    template_id=proposal.template_id,
+                    start_at=proposal.start_at, end_at=proposal.end_at,
+                    time_zone=proposal.time_zone,
+                    approval_required=manifest.requires_approval,
+                )
+            if isinstance(proposal, InternalTaskCreateProposal):
+                if not isinstance(manifest, InternalTaskManifest):
+                    raise StateConflict("internal proposal manifest mismatch")
+                projection, simulation = tx.task_preview(proposal.simulation_ref)
+                change = simulation.change_diff.after
+                if (proposal.projection_rev != projection.revision
+                        or proposal.simulation_ref != simulation.simulation_ref
+                        or simulation.conflicts
+                        or simulation.expected_postconditions != ("task_created",)
+                        or proposal.customer_ref != manifest.customer_ref
+                        or proposal.task_code != manifest.task_code
+                        or change.customer_ref != proposal.customer_ref
+                        or change.task_code != proposal.task_code
+                        or change.due_at != proposal.due_at):
+                    raise StateConflict("operator internal preview not verified")
+                return InternalTaskOperatorPreview(
+                    task_id=task_id, proposal_hash=snapshot.proposal_hash,
+                    state_version=snapshot.state_version, phase=snapshot.phase,
+                    customer_ref=proposal.customer_ref, task_code=proposal.task_code,
+                    due_at=proposal.due_at, approval_required=manifest.requires_approval,
+                )
+            raise StateConflict("unsupported operator preview operation")
 
     def inspect(self, principal: Principal, task_id: str, *, now: datetime) -> TaskSnapshot:
         state = self._repo.read_task(task_id)
