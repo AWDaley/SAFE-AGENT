@@ -44,3 +44,17 @@ jobs:
           alembic upgrade head
           python -c "from sqlalchemy import create_engine, inspect; e=create_engine('sqlite+pysqlite:///./ci-m4-migration.sqlite'); assert {'safe_action_outbox', 'safe_fake_provider_effects', 'safe_fake_provider_state', 'safe_google_test_connections', 'safe_google_oauth_pending'} <= set(inspect(e).get_table_names())"
 
+  tal-office-interop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install SAFE-AGENT and pinned upstream TAL office domain
+        run: |
+          python -m pip install -r requirements.lock
+          python -m pip install -e '.[dev]'
+          python -m pip install 'git+https://github.com/AWDaley/TervoroAgenticLanguage-TAL-.git@a39de505fdd0e676b239d87525eb53ce3a36dc8c'
+      - name: Verify TAL office-domain interoperability
+        run: pytest -q tests/m5/test_upstream_office_bridge.py
