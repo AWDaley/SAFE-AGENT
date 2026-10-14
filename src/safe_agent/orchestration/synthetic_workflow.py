@@ -32,9 +32,13 @@ from safe_agent.security.principal import AccessDenied, Principal
 from safe_agent.storage.repository import LedgerRepository, StateConflict
 from safe_agent.virtual_office import VirtualOffice
 from safe_agent.virtual_office.models import (
+    CalendarProjection,
+    CalendarSimulation,
     InternalTaskChange,
+    InternalTaskSimulation,
     ObserveCalendar,
     ObserveTasks,
+    TaskListProjection,
 )
 
 
@@ -135,6 +139,8 @@ class TrustedSyntheticWorkflow:
         task, manifest = self._load_assigned(
             principal, task_id, now=now, expected=expected_state_version,
         )
+        projection: CalendarProjection | TaskListProjection
+        simulation: CalendarSimulation | InternalTaskSimulation
         if isinstance(task, Task) and isinstance(manifest, TaskManifest):
             if manifest.permitted_operations != ("calendar.create_event",):
                 raise StateConflict("unsupported synthetic calendar permission")
@@ -189,7 +195,7 @@ class TrustedSyntheticWorkflow:
             if (manifest.permitted_operations != ("tasks.create",)
                     or manifest.allowed_due_start <= now):
                 raise NoPermittedSyntheticSlot("no permitted future internal task due date")
-            projection = self._office.observe_tasks(ObserveTasks(
+            task_projection = self._office.observe_tasks(ObserveTasks(
                 organization_id=task.organization_id,
                 initiator_id=task.initiator_id, task_id=task_id,
                 customer_ref=manifest.customer_ref,
@@ -199,17 +205,19 @@ class TrustedSyntheticWorkflow:
                 task_code=manifest.task_code,
                 due_at=manifest.allowed_due_start,
             )
-            simulation = self._office.simulate_task(
-                projection, change_task, actor=task.initiator_id, now=now,
+            task_simulation = self._office.simulate_task(
+                task_projection, change_task, actor=task.initiator_id, now=now,
             )
-            if simulation.conflicts:
+            if task_simulation.conflicts:
                 raise NoPermittedSyntheticSlot("synthetic internal task simulation conflicts")
+            projection = task_projection
+            simulation = task_simulation
             proposal = InternalTaskCreateProposal(
                 customer_ref=change_task.customer_ref,
                 task_code=change_task.task_code,
                 due_at=change_task.due_at,
-                simulation_ref=simulation.simulation_ref,
-                projection_rev=projection.revision,
+                simulation_ref=task_simulation.simulation_ref,
+                projection_rev=task_projection.revision,
             )
         else:
             raise StateConflict("unsupported synthetic workflow domain")

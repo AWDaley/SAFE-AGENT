@@ -269,6 +269,7 @@ class TrustedOfficeTasks:
                     or task.manifest_hash != sha256(manifest)
                     or now >= task.deadline):
                 raise StateConflict("task is not an untouched, authorized assignment")
+            checked: CalendarSimulation | InternalTaskSimulation
             if isinstance(proposal, CalendarCreateEvent):
                 if (not isinstance(task, Task)
                         or not isinstance(manifest, TaskManifest)
