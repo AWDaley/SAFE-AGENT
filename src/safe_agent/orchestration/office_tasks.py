@@ -11,15 +11,21 @@ from datetime import datetime
 from pydantic import Field, field_validator
 
 from safe_agent.canonical import sha256
-from safe_agent.orchestration.runner import PlanningResult
 from safe_agent.contracts.actions import (
-    CalendarCreateEvent, RequestClarification, parse_proposal_json,
+    CalendarCreateEvent,
+    RequestClarification,
+    parse_proposal_json,
 )
-from safe_agent.contracts.base import Digest, Identifier, StrictModel, require_aware
+from safe_agent.contracts.base import Digest, StrictModel, require_aware
 from safe_agent.contracts.control import (
-    ActionDecision, Approval, DecisionStatus, Task, TaskManifest,
+    ActionDecision,
+    Approval,
+    DecisionStatus,
+    Task,
+    TaskManifest,
 )
 from safe_agent.evidence.ledger import EventKind, OfficePhase, TaskSnapshot
+from safe_agent.orchestration.runner import PlanningResult
 from safe_agent.security.principal import AccessDenied, Principal
 from safe_agent.storage.repository import LedgerRepository, StateConflict
 from safe_agent.tal.office_gate import OfficeGate
