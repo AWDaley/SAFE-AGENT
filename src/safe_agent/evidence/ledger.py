@@ -92,8 +92,18 @@ def seal_event(*, task_id: str, organization_id: str, actor_id: str,
     }
     digest = sha256(basis)
     return LedgerEvent(
-        event_id="evt_" + digest[7:37], event_hash=digest,
-        payload=payload, **basis,
+        event_id="evt_" + digest[7:37],
+        event_hash=digest,
+        task_id=task_id,
+        organization_id=organization_id,
+        actor_id=actor_id,
+        kind=kind,
+        ledger_sequence=sequence,
+        state_version=state_version,
+        occurred_at=require_aware(now),
+        payload_digest=sha256(payload),
+        previous_event_hash=previous_hash,
+        payload=payload,
     )
 
 
