@@ -40,13 +40,13 @@ def canonical_data(value: object) -> object:
     if isinstance(value, dict):
         if not all(isinstance(key, str) for key in value):
             raise TypeError("JSON object keys must be strings")
-        normalized: dict[str, object] = {}
+        normalized_mapping: dict[str, object] = {}
         for key, item in value.items():
             name = unicodedata.normalize("NFC", key)
-            if name in normalized:
+            if name in normalized_mapping:
                 raise ValueError("duplicate key after Unicode normalization")
-            normalized[name] = canonical_data(item)
-        return normalized
+            normalized_mapping[name] = canonical_data(item)
+        return normalized_mapping
     if value is None or isinstance(value, bool | int):
         return value
     if isinstance(value, float):
