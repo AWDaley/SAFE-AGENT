@@ -21,7 +21,9 @@ from safe_agent.integrations.google_calendar.recovery import (
 from safe_agent.storage.models import OutboxRow
 from tests.m2.conftest import NOW
 from tests.m5.conftest import CALENDAR
-from tests.m5.test_google_test_outbox import stage, staging  # noqa: F401
+from tests.m5.test_google_test_outbox import stage
+
+pytest_plugins = ("tests.m5.test_google_test_outbox",)
 
 
 def worker(env, *, max_attempts=3, mapping=None):
