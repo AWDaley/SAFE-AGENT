@@ -2,12 +2,15 @@
 
 A contract-first, privacy-minimized foundation for an autonomous office agent.
 
-**Status: M3 implemented — verified synthetic effects only.** SAFE-AGENT
-provides a sanitized Virtual Office, a provisional local TAL-style office gate,
-immutable manifests, proposal-specific approvals, a hash-linked evidence ledger,
-and trusted fake calendar/internal-task adapters with independent read-back.
-**No real provider writes exist**; upstream TAL calendar/task authorization is
-not yet certified or integrated.
+**Status (October 14, 2026): M0–M4 synthetic capabilities are implemented;
+M5 office/TAL integration has been built in stacked, reviewed-by-CI PRs #13–#16,
+while PR5 consolidates the evidence and CI. M5 LIVE ACCEPTANCE: BLOCKED.**
+The upstream office execution record, durable provider-bound outbox, mock-only
+Google recovery worker and provider-sourced advisory simulation have offline
+tests, but **no actual Google account consent or live event insertion/readback
+has been independently verified**. No production or model-triggered Google
+write pathway has been enabled.
+
 
 ## Architecture and milestones
 
@@ -24,8 +27,11 @@ not yet certified or integrated.
 - [Security conformance coverage](docs/security-test-matrix.md)
 
 Upstream TAL: [TervoroAgenticLanguage-TAL-](https://github.com/AWDaley/TervoroAgenticLanguage-TAL-)
-(commit `23d48c4a4c66ab4d7ef722794f755f0bfcd753d4`). The current published
-TAL invoice-domain pack is **not** yet a calendar action-gate integration.
+(historical M0 baseline `23d48c4a4c66ab4d7ef722794f755f0bfcd753d4`).
+The **current exact upstream source revision** is pinned once in
+[`ci/tal-office-commit.sha`](ci/tal-office-commit.sha), and both cross-repo
+CI jobs install it. The TAL office runtime/execution record is experimental,
+trusted-only and **not** an executable bearer capability or live certification.
 
 ## Local setup
 
@@ -165,7 +171,7 @@ and cannot reach Google services. It requires the TAL-bound outbox, exact
 private calendar mapping and post-write independent readback; ambiguous effects
 are reconciled or escalated without blindly retrying inserts. See
 [offline recovery limitations](docs/M5_GOOGLE_RECOVERY.md). Real Google writes
-remain disabled, pending PR4 acceptance and security review.
+remain disabled; PR4 delivers offline acceptance-readiness checks, not a live test.
 
 ## PR4: provider-sourced simulation and read-only acceptance preflight
 
@@ -175,3 +181,22 @@ preflight. It cannot authorize or perform live Google inserts. See
 [PR4 acceptance readiness and blockers](docs/M5_ACCEPTANCE_READINESS.md).
 **M5 live acceptance remains BLOCKED** until a disposable account, reviewed
 worker and independently verified event-readback evidence are supplied.
+
+## PR5: consistent TAL pin and explicit M5 release decision
+
+The canonical TAL commit is in [`ci/tal-office-commit.sha`](ci/tal-office-commit.sha).
+Both GitHub workflows install this exact revision after validating its hash;
+they run the offline conformance suite. The release gate distinguishes
+**offline CI configuration** from the missing actual Google test-account
+acceptance:
+
+```bash
+python scripts/read_tal_pin.py
+python scripts/check_m5_release.py --mode offline  # verifies repository wiring
+python scripts/check_m5_release.py --mode live     # exits nonzero; not accepted
+```
+
+The offline gate does **not** itself run tests; rely on the CI job outcomes.
+A passing offline gate never marks live Google writes or production authorized.
+Read the [M5 release decision and merge order](docs/M5_RELEASE_GATE.md) and
+[operator acceptance requirements](docs/M5_ACCEPTANCE_READINESS.md).

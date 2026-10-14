@@ -261,6 +261,15 @@ The milestones below are **merge boundaries**. Complete and test each before sta
 
 ### M5 — First real application integration (test calendar only)
 
+**PR5 status (October 14, 2026): BLOCKED pending real Google acceptance.**
+M5-01 through M5-03 have offline-tested implementation components in stacked
+PRs #13–#16, but Google account consent, independent live event readback and
+the required provider fault suite (M5-04) have **not** run. No unchecked task
+may be marked complete on mock evidence alone. The cross-repo TAL pin and
+blocking release command are documented in [M5_RELEASE_GATE.md](M5_RELEASE_GATE.md).
+The M5 exit gate below is NOT satisfied.
+
+
 **Goal:** Validate end-to-end behavior against an actual provider while retaining data isolation and TAL enforcement.
 
 **Tasks**

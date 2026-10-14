@@ -42,3 +42,25 @@ information-security or compliance certification.
 | M3-DISPATCH | **NOT IMPLEMENTED**; zero real effects possible | No provider adapters or dispatch method |
 
 These results do not certify production data security or real-world compliance.
+
+## PR5 M5 office/Google test conformance snapshot (October 14, 2026)
+
+The table above records **historical M0–M2** checkpoints. The stacked M5 PRs
+add further tested controls, but no Google account or production workflow is
+approved and the original entries must not be read as current release status.
+
+| Control | Offline evidence | Live acceptance |
+| --- | --- | --- |
+| TAL authorization | Strict office authorization record, SQL/action binding and cross-repo tests | **BLOCKED** |
+| Google test connection | OAuth PKCE, encrypted vault, allowlist/tenant tests using mock HTTP | **BLOCKED** |
+| Durable Google outbox | Single intent, CAS/lease, synthetic-worker isolation, provider-sourced advisory simulation | **BLOCKED** |
+| Uncertain Google write | Mock-only deterministic ID, readback and no blind retry; needs-review escalation | **BLOCKED** |
+| Provider-source freshness | Exact observation/proposal pin, expiry and pre-insert free/busy; NOT an atomic slot lock | **BLOCKED** |
+| Real account consent, ownership and revocation | Code paths and error simulations only | **NOT VERIFIED** |
+| Live isolated creation and independent Google events.get | Mock evidence only | **NOT VERIFIED** |
+| Cross-store TAL audit and release approval | Shadow audit not atomic with SAFE SQL; warnings not durable | **BLOCKED** |
+
+The [release gate](M5_RELEASE_GATE.md) requires the same reviewed upstream SHA
+in both cross-repo workflows and deliberately rejects any live acceptance
+request. Passing offline CI does **not** certify Google exactly-once scheduling,
+authorization, security, business data use or deployment.

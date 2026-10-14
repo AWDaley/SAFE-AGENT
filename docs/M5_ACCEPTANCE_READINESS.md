@@ -91,3 +91,13 @@ API behavior, Google-wide exactly-once semantics or production safety.
 - alembic upgrade head on an isolated test database
 
 No production write path, bypass flag or live Google secrets are introduced.
+
+## PR5 release-gate integration
+
+The current branch shares one upstream TAL revision across CI workflows via
+[`ci/tal-office-commit.sha`](../ci/tal-office-commit.sha).
+The [M5 release gate](M5_RELEASE_GATE.md) validates the offline CI wiring,
+but the live mode **always exits with a blocked result**, even if someone
+creates a local acceptance JSON file or environment flag. An independently
+reviewed acceptance evidence verifier and operator-controlled live-test
+workflow must be implemented in a future change; no artifact is accepted now.
