@@ -21,7 +21,6 @@ from sqlalchemy.pool import StaticPool
 from safe_agent.canonical import sha256
 from safe_agent.contracts.actions import CalendarCreateEvent
 from safe_agent.contracts.base import require_aware
-from safe_agent.contracts.operator import OperatorInboxPage
 from safe_agent.contracts.control import (
     Approval,
     ExecutionOutcome,
@@ -34,6 +33,7 @@ from safe_agent.contracts.internal import (
     InternalTaskManifest,
     InternalTaskRecord,
 )
+from safe_agent.contracts.operator import OperatorInboxPage
 from safe_agent.evidence.ledger import (
     EventKind,
     LedgerEvent,
