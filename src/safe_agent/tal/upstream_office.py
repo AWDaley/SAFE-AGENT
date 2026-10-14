@@ -75,8 +75,8 @@ class UpstreamOfficePolicyGate(OfficeGate):
                 or not isinstance(simulation, CalendarSimulation)):
             return denied("TAL_DOMAIN_CONTRACT_MISMATCH")
         try:
-            from tal.core import sha256 as tal_sha256  # type: ignore[import-not-found]
-            from tal.office import (  # type: ignore[import-not-found]
+            from tal.core import sha256 as tal_sha256  # type: ignore[import-not-found,import-untyped]
+            from tal.office import (  # type: ignore[import-not-found,import-untyped]
                 OfficeAdmissionStatus,
                 OfficeCalendarGrantDraft,
                 OfficeCalendarProposal,
