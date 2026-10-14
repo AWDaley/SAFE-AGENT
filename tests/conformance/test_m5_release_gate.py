@@ -8,9 +8,9 @@ import pytest
 from pydantic import ValidationError
 
 from safe_agent.release_gate import (
-    M5ReleaseGateReport,
     REQUIRED_SOURCE,
     WORKFLOWS,
+    M5ReleaseGateReport,
     inspect_m5_release,
     read_tal_pin,
 )

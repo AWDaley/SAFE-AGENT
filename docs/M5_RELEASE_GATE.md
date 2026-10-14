@@ -7,10 +7,10 @@ booked or independently read back by this agent.
 
 ## One reviewed TAL source revision
 
-The authoritative SHA lives in [\`ci/tal-office-commit.sha\`](../ci/tal-office-commit.sha).
-The revision is \`e9d09ef47c0e0e18f3955f9c58f7a8941baf6c38\`, an
+The authoritative SHA lives in [`ci/tal-office-commit.sha`](../ci/tal-office-commit.sha).
+The revision is `e9d09ef47c0e0e18f3955f9c58f7a8941baf6c38`, an
 experimental, **unmerged** upstream TAL PR5 commit as of this writing.
-Both GitHub Actions workflows run \`scripts/read_tal_pin.py\` to validate a
+Both GitHub Actions workflows run `scripts/read_tal_pin.py` to validate a
 strict 40-character lowercase commit hash before installing that exact source.
 They execute upstream TAL office tests in a job that explicitly installs TAL;
 default synthetic-only CI continues to run with no TAL installation.
@@ -28,26 +28,26 @@ permit; reviewers must inspect the actual code and revision, not just the pin.
 3. SAFE-AGENT [PR #14](https://github.com/AWDaley/SAFE-AGENT/pull/14) (PR2, Google outbox binding)
 4. SAFE-AGENT [PR #15](https://github.com/AWDaley/SAFE-AGENT/pull/15) (PR3, offline-only recovery)
 5. SAFE-AGENT [PR #16](https://github.com/AWDaley/SAFE-AGENT/pull/16) (PR4, advisory simulation and read-only preflight)
-6. SAFE-AGENT PR5 (this branch; CI/reporting consolidation)
+6. SAFE-AGENT [PR #17](https://github.com/AWDaley/SAFE-AGENT/pull/17) (PR5; CI/reporting consolidation)
 
 Only advance each dependency after a human reviews the code and its checks.
 Review and update the shared TAL pin if the upstream branch changes; never
-silently install TAL \`main\` or a floating tag. Stacked PR bases need to be
+silently install TAL `main` or a floating tag. Stacked PR bases need to be
 retargeted in dependency order after the preceding merge, preserving history
 and rerunning CI. Do not publish or deploy based on an unmerged PR stack.
 
 ## Developer/reviewer commands
 
-\`\`\`bash
+```bash
 python -m pip install -r requirements.lock
 python -m pip install -e '.[dev]'
 python scripts/read_tal_pin.py
 python scripts/check_m5_release.py --mode offline
 # The next command MUST EXIT NONZERO:
 python scripts/check_m5_release.py --mode live
-\`\`\`
+```
 
-An offline \`CONFIGURED\` response means ONLY that checked-in workflows,
+An offline `CONFIGURED` response means ONLY that checked-in workflows,
 required test paths, release-block notices, migrations and TAL pin are wired.
 It **does not** mean CI has executed successfully on a given commit. Inspect
 the independent GitHub Actions results for Ruff, mypy, pytest, migrations,
