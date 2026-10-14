@@ -8,7 +8,7 @@ gate, separate human approval and independently verified synthetic worker.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 from safe_agent.agent.fake import FakePlanner
 from safe_agent.agent.json_planner import ClosedJsonPlanner
@@ -29,6 +29,9 @@ from safe_agent.security.principal import Principal
 from safe_agent.storage.planning import PlanningWorkspaceStore
 from safe_agent.storage.repository import StateConflict
 from safe_agent.virtual_office.service import StaleProjection, UnissuedProjection
+
+if TYPE_CHECKING:
+    from safe_agent.model_runtime import ModelIsolationPolicy
 
 
 class TrustedPersistentPlanning:
@@ -56,6 +59,28 @@ class TrustedPersistentPlanning:
             "text_only" if type(selected) is ClosedJsonPlanner else "deterministic"
         )
         self._clock = clock
+
+    @classmethod
+    def from_isolated_image(
+        cls, store: PlanningWorkspaceStore, workflow: TrustedSyntheticWorkflow, *,
+        image_policy: "ModelIsolationPolicy",
+        docker_binary: str = "/usr/bin/docker",
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+    ) -> TrustedPersistentPlanning:
+        """Select a digest-pinned, no-egress Docker model instead of in-process code.
+
+        There is intentionally NO fallback to a local Python model callback.
+        Hosts must pin/audit the image and secure the daemon separately.
+        """
+        from safe_agent.model_runtime import DockerIsolatedTextGenerator
+
+        generator = DockerIsolatedTextGenerator(
+            image_policy, docker_binary=docker_binary,
+        )
+        return cls(
+            store, workflow, planner=ClosedJsonPlanner(generator.generate),
+            clock=clock,
+        )
 
     def inspect(
         self, principal: Principal, task_id: str, *, now: datetime,

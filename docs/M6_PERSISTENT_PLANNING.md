@@ -125,10 +125,17 @@ TrustedSyntheticWorkflow described in M6_SYNTHETIC_WORKFLOW.md. Opt in:
     )
 
 trusted_text_only_generate must be supplied by the operator's trusted host.
-Its transport needs an independently enforced timeout and input/output/token
-quota. Python callbacks in the same process are NOT a security sandbox.
-Model process/egress isolation, credential separation and production user SSO
-are necessary before connecting an untrusted real model to external systems.
+The direct Python callback above is for synthetic/protocol tests ONLY and
+is NOT a safe boundary for a real untrusted model.
+
+M6-01f provides an explicit alternative based on DockerIsolatedTextGenerator
+and TrustedPersistentPlanning.from_isolated_image. That helper requires a
+locally installed full SHA256 image ID and launches with no container
+network, no host mounts, non-root/read-only execution and bounded resource,
+wall-clock, output and estimated cost budgets. See
+M6_ISOLATED_MODEL_RUNTIME.md for Docker build/run commands, trusted host
+configuration and unaddressed production security risks. It does not
+enable hosted inference, credential egress or real Google actions.
 
 For a completely offline demo of the closed text-only interface and durable
 workspace (no external model provider or event write):

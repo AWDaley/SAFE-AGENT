@@ -189,7 +189,7 @@ def main() -> None:
         choices=[
             "demo", "virtual-office-demo", "m2-demo",
             "m3-demo", "m4-demo", "m5-demo", "m6-worker-demo",
-            "m6-planning-demo",
+            "m6-planning-demo", "m6-isolated-model-demo",
         ],
     )
     options = parser.parse_args()
@@ -211,9 +211,14 @@ def main() -> None:
     elif options.command == "m6-worker-demo":
         from safe_agent.demo.m6_worker import print_m6_worker_demo
         print_m6_worker_demo()
-    else:
+    elif options.command == "m6-planning-demo":
         from safe_agent.demo.m6_planning import print_m6_planning_demo
+
         print_m6_planning_demo()
+    else:
+        from safe_agent.demo.m6_isolated import print_m6_isolated_model_demo
+
+        print_m6_isolated_model_demo()
 
 
 if __name__ == "__main__":

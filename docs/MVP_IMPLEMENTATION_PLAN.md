@@ -293,10 +293,13 @@ and independent fake-worker readback acceptance tests. M6-01d adds an
 opt-in bounded synthetic worker supervisor, safe shutdown and an isolated
 offline CLI demo. M6-01e adds bounded text-only model planning with durable
 workspace leases, clarification/retry records and privacy-minimized outcomes.
-Production model process isolation, provider authentication, real Google
-acceptance, durable operational alerting and production identity are still
-open. See M6_TASK_INTAKE.md, M6_SYNTHETIC_WORKFLOW.md,
-M6_SUPERVISED_SYNTHETIC_WORKER.md and M6_PERSISTENT_PLANNING.md.
+M6-01f adds a Docker-only, digest-pinned, no-network model transport with
+explicit resource/cost-proxy ceilings and real container smoke coverage.
+A hardened independent runtime host, model-image provenance, hosted inference
+egress and billing integration, provider authentication, real Google acceptance,
+durable alerting and production identity remain open. See M6_TASK_INTAKE.md,
+M6_SYNTHETIC_WORKFLOW.md, M6_SUPERVISED_SYNTHETIC_WORKER.md,
+M6_PERSISTENT_PLANNING.md and M6_ISOLATED_MODEL_RUNTIME.md.
 
 
 **Goal:** Provide a practical demonstration that an office user can understand and evaluate.

@@ -9,6 +9,7 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Callable
 
 from safe_agent.agent.json_planner import ClosedJsonPlanner
 from safe_agent.broker import ReferenceBroker
@@ -30,8 +31,10 @@ from safe_agent.tal.office_gate import OfficeGate
 from safe_agent.virtual_office import SyntheticOfficeState, VirtualOffice
 
 
-def run_m6_planning_demo() -> dict[str, object]:
-    """Create and safely plan a task using a simulated text-only model reply."""
+def run_m6_planning_demo(
+    *, isolated_generate: Callable[[str], str] | None = None,
+) -> dict[str, object]:
+    """Create a synthetic task and plan with either stub or isolated generator."""
     now = datetime.fromisoformat("2026-10-14T13:00:00-04:00")
     fixture = (Path(__file__).resolve().parents[3]
                / "fixtures/synthetic_office/office_state.json")
@@ -40,6 +43,8 @@ def run_m6_planning_demo() -> dict[str, object]:
 
     def text_only_synthetic_stub(text: str) -> str:
         messages.append(text)
+        if isolated_generate is not None:
+            return isolated_generate(text)
         safe = json.loads(text)
         context = safe["task"]
         opening = safe["availability"]["free_slots"][0]

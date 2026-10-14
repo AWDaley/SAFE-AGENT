@@ -20,6 +20,12 @@ from safe_agent.contracts.office import Projection
 from .fake import FakePlanner
 from .interfaces import Planner, SafeTaskContext
 
+# Shared exact instruction contract with the isolated Docker transport.
+PLANNER_INSTRUCTION = (
+    "Return exactly one valid SAFE-AGENT v1 proposal JSON object. "
+    "Do not claim task completion. No tools are available."
+)
+
 
 class ClosedJsonPlanner:
     def __init__(self, generate: Callable[[str], str]) -> None:
@@ -31,8 +37,7 @@ class ClosedJsonPlanner:
         # Type constraints are applied before model transport is invoked. Only
         # minimized free/busy data and scoped handles cross this boundary.
         payload = canonical_json({
-            "instruction": "Return exactly one valid SAFE-AGENT v1 proposal JSON object. "
-                           "Do not claim task completion. No tools are available.",
+            "instruction": PLANNER_INSTRUCTION,
             "task": context,
             "availability": projection,
         }).decode("utf-8")
