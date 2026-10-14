@@ -153,6 +153,20 @@ class OutboxRow(Base):
     __table_args__ = (Index("ix_safe_outbox_ready", "status", "next_attempt_at"),)
 
 
+class OfficeExecutionAuthorizationRow(Base):
+    """Server-only TAL authorization, bound to one durable outbox action."""
+
+    __tablename__ = "safe_office_execution_authorizations"
+    action_hash: Mapped[str] = mapped_column(
+        String(72), ForeignKey("safe_action_outbox.action_hash"), primary_key=True)
+    task_id: Mapped[str] = mapped_column(
+        String(128), ForeignKey("safe_tasks.task_id"), nullable=False, unique=True)
+    organization_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    authorization_hash: Mapped[str] = mapped_column(String(72), nullable=False)
+    authorization_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class FakeProviderRow(Base):
     __tablename__ = "safe_fake_provider_state"
     organization_id: Mapped[str] = mapped_column(String(128), primary_key=True)
