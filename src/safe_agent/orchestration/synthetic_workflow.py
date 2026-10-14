@@ -242,12 +242,12 @@ class TrustedSyntheticWorkflow:
         expected_state_version: int, now: datetime,
     ) -> SyntheticQueueReceipt:
         now = require_aware(now)
-        if self._gateway is None:
-            raise StateConflict("durable synthetic gateway not configured")
         snapshot = self._repo.replay_task(task_id)
         principal.require("task:execute", snapshot.organization_id, now)
         if principal.actor_id != snapshot.initiator_id:
             raise AccessDenied("only the task initiator may queue a synthetic effect")
+        if self._gateway is None:
+            raise StateConflict("durable synthetic gateway not configured")
         if (snapshot.phase is not OfficePhase.READY_TO_COMMIT
                 or snapshot.state_version != expected_state_version):
             raise StateConflict("task is not an authorized synthetic queue candidate")
