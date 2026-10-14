@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from datetime import datetime
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field, field_validator, model_validator
 
@@ -76,8 +76,9 @@ class GoogleTestEventIntent(StrictModel):
 
 def stable_event_id(action_hash: str) -> str:
     """Google's base32hex ID alphabet supports this SHA-256 hexadecimal subset."""
-    from safe_agent.contracts.base import Digest
     from pydantic import TypeAdapter
+
+    from safe_agent.contracts.base import Digest
 
     digest = TypeAdapter(Digest).validate_python(action_hash)
     return "safe" + digest.split(":", 1)[1][:52]

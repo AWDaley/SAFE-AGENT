@@ -1,7 +1,7 @@
 """Test-account-only Google Calendar integration. Never model-privileged."""
 
 from .client import GoogleCalendarHTTP
-from .contracts import GoogleTestEventIntent, GoogleCalendarObservation, stable_event_id
+from .contracts import GoogleCalendarObservation, GoogleTestEventIntent, stable_event_id
 from .oauth import GoogleCredentialVault, GoogleOAuthService, OAuthClientConfig
 from .service import GoogleTestCalendarService
 
@@ -13,8 +13,11 @@ __all__ = [
 
 # Backward-compatible M5 foundation read-only adapter (no effects).
 from .legacy import (
-    GoogleCalendarConflict, GoogleCalendarError, GoogleCalendarTestAdapter,
-    GoogleCalendarUnavailable, HttpResponse,
+    GoogleCalendarConflict,
+    GoogleCalendarError,
+    GoogleCalendarTestAdapter,
+    GoogleCalendarUnavailable,
+    HttpResponse,
 )
 
 __all__ += [

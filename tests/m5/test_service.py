@@ -4,11 +4,12 @@ from datetime import timedelta
 
 import pytest
 
-from safe_agent.integrations.google_calendar.errors import (
-    GoogleCalendarError, GoogleConnectionDenied, GoogleTestWriteBlocked,
-)
 from safe_agent.integrations.google_calendar.contracts import GoogleCalendarObservation
-from safe_agent.security.principal import Principal
+from safe_agent.integrations.google_calendar.errors import (
+    GoogleCalendarError,
+    GoogleConnectionDenied,
+    GoogleTestWriteBlocked,
+)
 from tests.m5.conftest import CALENDAR, NOW, START, UNTIL
 from tests.m5.test_google_http import INTENT
 

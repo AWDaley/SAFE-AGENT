@@ -11,8 +11,11 @@ from cryptography.fernet import Fernet
 from safe_agent.canonical import sha256
 from safe_agent.contracts.control import Task, TaskManifest
 from safe_agent.integrations.google_calendar import (
-    GoogleCalendarHTTP, GoogleCredentialVault, GoogleOAuthService,
-    GoogleTestCalendarService, OAuthClientConfig,
+    GoogleCalendarHTTP,
+    GoogleCredentialVault,
+    GoogleOAuthService,
+    GoogleTestCalendarService,
+    OAuthClientConfig,
 )
 from safe_agent.integrations.google_calendar.errors import GoogleTestWriteBlocked
 from safe_agent.integrations.google_calendar.oauth import GOOGLE_SCOPES

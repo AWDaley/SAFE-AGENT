@@ -13,12 +13,12 @@ from datetime import UTC, datetime, timedelta
 from safe_agent.canonical import sha256
 from safe_agent.contracts.base import require_aware
 from safe_agent.contracts.control import Task, TaskManifest
-from safe_agent.storage.repository import LedgerRepository
 from safe_agent.contracts.office import AvailableSlot
 from safe_agent.security.principal import Principal
+from safe_agent.storage.repository import LedgerRepository
 
 from .client import GoogleCalendarHTTP
-from .contracts import GoogleTestEventIntent, GoogleCalendarObservation
+from .contracts import GoogleCalendarObservation, GoogleTestEventIntent
 from .errors import GoogleCalendarError, GoogleTestWriteBlocked
 from .oauth import GoogleOAuthService
 

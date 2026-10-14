@@ -13,7 +13,10 @@ from safe_agent.canonical import sha256
 from safe_agent.contracts.control import Task, TaskManifest
 from safe_agent.integrations.google_calendar.client import GoogleCalendarHTTP
 from safe_agent.integrations.google_calendar.oauth import (
-    GOOGLE_SCOPES, GoogleCredentialVault, GoogleOAuthService, OAuthClientConfig,
+    GOOGLE_SCOPES,
+    GoogleCredentialVault,
+    GoogleOAuthService,
+    OAuthClientConfig,
 )
 from safe_agent.integrations.google_calendar.service import GoogleTestCalendarService
 from safe_agent.security.principal import Principal

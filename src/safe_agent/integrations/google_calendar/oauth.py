@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import secrets
 import re
+import secrets
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode, urlparse

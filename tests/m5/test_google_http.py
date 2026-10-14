@@ -2,17 +2,20 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-import httpx
 import pytest
 
 from safe_agent.integrations.google_calendar.client import GoogleCalendarHTTP
 from safe_agent.integrations.google_calendar.contracts import (
-    GoogleTestEventIntent, stable_event_id,
+    GoogleTestEventIntent,
+    stable_event_id,
 )
 from safe_agent.integrations.google_calendar.errors import (
-    GoogleConnectionDenied, GoogleRateLimited, GoogleStateConflict, GoogleUnknownOutcome,
+    GoogleConnectionDenied,
+    GoogleRateLimited,
+    GoogleStateConflict,
+    GoogleUnknownOutcome,
 )
-from tests.m5.conftest import CALENDAR, NOW, START, UNTIL
+from tests.m5.conftest import CALENDAR, START, UNTIL
 
 INTENT = GoogleTestEventIntent(
     action_hash="sha256:" + "a" * 64,

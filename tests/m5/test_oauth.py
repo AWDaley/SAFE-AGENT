@@ -9,7 +9,9 @@ from sqlalchemy import select
 
 from safe_agent.integrations.google_calendar.errors import GoogleConnectionDenied
 from safe_agent.integrations.google_calendar.oauth import (
-    GOOGLE_SCOPES, GoogleCredentialVault, OAuthClientConfig,
+    GOOGLE_SCOPES,
+    GoogleCredentialVault,
+    OAuthClientConfig,
 )
 from safe_agent.security.principal import AccessDenied, Principal
 from safe_agent.storage.models import GoogleOAuthPendingRow, GoogleTestConnectionRow

@@ -7,7 +7,8 @@ from pathlib import Path
 
 from safe_agent.canonical import canonical_json
 from safe_agent.integrations.google_calendar.contracts import (
-    GoogleCalendarObservation, GoogleTestEventIntent,
+    GoogleCalendarObservation,
+    GoogleTestEventIntent,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
