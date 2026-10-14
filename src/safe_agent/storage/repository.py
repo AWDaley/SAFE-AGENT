@@ -260,8 +260,10 @@ class TaskTransaction:
         This does not dispatch or enable Google writes. Only trusted code with
         the pinned upstream TAL package may invoke the operation.
         """
-        from tal.core import sha256 as tal_sha256
-        from tal.office_execution import OfficeExecutionAuthorization
+        from importlib import import_module
+
+        tal_sha256 = import_module("tal.core").sha256
+        OfficeExecutionAuthorization = import_module("tal.office_execution").OfficeExecutionAuthorization
 
         if type(authorization) is not OfficeExecutionAuthorization:
             raise StateConflict("TAL_AUTHORIZATION_TYPE_INVALID")
@@ -582,8 +584,10 @@ class LedgerRepository:
         self, task_id: str, action_hash: str,
     ) -> object:
         """Trusted protected lookup, not a model-visible or bearer permission."""
-        from tal.core import sha256 as tal_sha256
-        from tal.office_execution import OfficeExecutionAuthorization
+        from importlib import import_module
+
+        tal_sha256 = import_module("tal.core").sha256
+        OfficeExecutionAuthorization = import_module("tal.office_execution").OfficeExecutionAuthorization
 
         with self._sessions.begin() as session:
             task = session.get(TaskRow, task_id)
