@@ -5,7 +5,7 @@ import pytest
 
 from safe_agent.contracts.control import DecisionStatus
 from safe_agent.tal.upstream_office import UpstreamOfficePolicyGate
-from tests.m2.conftest import NOW, arrange, kit  # noqa: F401
+from tests.m2.conftest import NOW, arrange
 
 pytest.importorskip("tal.office")
 
