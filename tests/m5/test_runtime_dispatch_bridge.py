@@ -13,8 +13,10 @@ from safe_agent.execution.recovery import (
     SyntheticRecoveryWorker,
 )
 from safe_agent.tal.trusted_dispatch import TrustedTALOfficeDispatchCheck
-from tests.m2.conftest import NOW, kit  # noqa: F401
+from tests.m2.conftest import NOW
 from tests.m4.test_recovery import stage_calendar
+
+pytest_plugins = ("tests.m2.conftest",)
 
 
 def test_tal_import_error_blocks_new_synthetic_dispatch(kit, monkeypatch) -> None:
