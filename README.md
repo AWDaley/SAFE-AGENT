@@ -2,16 +2,19 @@
 
 A contract-first, privacy-minimized foundation for an autonomous office agent.
 
-**Status: M1 complete — synthetic preview only.** SAFE-AGENT now exposes a
-versioned, sanitized Virtual Office, a trusted opaque-reference broker, and
-calendar/internal-task simulations. There are **no actual calendar or task
-writes** and no real provider, credentials or TAL authorization for this domain.
+**Status: M2 implemented — synthetic office authority and replay only.** SAFE-AGENT
+exposes a sanitized Virtual Office, typed local policy gate, immutable task
+manifests, proposal-specific approvals, and a persistent hash-linked evidence
+ledger. There are **no calendar/provider writes**, and the provisional office
+policy does **not** constitute upstream TAL calendar-domain authorization.
 
 ## Architecture and milestones
 
 - [System design](docs/SAFE_AGENT_DESIGN.md)
 - [MVP implementation plan](docs/MVP_IMPLEMENTATION_PLAN.md)
 - [M1 delivery and reproducibility](docs/M1_DELIVERY.md)
+- [M2 delivery, limitations and verification](docs/M2_DELIVERY.md)
+- [M2 authority and ledger decision](docs/adr/0003-office-authority-ledger.md)
 - [M1 architecture/security decision](docs/adr/0002-virtual-office-simulation.md)
 - [M0 foundation decision](docs/adr/0001-mvp-scope.md)
 - [Upstream TAL compatibility findings](docs/tal-compatibility.md)
@@ -31,10 +34,11 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 python -m pip install -r requirements.lock
 python -m pip install --no-deps -e .
 pytest -q
-ruff check src tests scripts
+ruff check src tests scripts migrations
 mypy src/safe_agent
 python scripts/export_schemas.py --check
 python scripts/export_m1_schemas.py --check
+python scripts/export_m2_schemas.py --check
 ```
 
 `requirements.lock` pins direct packages only, not their full transitive closure.
@@ -66,8 +70,9 @@ stale/altered projections, enforce typed inputs, and report conflicts.
 - The planner receives only sanitized availability data and references.
   Private synthetic customer information is never serialized to it.
 - Simulations are advisory, not holds/reservations or completion evidence.
-- M0's TAL boundary **still denies all execution requests** pending the M2
-  calendar domain contract and validation tests. No model-to-provider path exists.
+- The genuine upstream TAL adapter **still denies all provider execution**.
+  M2's office gate can only deem synthetic proposals eligible; no model-to-provider
+  path exists.
 - Python module boundaries are not process sandboxing. Trusted components
   require separate identities and enforced egress restrictions before real
   providers or untrusted model code may be connected.
@@ -79,3 +84,23 @@ fixtures to real business systems.
 **Next: M2.** Integrate the upstream TAL action gate, immutable manifest
 validation, approval binding, durable evidence/replay, and tenant-authenticated
 trusted execution path without permitting an unverified effect.
+
+
+## M2 — Trusted offline policy and durable evidence (synthetic only)
+
+M2 introduces SQLAlchemy-backed task and manifest registration, a provisional
+TAL-style office policy gate, proposal-specific approvals, a hash-linked event
+ledger with pure replay, HMAC-protected private broker mapping snapshots, and an
+authenticated **local-only** operator API. The agent has no provider tool access.
+
+```bash
+python -m pip install -e '.[dev,api]'
+python -m safe_agent m2-demo
+pytest
+```
+
+The demo reaches `READY_TO_COMMIT` in an **offline policy simulation** and
+reports zero external effects. This is **not a real authorization or booking**:
+upstream TAL v0.3's calendar domain is still unimplemented. See
+[`docs/M2_DELIVERY.md`](docs/M2_DELIVERY.md) and
+[`docs/adr/0003-office-authority-ledger.md`](docs/adr/0003-office-authority-ledger.md).

@@ -1,0 +1,286 @@
+"""M2 trusted state machine. Records policy eligibility but NEVER dispatches.
+
+A verified TAL calendar domain pack and privileged action dispatcher are M3
+requirements. SAFE-AGENT's model-side TaskRunner remains non-authoritative.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+
+from pydantic import Field, field_validator
+
+from safe_agent.canonical import sha256
+from safe_agent.contracts.actions import (
+    CalendarCreateEvent,
+    RequestClarification,
+    parse_proposal_json,
+)
+from safe_agent.contracts.base import Digest, StrictModel, require_aware
+from safe_agent.contracts.control import (
+    ActionDecision,
+    Approval,
+    DecisionStatus,
+    Task,
+    TaskManifest,
+)
+from safe_agent.evidence.ledger import EventKind, OfficePhase, TaskSnapshot
+from safe_agent.orchestration.runner import PlanningResult
+from safe_agent.security.principal import AccessDenied, Principal
+from safe_agent.storage.repository import LedgerRepository, StateConflict
+from safe_agent.tal.office_gate import OfficeGate
+from safe_agent.virtual_office import VirtualOffice
+from safe_agent.virtual_office.models import CalendarProjection, CalendarSimulation
+
+
+class ApprovalInput(StrictModel):
+    proposal_hash: Digest
+    expected_state_version: int = Field(ge=0)
+    approved: bool
+    expires_at: datetime
+
+    @field_validator("expires_at", mode="before")
+    @classmethod
+    def aware(cls, value: datetime | str) -> datetime:
+        if isinstance(value, str):
+            value = datetime.fromisoformat(value)
+        return require_aware(value)
+
+
+class TrustedOfficeTasks:
+    """Coordinator for authority, durable ledger, and explicit approvals.
+
+    Important: `AUTHORIZED` means an offline proposal satisfied local policy.
+    Neither this service nor its decisions are callable as provider commits.
+    """
+
+    def __init__(self, repo: LedgerRepository, office: VirtualOffice, gate: OfficeGate):
+        self._repo = repo
+        self._office = office
+        self._gate = gate
+
+    def register(self, principal: Principal, task: Task, manifest: TaskManifest,
+                 *, now: datetime) -> TaskSnapshot:
+        now = require_aware(now)
+        principal.require("task:create", task.organization_id, now)
+        if principal.actor_id != task.initiator_id:
+            raise AccessDenied("task initiator mismatch")
+        if (task.task_id != manifest.task_id or task.manifest_hash != sha256(manifest)
+                or task.manifest_id != manifest.manifest_id
+                or task.organization_id != manifest.organization_id
+                or task.initiator_id != manifest.initiator_id):
+            raise ValueError("task/manifest authority does not match")
+        if not task.created_at <= now <= task.deadline:
+            raise ValueError("task is outside its permitted lifetime")
+        return self._repo.create_task(task, manifest, actor=principal.actor_id, now=now)
+
+    def preview(self, principal: Principal, task_id: str,
+                projection: CalendarProjection, simulation: CalendarSimulation,
+                *, expected_state_version: int, now: datetime) -> TaskSnapshot:
+        now = require_aware(now)
+        with self._repo.write_task(task_id) as tx:
+            task = tx.task
+            principal.require("task:prepare", task.organization_id, now)
+            if principal.actor_id != task.initiator_id:
+                raise AccessDenied("cannot prepare another actor's task")
+            if expected_state_version != tx.snapshot.state_version:
+                raise StateConflict("stale task state version")
+            if (projection.organization_id != task.organization_id
+                    or projection.task_id != task_id or projection.calendar_ref != tx.manifest.calendar_ref
+                    or simulation.projection_rev != projection.revision
+                    or simulation.conflicts or simulation.advisory_only is not True):
+                raise StateConflict("invalid or conflicting preview")
+            if not projection.fetched_at <= now < projection.expires_at:
+                raise StateConflict("preview expired")
+            change = simulation.change_diff.after
+            if (change.calendar_ref != tx.manifest.calendar_ref
+                    or change.customer_ref != tx.manifest.customer_ref
+                    or change.template_id != tx.manifest.template_id):
+                raise StateConflict("preview not within manifest scope")
+            # The model cannot forge valid previews: recompute through trusted
+            # VirtualOffice issuance cache and current synthetic source.
+            check = self._office.simulate(
+                projection, change, actor=task.initiator_id,
+                customer_ref=tx.manifest.customer_ref, now=now,
+            )
+            if check != simulation or check.simulation_hash != simulation.simulation_hash:
+                raise StateConflict("preview fails independent simulation")
+            tx.write_preview(projection, simulation, now=now)
+            tx.append(EventKind.PREVIEW_REGISTERED, actor=principal.actor_id, now=now,
+                      payload={"simulation_ref": simulation.simulation_ref,
+                               "simulation_hash": simulation.simulation_hash,
+                               "projection_rev": projection.revision})
+            return tx.snapshot
+
+    def propose(self, principal: Principal, task_id: str, proposal_json: str,
+                *, expected_state_version: int, now: datetime) -> ActionDecision:
+        now = require_aware(now)
+        # JSON parsing is closed; malformed text never enters event logs.
+        try:
+            parsed = parse_proposal_json(proposal_json)
+            proposal_hash = sha256(parsed)
+        except (ValueError, TypeError):
+            parsed = None
+            proposal_hash = sha256({"invalid_proposal": True})
+        with self._repo.write_task(task_id) as tx:
+            task, snap = tx.task, tx.snapshot
+            principal.require("task:propose", task.organization_id, now)
+            if principal.actor_id != task.initiator_id:
+                raise AccessDenied("proposal not authorized for actor")
+
+            def reject(reason: str) -> ActionDecision:
+                tx.append(EventKind.PROPOSAL_DENIED, payload={
+                    "reason_code": reason, "proposal_hash": proposal_hash,
+                }, actor=principal.actor_id, now=now)
+                return ActionDecision(
+                    decision=DecisionStatus.DENIED, manifest_hash=task.manifest_hash,
+                    proposal_hash=proposal_hash, reason_code=reason,
+                    state_version=snap.state_version,
+                )
+
+            if expected_state_version != snap.state_version:
+                return reject("STALE_TASK_VERSION")
+            if parsed is None:
+                return reject("INVALID_PROPOSAL_SCHEMA")
+            if isinstance(parsed, RequestClarification):
+                return reject("CLARIFICATION_REQUIRED")
+            assert isinstance(parsed, CalendarCreateEvent)
+            if snap.simulation_ref != parsed.simulation_ref:
+                return reject("SIMULATION_NOT_ACTIVE")
+            try:
+                projection, simulation = tx.preview(parsed.simulation_ref)
+            except StateConflict:
+                return reject("SIMULATION_NOT_REGISTERED")
+            decision = self._gate.evaluate(
+                task=task, manifest=tx.manifest, snapshot=snap,
+                proposal=parsed, projection=projection, simulation=simulation, now=now,
+            )
+            if decision.decision is DecisionStatus.DENIED:
+                return reject(decision.reason_code)
+            tx.write_proposal(snap.cycles_used + 1, parsed, parsed.simulation_ref, now=now)
+            tx.append(EventKind.PROPOSAL_ACCEPTED, payload={
+                "proposal_hash": proposal_hash, "simulation_ref": parsed.simulation_ref,
+            }, actor=principal.actor_id, now=now)
+            if decision.decision is DecisionStatus.APPROVAL_REQUIRED:
+                tx.append(EventKind.APPROVAL_REQUIRED, payload={"proposal_hash": proposal_hash},
+                          actor=principal.actor_id, now=now)
+            else:
+                tx.append(EventKind.ACTION_ELIGIBLE, payload={"proposal_hash": proposal_hash},
+                          actor="offline_office_gate", now=now)
+            return decision.model_copy(update={"state_version": tx.snapshot.state_version})
+
+    def approve(self, principal: Principal, task_id: str, request: ApprovalInput,
+                *, now: datetime) -> ActionDecision:
+        now = require_aware(now)
+        with self._repo.write_task(task_id) as tx:
+            task, snap, manifest = tx.task, tx.snapshot, tx.manifest
+            principal.require("task:approve", task.organization_id, now)
+            if principal.actor_id == task.initiator_id:
+                raise AccessDenied("separation of duties: cannot self-approve")
+            if (not manifest.requires_approval or snap.phase is not OfficePhase.AWAITING_APPROVAL
+                    or snap.state_version != request.expected_state_version
+                    or snap.proposal_hash != request.proposal_hash
+                    or now > task.deadline or request.expires_at <= now
+                    or request.expires_at > task.deadline):
+                raise StateConflict("approval no longer matches active authority")
+            approval_id = "approval_" + sha256({
+                "task": task_id, "proposal": request.proposal_hash,
+                "approver": principal.actor_id, "approved": request.approved,
+                "expires_at": request.expires_at,
+            })[7:37]
+            receipt = Approval(
+                approval_id=approval_id, task_id=task_id, approver_id=principal.actor_id,
+                proposal_hash=request.proposal_hash, manifest_hash=task.manifest_hash,
+                expires_at=request.expires_at, approved=request.approved,
+            )
+            tx.write_approval(receipt, organization_id=task.organization_id,
+                              approver_id=principal.actor_id, now=now)
+            kind = EventKind.APPROVAL_GRANTED if request.approved else EventKind.APPROVAL_DENIED
+            tx.append(kind, payload={"approval_id": approval_id,
+                                     "proposal_hash": request.proposal_hash},
+                      actor=principal.actor_id, now=now)
+            return ActionDecision(
+                decision=DecisionStatus.AUTHORIZED if request.approved else DecisionStatus.DENIED,
+                manifest_hash=task.manifest_hash, proposal_hash=request.proposal_hash,
+                reason_code="OFFLINE_APPROVED_NOT_UPSTREAM_TAL" if request.approved
+                            else "OPERATOR_DENIED", state_version=tx.snapshot.state_version,
+            )
+
+    def submit_planning_result(self, principal: Principal, task_id: str,
+                               result: PlanningResult, *, expected_state_version: int,
+                               now: datetime) -> ActionDecision:
+        """M2 connector from the unprivileged M0/M1 TaskRunner; no effects."""
+        if (result.task_id != task_id or sha256(result.proposal) != result.proposal_hash
+                or result.explicitly_not_committed is not True):
+            raise StateConflict("planner result is not bound to the task/proposal")
+        return self.propose(
+            principal, task_id, result.proposal.model_dump_json(),
+            expected_state_version=expected_state_version, now=now,
+        )
+
+    def revalidate_offline_readiness(self, principal: Principal, task_id: str,
+                                     *, now: datetime) -> ActionDecision:
+        """Recheck expired approvals/projections/handles; still NEVER dispatch.
+
+        In M3 this must be supplemented with authoritative source read-back,
+        provider conditional writes, and actual upstream TAL office-domain gate.
+        """
+        now = require_aware(now)
+        with self._repo.write_task(task_id) as tx:
+            task, snap, manifest = tx.task, tx.snapshot, tx.manifest
+            principal.require("task:read", task.organization_id, now)
+
+            def deny(code: str) -> ActionDecision:
+                return ActionDecision(
+                    decision=DecisionStatus.DENIED, manifest_hash=task.manifest_hash,
+                    proposal_hash=snap.proposal_hash or sha256({"no_proposal": True}),
+                    reason_code=code, state_version=snap.state_version,
+                )
+
+            if snap.phase is not OfficePhase.READY_TO_COMMIT or snap.proposal_hash is None:
+                return deny("NOT_READY")
+            proposal = tx.read_active_proposal()
+            if proposal is None:
+                return deny("PROPOSAL_RECORD_MISSING")
+            if manifest.requires_approval:
+                if snap.approval_id is None:
+                    return deny("APPROVAL_MISSING")
+                approval = tx.read_approval(snap.approval_id)
+                if (approval is None or not approval.approved
+                        or approval.task_id != task_id
+                        or approval.manifest_hash != task.manifest_hash
+                        or approval.proposal_hash != snap.proposal_hash
+                        or now >= approval.expires_at):
+                    return deny("APPROVAL_EXPIRED_OR_INVALID")
+            projection, simulation = tx.preview(proposal.simulation_ref)
+            hypothetical = snap.model_copy(update={
+                "phase": OfficePhase.SIMULATED,
+                "cycles_used": snap.cycles_used - 1,
+            })
+            result = self._gate.evaluate(
+                task=task, manifest=manifest, snapshot=hypothetical,
+                proposal=proposal, projection=projection, simulation=simulation, now=now,
+            )
+            if result.decision is DecisionStatus.DENIED:
+                return result.model_copy(update={"state_version": snap.state_version})
+            return ActionDecision(
+                decision=DecisionStatus.AUTHORIZED, manifest_hash=task.manifest_hash,
+                proposal_hash=snap.proposal_hash,
+                reason_code="OFFLINE_READY_NOT_EXECUTABLE",
+                state_version=snap.state_version,
+            )
+
+    def inspect(self, principal: Principal, task_id: str, *, now: datetime) -> TaskSnapshot:
+        state = self._repo.read_task(task_id)
+        principal.require("task:read", state.organization_id, now)
+        return state
+
+    def events(self, principal: Principal, task_id: str, *, now: datetime):
+        state = self._repo.read_task(task_id)
+        principal.require("task:audit", state.organization_id, now)
+        return self._repo.read_events(task_id)
+
+    def replay(self, principal: Principal, task_id: str, *, now: datetime) -> TaskSnapshot:
+        state = self._repo.read_task(task_id)
+        principal.require("task:audit", state.organization_id, now)
+        return self._repo.replay_task(task_id)

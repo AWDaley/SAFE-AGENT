@@ -209,15 +209,17 @@ The milestones below are **merge boundaries**. Complete and test each before sta
 
 **Goal:** Independently enforce authority and derive task status from durable events.
 
+**M2 delivery (October 13, 2026):** Implemented synthetic-only manifest pinning, provisional office policy, approvals, PostgreSQL schema/migration, and a replayable ledger. **The upstream TAL v0.3 calendar domain and provider dispatcher are not implemented; a positive offline eligibility result is not permission to write.** See `docs/M2_DELIVERY.md`.
+
 **Tasks**
 
-- [ ] `M2-01` Create immutable manifest registration/pinning and task-grant compilation (reuse verified TAL core if present).
-- [ ] `M2-02` Implement one typed proposal per cycle; reject extra fields, unknown actions, malformed references, unauthorized resources, parameter-range violations, expired budgets, and stale or mismatched proposal state.
-- [ ] `M2-03` Add action-specific approval requests; bind approval to exact canonical hash, approver identity, allowed authority, and expiry. Changed proposals invalidate approvals.
-- [ ] `M2-04` Create PostgreSQL schema/migrations for tasks, manifest versions, references, projections, simulations, proposals, approvals, execution records, and append-only evidence events.
-- [ ] `M2-05` Implement hash-linked event append and pure reducer; replay must reproduce final state without contacting an LLM or provider.
-- [ ] `M2-06` Connect `TaskRunner` to TAL validation; only authorized proposals can reach an effect dispatcher. Rejections must not enqueue effects or reserve effectful idempotency keys.
-- [ ] `M2-07` Add tenant/actor authorization at API and broker boundaries, redacted structured logs, and provenance metadata.
+- [x] `M2-01` Create immutable manifest registration/pinning and task-grant compilation (reuse verified TAL core if present).
+- [x] `M2-02` Implement one typed proposal per cycle; reject extra fields, unknown actions, malformed references, unauthorized resources, parameter-range violations, expired budgets, and stale or mismatched proposal state.
+- [x] `M2-03` Add action-specific approval requests; bind approval to exact canonical hash, approver identity, allowed authority, and expiry. Changed proposals invalidate approvals.
+- [x] `M2-04` Create PostgreSQL schema/migrations for tasks, manifest versions, references, projections, simulations, proposals, approvals, execution records, and append-only evidence events.
+- [x] `M2-05` Implement hash-linked event append and pure reducer; replay must reproduce final state without contacting an LLM or provider.
+- [x] `M2-06` Connect `TaskRunner` to TAL validation; only authorized proposals can reach an effect dispatcher. Rejections must not enqueue effects or reserve effectful idempotency keys.
+- [x] `M2-07` Add tenant/actor authorization at API and broker boundaries, redacted structured logs, and provenance metadata.
 
 **Artifacts:** deterministic gate, approval service, event ledger, reducer, migrations, policy fixtures.
 
