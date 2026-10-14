@@ -4,7 +4,6 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from safe_agent.integrations.google_calendar.client import GoogleCalendarHTTP
 from safe_agent.integrations.google_calendar.contracts import (
     GoogleTestEventIntent,
     stable_event_id,
