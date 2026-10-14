@@ -27,6 +27,10 @@ from safe_agent.contracts.internal import (
 from safe_agent.evidence.ledger import EventKind, OfficePhase, TaskSnapshot
 from safe_agent.storage.provider import ProviderIntegrityError
 from safe_agent.storage.repository import LedgerRepository, OutboxClaim, StateConflict
+from safe_agent.tal.trusted_dispatch import (
+    TALOfficeDispatchDenied,
+    TrustedTALOfficeDispatchCheck,
+)
 from safe_agent.virtual_office import VirtualOffice
 from safe_agent.virtual_office.models import CalendarProjection, TaskListProjection
 
@@ -70,7 +74,7 @@ class SyntheticRecoveryWorker:
         self, repo: LedgerRepository, broker: ReferenceBroker,
         calendar: FakeCalendarAdapter, *, task_adapter: FakeInternalTaskAdapter | None = None,
         office: VirtualOffice | None = None, worker_id: str | None = None,
-        max_attempts: int = 3,
+        max_attempts: int = 3, tal_dispatch: TrustedTALOfficeDispatchCheck | None = None,
     ) -> None:
         if type(calendar) is not FakeCalendarAdapter or (task_adapter is not None
                                                       and type(task_adapter) is not FakeInternalTaskAdapter):
@@ -84,6 +88,7 @@ class SyntheticRecoveryWorker:
         self._office = office
         self._id = worker_id or "worker_" + token_hex(10)
         self._max_attempts = max_attempts
+        self._tal_dispatch = tal_dispatch
 
     def process_one(
         self, *, task_id: str | None = None, now: datetime,
@@ -213,6 +218,28 @@ class SyntheticRecoveryWorker:
                         or approval.proposal_hash != claim.proposal_hash
                         or now >= approval.expires_at):
                     raise KnownNoEffect("approval expired or mismatched")
+        # First-class TALRuntime office admission is an additional mandatory
+        # guard *when opted in* for this synthetic worker. Existing-effect
+        # reconciliation above never needs to renew an expired authorization.
+        if claim.operation == "calendar.create_event" and self._tal_dispatch is not None:
+            assert isinstance(task, Task) and isinstance(manifest, TaskManifest)
+            assert isinstance(context.proposal, CalendarCreateEvent)
+            with self._repo.write_task(claim.task_id) as tx:
+                if tx.snapshot != snap or tx.snapshot.phase is not OfficePhase.EXECUTING:
+                    raise KnownNoEffect("TAL outbox state changed")
+                projection, simulation = tx.preview(context.proposal.simulation_ref)
+                approval = (tx.read_approval(snap.approval_id)
+                            if snap.approval_id is not None else None)
+            try:
+                self._tal_dispatch.require(
+                    action_hash=claim.action_hash,
+                    task=task, manifest=manifest,
+                    proposal=context.proposal,
+                    projection=projection, simulation=simulation,
+                    snapshot=snap, approval=approval, now=now,
+                )
+            except TALOfficeDispatchDenied as error:
+                raise KnownNoEffect("TAL_OFFICE_RUNTIME_DENIED") from error
 
     def _calendar_effect(self, claim: OutboxClaim, context: DispatchContext,
                          *, now: datetime, fault: FaultPoint | None) -> ExecutionReceipt:
