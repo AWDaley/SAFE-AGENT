@@ -12,15 +12,11 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.exc import IntegrityError
 from starlette.middleware.base import RequestResponseEndpoint
 
+from safe_agent.broker.references import ReferenceDenied
 from safe_agent.contracts.intake import TaskIntakeReceipt, TaskIntakeRequest, TaskOptionsPage
 from safe_agent.contracts.operator import OperatorInboxPage, OperatorProposalPreview
 from safe_agent.evidence.ledger import LedgerEvent, TaskSnapshot
 from safe_agent.orchestration.office_tasks import ApprovalInput, TrustedOfficeTasks
-from safe_agent.orchestration.task_provisioning import (
-    InvalidTaskWindow,
-    OptionUnavailable,
-    TrustedTaskProvisioner,
-)
 from safe_agent.orchestration.synthetic_workflow import (
     NoPermittedSyntheticSlot,
     SyntheticPreparationReceipt,
@@ -28,9 +24,13 @@ from safe_agent.orchestration.synthetic_workflow import (
     TrustedSyntheticWorkflow,
     WorkflowVersionCommand,
 )
+from safe_agent.orchestration.task_provisioning import (
+    InvalidTaskWindow,
+    OptionUnavailable,
+    TrustedTaskProvisioner,
+)
 from safe_agent.security.principal import AccessDenied, Principal, SignedOperatorTokens
 from safe_agent.storage.repository import MissingTask, StateConflict
-from safe_agent.broker.references import ReferenceDenied
 from safe_agent.virtual_office.service import StaleProjection, UnissuedProjection
 
 if TYPE_CHECKING:

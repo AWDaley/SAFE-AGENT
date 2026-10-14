@@ -26,7 +26,10 @@ from safe_agent.storage.provider import DurableFakeProvider
 from safe_agent.tal.office_gate import OfficeGate
 from tests.m2.conftest import NOW
 from tests.m6.test_task_intake import (
-    SIGNING_KEY, auth, payload, provisioner,
+    SIGNING_KEY,
+    auth,
+    payload,
+    provisioner,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
