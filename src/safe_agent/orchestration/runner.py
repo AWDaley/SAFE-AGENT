@@ -41,7 +41,7 @@ class TaskRunner:
             raise ValueError("cross-organization projection rejected")
         if context.calendar_ref != projection.calendar_ref:
             raise ValueError("calendar scope mismatch")
-        proposal = TypeAdapter(Proposal).validate_python(
+        proposal: CalendarCreateEvent | RequestClarification = TypeAdapter(Proposal).validate_python(
             self._planner.propose(context, projection)
         )
         if isinstance(proposal, CalendarCreateEvent):
