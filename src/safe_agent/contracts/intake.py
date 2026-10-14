@@ -21,9 +21,11 @@ class TaskIntakeRequest(StrictModel):
     allowed_start: datetime
     allowed_end: datetime
 
-    @field_validator("allowed_start", "allowed_end")
+    @field_validator("allowed_start", "allowed_end", mode="before")
     @classmethod
-    def aware(cls, value: datetime) -> datetime:
+    def aware(cls, value: datetime | str) -> datetime:
+        if isinstance(value, str):
+            value = datetime.fromisoformat(value)
         return require_aware(value)
 
     @model_validator(mode="after")

@@ -1,7 +1,7 @@
-"""Restricted M2 operator API: bearer-authenticated status, evidence and approval.
+"""Authenticated operator API with opt-in trusted synthetic task assignment.
 
-No proposal dispatch, task-grant creation, secret resolution, or raw customer record
-endpoints. Task onboarding remains a privileged internal provisioning step.
+No model-facing grant creation, direct provider dispatch, secret resolution or raw
+customer record endpoints. The trusted provisioner compiles immutable authority.
 """
 
 from datetime import UTC, datetime
