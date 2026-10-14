@@ -53,12 +53,13 @@ worker = SyntheticRecoveryWorker(
 )
 ```
 
-The worker must be hosted as a trusted harness component, not a browser tool.
-Use the existing supervised worker lifecycle to invoke
-`worker.process_one(now=...)` from an appropriately controlled process.
-For a local test, explicitly invoke `process_one(task_id=..., now=...)`
-after queueing. The M6 operator interface can refresh task/execution status
-but cannot dispatch or claim effects.
+The worker must be hosted as a trusted harness component, not a browser
+tool. M6-01d supplies an optional SupervisedSyntheticWorker that calls
+process_one only from an operator-owned worker host, with bounded batches,
+interruptible polling, error backoff and failure-threshold shutdown.
+See M6_SUPERVISED_SYNTHETIC_WORKER.md for standalone wiring and the
+disposable m6-worker-demo. The M6 operator interface can refresh
+task/execution status but cannot dispatch or claim effects.
 
 Never wire a Google client into this synthetic gateway/worker; the existing
 type fences require the exact fake adapter classes.

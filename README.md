@@ -216,10 +216,17 @@ synthetic outbox route. A separately hosted trusted SyntheticRecoveryWorker
 must claim and independently verify the fake effect. The browser cannot
 dispatch provider actions; Google live writes are still prohibited.
 
+M6-01d adds an optional SupervisedSyntheticWorker that polls already-queued
+synthetic intents with bounded claim batches, interruptible stop signals,
+backoff and halt-on-infrastructure-failure behavior. It delegates all
+authority and readback decisions to the existing SyntheticRecoveryWorker;
+the operator HTTP API still never dispatches effects. Run the isolated
+demo with: python -m safe_agent m6-worker-demo.
+
 Operators continue to use trusted local test tokens only. Deployment without
 the optional provisioner/workflow components remains review-only. See
 docs/M6_OPERATOR_INBOX.md, docs/M6_TASK_INTAKE.md and
-docs/M6_SYNTHETIC_WORKFLOW.md.
+docs/M6_SYNTHETIC_WORKFLOW.md and docs/M6_SUPERVISED_SYNTHETIC_WORKER.md.
 
 **M5 LIVE ACCEPTANCE: BLOCKED.** Passing offline tests and creating a synthetic
 task never authorize real provider execution or production deployment.
