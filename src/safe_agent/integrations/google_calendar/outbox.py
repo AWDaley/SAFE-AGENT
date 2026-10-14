@@ -34,17 +34,13 @@ class StagedGoogleTestIntent(StrictModel):
     provider_write_enabled: Literal[False] = False
 
 
-def _trusted_tal_authorization(
-    tx: TaskTransaction, *, action_hash: str, now: datetime,
+def _trusted_tal_office_command(
+    tx: TaskTransaction, *, action_hash: str,
 ) -> object:
-    """Rebuild the TAL command solely from persisted immutable task state."""
+    """Construct the TAL office action from a locked, trusted SQL task record."""
     try:
         tal_core = import_module("tal.core")
         tal_office = import_module("tal.office")
-        tal_runtime = import_module("tal.runtime")
-        tal_adapters = import_module("tal.adapters")
-        tal_storage = import_module("tal.storage")
-        import_module("tal.office_execution")
         task, manifest, snap = tx.task, tx.manifest, tx.snapshot
         proposal = tx.read_active_proposal()
         if (not isinstance(task, Task)
@@ -143,16 +139,31 @@ def _trusted_tal_authorization(
             expected_state_version=snap.state_version,
             outbox_action_hash=action_hash,
         )
-        # No tool access, external credentials or shadow journal are installed.
+        return command
+    except StateConflict:
+        raise
+    except Exception as error:
+        raise StateConflict("TAL_GOOGLE_CONTEXT_UNAVAILABLE") from error
+
+
+def _trusted_tal_authorization(
+    tx: TaskTransaction, *, action_hash: str, now: datetime,
+) -> object:
+    """Obtain TAL's bound record at staging, without exposing a tool capability."""
+    command = _trusted_tal_office_command(tx, action_hash=action_hash)
+    try:
+        tal_runtime = import_module("tal.runtime")
+        tal_adapters = import_module("tal.adapters")
+        tal_storage = import_module("tal.storage")
+        import_module("tal.office_execution")
+        # No provider, model tools, or external credentials are installed.
         runtime = tal_runtime.TALRuntime(
             tal_storage.InMemoryEventStore(), tal_adapters.FakeToolRegistry(),
             clock=lambda: now,
         )
         return runtime.prepare_office_execution_authorization(
-            task.task_id, command, actor_id=task.initiator_id,
+            tx.task.task_id, command, actor_id=tx.task.initiator_id,
         )
-    except StateConflict:
-        raise
     except Exception as error:
         raise StateConflict("TAL_GOOGLE_AUTHORIZATION_UNAVAILABLE") from error
 
