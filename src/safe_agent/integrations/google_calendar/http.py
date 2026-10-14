@@ -6,11 +6,9 @@ bound to the original operator and state as well as the single-use SQL state.
 Provider calendar writes remain blocked by the upstream TAL office-domain gate.
 """
 
-from __future__ import annotations
-
 import hmac
 from datetime import UTC, datetime, timedelta
-from typing import Callable
+from typing import Annotated, Callable
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -51,7 +49,7 @@ def create_google_test_router(
     router = APIRouter(tags=["google-test-only"])
 
     def operator(
-        credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+        credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
     ) -> Principal:
         if credentials is None or credentials.scheme.lower() != "bearer":
             raise HTTPException(status_code=401, detail="authentication required")
@@ -66,7 +64,7 @@ def create_google_test_router(
     def authorize(
         command: TestCalendarConnect,
         response: Response,
-        principal: Principal = Depends(operator),
+        principal: Annotated[Principal, Depends(operator)],
     ) -> dict[str, str]:
         try:
             started = oauth.start(
@@ -125,7 +123,7 @@ def create_google_test_router(
     @router.post("/v1/integrations/google-test/{connection_id}/disconnect")
     def disconnect(
         connection_id: str,
-        principal: Principal = Depends(operator),
+        principal: Annotated[Principal, Depends(operator)],
     ) -> dict[str, bool]:
         try:
             remote = oauth.revoke(
