@@ -62,6 +62,20 @@ No operator HTML/JavaScript gains a worker execution route.
 
 See M6_SUPERVISED_SYNTHETIC_WORKER.md.
 
+## Persistent bounded planning (M6-01e)
+
+An optional TrustedPersistentPlanning service adds a versioned planning
+workspace and a bounded Plan control for authorized task initiators.
+The host selects the deterministic or text-only planner; the browser cannot
+select a model, supply instructions, view model text, or increase permissions.
+The server durably consumes an attempt before invoking a text callback.
+Clarification, invalid model replies and conflicts record safe reason codes;
+only a trusted accepted proposal advances into review. Existing approval,
+queue and worker boundaries remain unchanged.
+
+See M6_PERSISTENT_PLANNING.md for SQL schema, lease recovery, budgets,
+clarification limits and process-sandboxing requirements.
+
 ## Setup
 
 Install API dependencies and create the service from trusted harness objects:

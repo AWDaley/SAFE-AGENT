@@ -8,6 +8,7 @@
   let activeTask = null;
   let activeSnapshot = null;
   let activePreview = null;
+  let activePlanning = null;
   let requestGeneration = 0;
   let taskOptions = [];
   let intakeNonce = "";
@@ -30,6 +31,7 @@
     activeTask = null;
     activeSnapshot = null;
     activePreview = null;
+    activePlanning = null;
     taskOptions = [];
     intakeNonce = "";
     requestGeneration += 1;
@@ -167,13 +169,63 @@
   }
 
   function showWorkflowControls(snapshot) {
+    const canPlan = taskOptions.length > 0 && snapshot && activePlanning &&
+      snapshot.phase === "ASSIGNED" &&
+      ["READY", "NEEDS_CLARIFICATION"].includes(activePlanning.status) &&
+      activePlanning.attempts_used < activePlanning.max_attempts;
     const canPrepare = taskOptions.length > 0 && snapshot &&
-      snapshot.phase === "ASSIGNED";
+      !activePlanning && snapshot.phase === "ASSIGNED";
     const canQueue = taskOptions.length > 0 && snapshot &&
       snapshot.phase === "READY_TO_COMMIT";
-    node("workflowPanel").hidden = !(canPrepare || canQueue);
+    node("workflowPanel").hidden = !(canPlan || canPrepare || canQueue || activePlanning);
+    node("planTaskBtn").hidden = !canPlan;
     node("prepareTaskBtn").hidden = !canPrepare;
     node("queueTaskBtn").hidden = !canQueue;
+    node("planningSummary").hidden = !activePlanning;
+    if (activePlanning) {
+      const p = activePlanning;
+      setText("planningSummary", p.mode + " planner · " + p.status +
+        " · attempts " + p.attempts_used + "/" + p.max_attempts +
+        (p.last_reason ? " · " + p.last_reason : "") +
+        ". Planning is advisory and cannot grant permissions.");
+    }
+  }
+
+  async function runPlanning() {
+    const snap = activeSnapshot;
+    const task = activeTask;
+    const planning = activePlanning;
+    if (!snap || !task || !planning || snap.phase !== "ASSIGNED") return;
+    node("planTaskBtn").disabled = true;
+    try {
+      const receipt = await request(
+        "/v1/tasks/" + encodeURIComponent(task) + "/plan", "POST", {
+          schema_version: "safe_agent.planning_command.v1",
+          expected_state_version: snap.state_version,
+          expected_workspace_version: planning.workspace_version
+        }
+      );
+      if (receipt.schema_version !== "safe_agent.planning_receipt.v1" ||
+          receipt.provider_effect_performed !== false ||
+          receipt.synthetic_only !== true) {
+        throw new Error("Unexpected planning receipt.");
+      }
+      await loadInbox(true);
+      await selectTask(task);
+      if (receipt.status === "PREPARED") {
+        status("Proposal prepared under the existing policy gate. Review it before any effect.");
+      } else if (receipt.reason_code === "NO_AVAILABLE_SLOT") {
+        status("No opening in this permitted window. Retry after the source changes, " +
+          "or assign a new task with a new authorized window.");
+      } else if (receipt.status === "EXHAUSTED") {
+        status("Planning budget exhausted. Assign a new authorized task if needed.");
+      } else {
+        status("Planning stopped without an effect (" + receipt.reason_code +
+          "). Only bounded retries are allowed.");
+      }
+    } catch (error) {
+      status(error.message + " Refresh the workspace before retrying.");
+    } finally { node("planTaskBtn").disabled = false; }
   }
 
   async function runWorkflow(action) {
@@ -247,6 +299,7 @@
     activeTask = taskId;
     activeSnapshot = null;
     activePreview = null;
+    activePlanning = null;
     const generation = ++requestGeneration;
     node("previewPanel").hidden = true;
     node("eventsPanel").hidden = true;
@@ -263,6 +316,17 @@
       const snap = await request("/v1/tasks/" + encodeURIComponent(taskId));
       if (generation !== requestGeneration) return;
       activeSnapshot = snap;
+      try {
+        const planning = await request(
+          "/v1/tasks/" + encodeURIComponent(taskId) + "/planning"
+        );
+        if (generation !== requestGeneration) return;
+        if (planning.schema_version === "safe_agent.planning_workspace.v1" &&
+            planning.provider_effect_performed === false) activePlanning = planning;
+      } catch (_) {
+        if (generation !== requestGeneration) return;
+        activePlanning = null;  // Planning is opt-in; legacy UI stays operational.
+      }
       showWorkflowControls(snap);
       node("taskFacts").hidden = false;
       setText("taskPhase", snap.phase);
@@ -390,6 +454,7 @@
       updateTaskPolicy();
     });
   }
+  node("planTaskBtn").addEventListener("click", () => { void runPlanning(); });
   node("prepareTaskBtn").addEventListener("click", () => { void runWorkflow("prepare"); });
   node("queueTaskBtn").addEventListener("click", () => { void runWorkflow("queue"); });
   node("disconnectBtn").addEventListener("click", disconnect);

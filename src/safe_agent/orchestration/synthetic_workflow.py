@@ -7,17 +7,18 @@ proposal JSON, authorizes its own manifest or runs a provider worker.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Callable, Literal
 
 from pydantic import Field
 
 from safe_agent.agent.fake import FakePlanner
-from safe_agent.agent.interfaces import SafeTaskContext
+from safe_agent.agent.interfaces import Planner, SafeTaskContext
 from safe_agent.broker import ReferenceBroker
 from safe_agent.canonical import sha256
 from safe_agent.contracts.actions import CalendarCreateEvent, RequestClarification
 from safe_agent.contracts.base import Digest, Identifier, StrictModel, require_aware
 from safe_agent.contracts.control import DecisionStatus, Task, TaskManifest
+from safe_agent.contracts.planning import PlanningLease
 from safe_agent.contracts.internal import (
     InternalTaskCreateProposal,
     InternalTaskManifest,
@@ -134,8 +135,18 @@ class TrustedSyntheticWorkflow:
     def prepare(
         self, principal: Principal, task_id: str, *,
         expected_state_version: int, now: datetime,
+        planner_override: Planner | None = None,
+        planning_lease: PlanningLease | None = None,
+        completion_clock: Callable[[], datetime] | None = None,
     ) -> SyntheticPreparationReceipt:
         now = require_aware(now)
+        if (planner_override is not None or completion_clock is not None) and planning_lease is None:
+            raise StateConflict("a model planner requires a durable attempt lease")
+        if planning_lease is not None and (
+            planning_lease.task_id != task_id
+            or planning_lease.task_state_version != expected_state_version
+        ):
+            raise StateConflict("planning lease is bound to another task/version")
         task, manifest = self._load_assigned(
             principal, task_id, now=now, expected=expected_state_version,
         )
@@ -166,11 +177,13 @@ class TrustedSyntheticWorkflow:
                 duration_minutes=duration, time_zone=manifest.time_zone,
                 template_id=manifest.template_id, simulation_ref="simulation_pending",
             )
-            candidate = self._planner.plan_once(
+            runner = self._planner if planner_override is None else TaskRunner(planner_override)
+            candidate = runner.plan_once(
                 task, context, projection.to_planner_projection(),
             ).proposal
             if isinstance(candidate, RequestClarification):
-                raise NoPermittedSyntheticSlot("no available synthetic appointment slot")
+                # Do not store or render the model's free-form question.
+                raise NoPermittedSyntheticSlot(candidate.reason_code)
             change = SimulatedChange(
                 calendar_ref=candidate.calendar_ref,
                 customer_ref=candidate.customer_ref,
@@ -222,9 +235,11 @@ class TrustedSyntheticWorkflow:
         else:
             raise StateConflict("unsupported synthetic workflow domain")
 
+        finish_at = require_aware(completion_clock() if completion_clock else now)
         decision = self._coordinator.prepare_synthetic_atomic(
             principal, task_id, projection, simulation, proposal,
-            expected_state_version=expected_state_version, now=now,
+            expected_state_version=expected_state_version, now=finish_at,
+            planning_lease=planning_lease,
         )
         if decision.decision not in {DecisionStatus.APPROVAL_REQUIRED, DecisionStatus.AUTHORIZED}:
             raise StateConflict("trusted policy did not admit synthetic proposal")

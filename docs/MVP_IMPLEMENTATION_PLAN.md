@@ -291,10 +291,12 @@ inbox and M6-01b's opt-in trusted synthetic task assignment. M6-01c adds
 deterministic, atomic synthetic preparation, server-authorized outbox staging
 and independent fake-worker readback acceptance tests. M6-01d adds an
 opt-in bounded synthetic worker supervisor, safe shutdown and an isolated
-offline CLI demo. Production deployment supervision, real Google acceptance,
-durable operational alerting, production identity and model planning are
-still open. See M6_TASK_INTAKE.md, M6_SYNTHETIC_WORKFLOW.md and
-M6_SUPERVISED_SYNTHETIC_WORKER.md.
+offline CLI demo. M6-01e adds bounded text-only model planning with durable
+workspace leases, clarification/retry records and privacy-minimized outcomes.
+Production model process isolation, provider authentication, real Google
+acceptance, durable operational alerting and production identity are still
+open. See M6_TASK_INTAKE.md, M6_SYNTHETIC_WORKFLOW.md,
+M6_SUPERVISED_SYNTHETIC_WORKER.md and M6_PERSISTENT_PLANNING.md.
 
 
 **Goal:** Provide a practical demonstration that an office user can understand and evaluate.

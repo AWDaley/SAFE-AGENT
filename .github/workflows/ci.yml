@@ -45,12 +45,14 @@ jobs:
         run: python -m safe_agent m5-demo
       - name: M6 supervised synthetic worker smoke
         run: python -m safe_agent m6-worker-demo
+      - name: M6 persistent text-only planning smoke
+        run: python -m safe_agent m6-planning-demo
       - name: Migration head smoke (isolated SQLite fixture)
         env:
           SAFE_AGENT_DATABASE_URL: sqlite+pysqlite:///./ci-m4-migration.sqlite
         run: |
           alembic upgrade head
-          python -c "from sqlalchemy import create_engine, inspect; e=create_engine('sqlite+pysqlite:///./ci-m4-migration.sqlite'); assert {'safe_action_outbox', 'safe_fake_provider_effects', 'safe_fake_provider_state', 'safe_google_test_connections', 'safe_google_oauth_pending', 'safe_office_execution_authorizations', 'safe_google_test_outbox_bindings', 'safe_task_intake_keys'} <= set(inspect(e).get_table_names()); assert {'provider_simulation_hash', 'provider_simulation_json'} <= {x['name'] for x in inspect(e).get_columns('safe_google_test_outbox_bindings')}"
+          python -c "from sqlalchemy import create_engine, inspect; e=create_engine('sqlite+pysqlite:///./ci-m4-migration.sqlite'); assert {'safe_action_outbox', 'safe_fake_provider_effects', 'safe_fake_provider_state', 'safe_google_test_connections', 'safe_google_oauth_pending', 'safe_office_execution_authorizations', 'safe_google_test_outbox_bindings', 'safe_task_intake_keys', 'safe_planning_workspaces', 'safe_planning_attempts', 'safe_planning_outcomes'} <= set(inspect(e).get_table_names()); assert {'provider_simulation_hash', 'provider_simulation_json'} <= {x['name'] for x in inspect(e).get_columns('safe_google_test_outbox_bindings')}"
 
   tal-office-interop:
     runs-on: ubuntu-latest

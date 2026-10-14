@@ -54,6 +54,65 @@ class TaskIntakeRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+
+class PlanningWorkspaceRow(Base):
+    """Mutable planning status, CAS version and bounded task-scoped lease."""
+
+    __tablename__ = "safe_planning_workspaces"
+    task_id: Mapped[str] = mapped_column(
+        ForeignKey("safe_tasks.task_id"), primary_key=True,
+    )
+    organization_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    initiator_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    manifest_hash: Mapped[str] = mapped_column(String(72), nullable=False)
+    mode: Mapped[str] = mapped_column(String(24), nullable=False)
+    workspace_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    attempts_used: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    active_attempt_id: Mapped[str | None] = mapped_column(String(128))
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_reason: Mapped[str | None] = mapped_column(String(64))
+    proposal_hash: Mapped[str | None] = mapped_column(String(72))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class PlanningAttemptRow(Base):
+    """Immutable attempt issuance, without model text or private observations."""
+
+    __tablename__ = "safe_planning_attempts"
+    attempt_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    task_id: Mapped[str] = mapped_column(
+        ForeignKey("safe_tasks.task_id"), nullable=False, index=True,
+    )
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    task_state_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    manifest_hash: Mapped[str] = mapped_column(String(72), nullable=False)
+    mode: Mapped[str] = mapped_column(String(24), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    lease_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    __table_args__ = (
+        UniqueConstraint("task_id", "attempt_number", name="uq_safe_planning_attempt_order"),
+    )
+
+
+class PlanningOutcomeRow(Base):
+    """Immutable sealed result metadata; proposal contents stay in M2 ledger."""
+
+    __tablename__ = "safe_planning_outcomes"
+    attempt_id: Mapped[str] = mapped_column(
+        ForeignKey("safe_planning_attempts.attempt_id"), primary_key=True,
+    )
+    task_id: Mapped[str] = mapped_column(
+        ForeignKey("safe_tasks.task_id"), nullable=False,
+    )
+    result_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason_code: Mapped[str | None] = mapped_column(String(64))
+    proposal_hash: Mapped[str | None] = mapped_column(String(72))
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    outcome_hash: Mapped[str] = mapped_column(String(72), nullable=False)
+
+
 class ManifestRow(Base):
     __tablename__ = "safe_manifest_versions"
     manifest_hash: Mapped[str] = mapped_column(String(72), primary_key=True)

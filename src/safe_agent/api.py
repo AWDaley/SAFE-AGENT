@@ -15,8 +15,10 @@ from starlette.middleware.base import RequestResponseEndpoint
 from safe_agent.broker.references import ReferenceDenied
 from safe_agent.contracts.intake import TaskIntakeReceipt, TaskIntakeRequest, TaskOptionsPage
 from safe_agent.contracts.operator import OperatorInboxPage, OperatorProposalPreview
+from safe_agent.contracts.planning import PlanningCommand, PlanningReceipt, PlanningWorkspaceView
 from safe_agent.evidence.ledger import LedgerEvent, TaskSnapshot
 from safe_agent.orchestration.office_tasks import ApprovalInput, TrustedOfficeTasks
+from safe_agent.orchestration.persistent_planning import TrustedPersistentPlanning
 from safe_agent.orchestration.synthetic_workflow import (
     NoPermittedSyntheticSlot,
     SyntheticPreparationReceipt,
@@ -42,7 +44,8 @@ def create_app(coordinator: TrustedOfficeTasks, authenticator: SignedOperatorTok
                google_test_oauth: "GoogleOAuthService | None" = None,
                enable_operator_ui: bool = False,
                task_provisioner: TrustedTaskProvisioner | None = None,
-               synthetic_workflow: TrustedSyntheticWorkflow | None = None) -> FastAPI:
+               synthetic_workflow: TrustedSyntheticWorkflow | None = None,
+               persistent_planning: TrustedPersistentPlanning | None = None) -> FastAPI:
     app = FastAPI(title="SAFE-AGENT M2 Local Operator", version="0.2.0")
     bearer = HTTPBearer(auto_error=False)
 
@@ -158,6 +161,32 @@ def create_app(coordinator: TrustedOfficeTasks, authenticator: SignedOperatorTok
                 raise HTTPException(
                     status_code=409, detail="synthetic queue unavailable",
                 ) from error
+
+    if persistent_planning is not None:
+        @app.get("/v1/tasks/{task_id}/planning")
+        def planning_status(
+            task_id: str, principal: Annotated[Principal, Depends(operator)],
+        ) -> PlanningWorkspaceView:
+            """Versioned planning metadata only, never raw model context or text."""
+            try:
+                return persistent_planning.inspect(principal, task_id, now=clock())
+            except (AccessDenied, MissingTask) as error:
+                raise HTTPException(status_code=404, detail="task unavailable") from error
+            except (StateConflict, ValueError) as error:
+                raise HTTPException(status_code=409, detail="planning state unavailable") from error
+
+        @app.post("/v1/tasks/{task_id}/plan")
+        def run_bounded_plan(
+            task_id: str, body: PlanningCommand,
+            principal: Annotated[Principal, Depends(operator)],
+        ) -> PlanningReceipt:
+            """One text-only bounded attempt; no provider effect or live tool call."""
+            try:
+                return persistent_planning.plan(principal, task_id, body, now=clock())
+            except (AccessDenied, MissingTask) as error:
+                raise HTTPException(status_code=404, detail="task unavailable") from error
+            except (StateConflict, ValueError) as error:
+                raise HTTPException(status_code=409, detail="planning attempt unavailable") from error
 
     @app.get("/v1/tasks/{task_id}/preview")
     def review_preview(

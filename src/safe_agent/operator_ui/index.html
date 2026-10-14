@@ -73,10 +73,12 @@
           </section>
 
           <section class="panel" id="workflowPanel" hidden aria-labelledby="workflowTitle">
-            <p class="eyebrow">Deterministic workflow</p>
-            <h2 id="workflowTitle">Prepare or queue</h2>
-            <p class="muted smaller">Preparation reads the synthetic Virtual Office and records a TAL-gated proposal. Queueing persists a synthetic outbox intent; only the separate trusted recovery worker performs an effect. Neither button can write to Google.</p>
+            <p class="eyebrow">Bounded synthetic workflow</p>
+            <h2 id="workflowTitle">Plan, prepare or queue</h2>
+            <p class="muted smaller">Planning uses only sanitized task context and a server-selected text-only or deterministic planner. Each attempt is durably budgeted. Queueing records an authorized synthetic intent; only the separate trusted recovery worker can perform a fake effect. Google writes remain blocked.</p>
+            <p id="planningSummary" class="muted smaller" hidden></p>
             <div class="decision-actions">
+              <button type="button" id="planTaskBtn" class="primary" hidden>Run bounded planning attempt</button>
               <button type="button" id="prepareTaskBtn" class="primary" hidden>Prepare synthetic proposal</button>
               <button type="button" id="queueTaskBtn" hidden>Queue approved synthetic action</button>
             </div>
