@@ -89,6 +89,25 @@ class SyntheticRecoveryWorker:
         self._id = worker_id or "worker_" + token_hex(10)
         self._max_attempts = max_attempts
         self._tal_dispatch = tal_dispatch
+        # A separate TAL audit DB cannot be committed atomically with SAFE's
+        # SQL ledger. Surface sync gaps, never rewrite a verified provider result.
+        self._audit_sync_warnings: dict[str, str] = {}
+
+    def reconcile_tal_audit(self, task_id: str, *, now: datetime) -> str | None:
+        """Trusted, read-only catch-up. Never re-dispatches a provider effect."""
+        if self._tal_dispatch is None or not self._tal_dispatch.has_audit:
+            return None
+        try:
+            result = self._tal_dispatch.reconcile_audit(self._repo, task_id, now=now)
+        except Exception:
+            self._audit_sync_warnings[task_id] = "TAL_AUDIT_SYNC_REQUIRED"
+            return "TAL_AUDIT_SYNC_REQUIRED"
+        self._audit_sync_warnings.pop(task_id, None)
+        return result
+
+    def audit_sync_warning(self, task_id: str) -> str | None:
+        """Safe diagnostic for an operator; contains no provider identifiers."""
+        return self._audit_sync_warnings.get(task_id)
 
     def process_one(
         self, *, task_id: str | None = None, now: datetime,
@@ -98,31 +117,40 @@ class SyntheticRecoveryWorker:
         now = require_aware(now)
         claim = self._repo.claim_action(worker_id=self._id, now=now, task_id=task_id)
         if claim is None:
+            # Repair a crash after SAFE committed its receipt but before TAL's
+            # shadow journal was updated. No lease or new effect is issued.
+            if task_id is not None:
+                self.reconcile_tal_audit(task_id, now=now)
             return None
         if fault is FaultPoint.BEFORE_DISPATCH:
             raise InjectedCrash("crash after durable claim and before provider call")
         try:
-            return self._apply_claim(claim, now=now, fault=fault)
+            result = self._apply_claim(claim, now=now, fault=fault)
         except InjectedCrash:
             raise
         except KnownNoEffect:
-            return self._escalate(claim, now=now, reason="REVALIDATION_FAILED")
+            result = self._escalate(claim, now=now, reason="REVALIDATION_FAILED")
         except (FakeCalendarConflict, FakeTaskConflict, ProviderIntegrityError, StateConflict):
-            # Provider rejected conditional write; do not mutate task again.
-            return self._escalate(claim, now=now, reason="SOURCE_CONFLICT_OR_INTEGRITY")
+            result = self._escalate(claim, now=now, reason="SOURCE_CONFLICT_OR_INTEGRITY")
         except Exception:
-            # Includes lost response / readback failure. An exception cannot tell
-            # us whether the remote write was committed. Never issue a blind retry.
+            # A failed provider response is ambiguous. Never retry blindly.
             if claim.attempts >= self._max_attempts:
-                return self._escalate(claim, now=now, reason="RECONCILIATION_EXHAUSTED")
-            self._repo.release_action_unknown(
-                claim, now=now, reason="EFFECT_OUTCOME_UNCERTAIN",
-                delay=timedelta(seconds=5),
-            )
-            return ExecutionReceipt(
-                action_hash=claim.action_hash, manifest_hash=claim.manifest_hash,
-                outcome=ExecutionOutcome.OUTCOME_UNKNOWN,
-            )
+                result = self._escalate(claim, now=now, reason="RECONCILIATION_EXHAUSTED")
+            else:
+                self._repo.release_action_unknown(
+                    claim, now=now, reason="EFFECT_OUTCOME_UNCERTAIN",
+                    delay=timedelta(seconds=5),
+                )
+                result = ExecutionReceipt(
+                    action_hash=claim.action_hash, manifest_hash=claim.manifest_hash,
+                    outcome=ExecutionOutcome.OUTCOME_UNKNOWN,
+                )
+        # SAFE's trusted receipt and state transition are committed first.
+        # TAL's independent SQLite journal is a shadow, never a second permit.
+        # Sync failure must not roll back or reclassify an already-written effect.
+        if claim.operation == "calendar.create_event":
+            self.reconcile_tal_audit(claim.task_id, now=now)
+        return result
 
     def _apply_claim(self, claim: OutboxClaim, *, now: datetime,
                      fault: FaultPoint | None) -> ExecutionReceipt:
