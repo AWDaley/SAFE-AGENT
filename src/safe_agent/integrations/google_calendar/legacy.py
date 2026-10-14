@@ -1,9 +1,9 @@
-"""Test-account Google Calendar adapter; provider writes are gated OFF.
+"""M5 foundation read-only adapter, retained as a legacy compatibility interface.
 
-This adapter is deliberately independent from the synthetic gateway. It cannot be
-substituted into M3/M4's exact-type synthetic adapter checks. Network and OAuth
-credentials are supplied by a trusted caller, never by a model proposal.
+New integrations should use `GoogleCalendarHTTP` with `GoogleTestCalendarService`.
+Both paths deny model-triggered real provider writes.
 """
+
 from __future__ import annotations
 
 import re
@@ -31,8 +31,6 @@ class HttpResponse:
     payload: Mapping[str, object]
 
 
-# The transport must handle TLS, timeouts, OAuth headers, and secrecy; it lives
-# in the trusted integration process, NOT in the model context.
 Transport = Callable[[str, str, Mapping[str, str], bytes | None], HttpResponse]
 _ID = re.compile(r"^[A-Za-z0-9_@.\-]{1,256}$")
 
@@ -50,12 +48,10 @@ def _instant(value: datetime) -> str:
 
 
 class GoogleCalendarTestAdapter:
-    """Read-only test adapter with explicitly unimplemented effect dispatch.
+    """Legacy M5 read-only adapter with explicitly blocked effect dispatch.
 
-    The adapter has no credential storage, no broad calendar discovery, and no
-    permission to address anything other than the configured dedicated test ID.
-    Creating events must await trusted OAuth, TAL certification, and provider
-    reconciliation. A successful mock read is NOT evidence of those controls.
+    Retained for compatibility with the concurrently merged M5 foundation;
+    it is never a model tool, TAL gate or source of write authorization.
     """
 
     def __init__(self, *, calendar_id: str, transport: Transport,
@@ -78,7 +74,6 @@ class GoogleCalendarTestAdapter:
         return response.payload
 
     def free_busy(self, *, from_at: datetime, until_at: datetime) -> tuple[tuple[str, str], ...]:
-        """Disabled until a trusted POST-only freeBusy adapter is added."""
         raise GoogleCalendarError("freeBusy connection not configured; fail closed")
 
     def get_event(self, event_id: str) -> Mapping[str, object]:
@@ -87,7 +82,6 @@ class GoogleCalendarTestAdapter:
         item = self._get(url)
         if item.get("id") != event_id:
             raise GoogleCalendarError("event identity mismatch")
-        # Return only an allowlisted verification record, not the private event.
         return {k: item[k] for k in ("id", "etag", "status", "start", "end") if k in item}
 
     def create_event(self, *, event_id: str, start_at: datetime,

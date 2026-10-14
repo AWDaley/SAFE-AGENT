@@ -19,7 +19,8 @@ from safe_agent.canonical import canonical_json
 from safe_agent.contracts.base import Identifier, StrictModel, require_aware
 
 Scope = Literal["task:create", "task:prepare", "task:propose", "task:approve",
-                "task:read", "task:audit", "task:execute"]
+                "task:read", "task:audit", "task:execute",
+                "connection:manage", "connection:read"]
 
 
 class AccessDenied(PermissionError):

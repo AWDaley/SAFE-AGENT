@@ -72,3 +72,7 @@ M3 adds `SyntheticExecutionGateway` and *fake-provider* postcondition read-back 
 ## M4 update — durable fake recovery, NOT an upstream TAL office pack
 
 M4 adds `SyntheticRecoveryWorker` and a SQL-backed native-idempotent **fake provider** behind the existing provisional OfficeGate. Neither the new outbox nor the recovery worker invokes upstream `TALRuntime.apply_proposal` for office operations. The upstream TAL calendar-domain integration and conformance fixtures remain release blockers for any real provider action. See [`M4_DELIVERY.md`](M4_DELIVERY.md).
+
+## M5 Google test integration update (October 14, 2026)
+
+M5 implements a stand-alone read-only Google Calendar test connector with token vault, PKCE OAuth, sanitized free/busy, private deterministic event IDs, simulated insert/readback and strict connector failures. It **does not** implement the upstream TAL calendar domain or replace the existing synthetic-only action gate. Google Calendar model-triggered writes fail closed (`TAL_OFFICE_DOMAIN_NOT_CERTIFIED`). Passing the M5 offline HTTP contract suite is **not** TAL conformance or real-provider acceptance. See `docs/M5_DELIVERY.md` and ADR 0005.
