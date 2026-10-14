@@ -4,13 +4,16 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+import pytest
+
 from safe_agent.agent import FakePlanner, SafeTaskContext
 from safe_agent.canonical import sha256
 from safe_agent.contracts.control import DecisionStatus
 from safe_agent.orchestration import TaskRunner
 from safe_agent.orchestration.office_tasks import ApprovalInput
+from safe_agent.storage.repository import StateConflict
 
-from .conftest import NOW, SLOT_END, SLOT_START, WINDOW_END, arrange
+from .conftest import NOW, SLOT_START, WINDOW_END, arrange
 
 
 def test_unprivileged_planner_to_trusted_gate_offline_flow(kit):
@@ -57,8 +60,6 @@ def test_model_cannot_forge_bridge_proposal_hash(kit):
     from safe_agent.orchestration.runner import PlanningResult
     result = PlanningResult(task_id="task_m2", proposal=proposal,
                             proposal_hash=sha256({"forged": True}))
-    from safe_agent.storage.repository import StateConflict
-    import pytest
     with pytest.raises(StateConflict):
         coordinator.submit_planning_result(kit["principal"], "task_m2", result,
                                             expected_state_version=state.state_version, now=NOW)
