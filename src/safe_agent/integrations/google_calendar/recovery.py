@@ -108,12 +108,20 @@ class OfflineGoogleTestRecoveryWorker:
         self._id = worker_id or "google_test_worker_" + token_hex(8)
         self._max_attempts = max_attempts
 
+    def _assert_offline_clients(self) -> None:
+        # Check at use time as well as constructor time. A backend swapping the
+        # client after construction must not accidentally create live egress.
+        if (type(self._service._api._http._transport) is not httpx.MockTransport
+                or type(self._service._oauth._http._transport) is not httpx.MockTransport):
+            raise GoogleDispatchDenied("GOOGLE_OFFLINE_TRANSPORT_CHANGED")
+
     def process_one(
         self, *, now: datetime, task_id: str | None = None,
         fault: GoogleWorkerFault | None = None,
     ) -> ExecutionReceipt | None:
         """Claim and process at most one intent; never blindly reissue an insert."""
         now = require_aware(now)
+        self._assert_offline_clients()
         claim = self._repo.claim_google_test_action(
             worker_id=self._id, now=now, task_id=task_id,
         )
@@ -194,6 +202,7 @@ class OfflineGoogleTestRecoveryWorker:
             scopes=("connection:read",),
             authenticated_until=now + timedelta(minutes=1),
         )
+        self._assert_offline_clients()
         token, actual_calendar = self._service._oauth.access_token(
             principal=principal, connection_id=context.binding["connection_ref"],
             now=now,
@@ -257,6 +266,7 @@ class OfflineGoogleTestRecoveryWorker:
         token, calendar_id = self._connection(context, now=now)
         # Always first query by the deterministic id. This is authoritative
         # source readback, not a free/busy inference of successful insertion.
+        self._assert_offline_clients()
         found = self._service._api.find_effect(
             calendar_id=calendar_id, token=token, intent=context.intent,
         )
@@ -267,6 +277,7 @@ class OfflineGoogleTestRecoveryWorker:
             # Even a 404 on this pass is NOT permission to retry the POST.
             return self._unknown(claim, now=now, reason="GOOGLE_NOT_YET_OBSERVED")
         self._require_new_effect(claim, context, now=now)
+        self._assert_offline_clients()
         intervals = self._service._api.busy_intervals(
             calendar_id=calendar_id, token=token,
             start=context.intent.start_at, end=context.intent.end_at,
@@ -283,10 +294,12 @@ class OfflineGoogleTestRecoveryWorker:
                 raise GoogleDispatchDenied("GOOGLE_STALE_EXECUTION_INTENT")
         try:
             # ONE first attempt; a returned 409 must be reconciled by GET.
+            self._assert_offline_clients()
             self._service._api.insert_test_event(
                 calendar_id=calendar_id, token=token, intent=context.intent,
             )
         except GoogleStateConflict:
+            self._assert_offline_clients()
             found = self._service._api.find_effect(
                 calendar_id=calendar_id, token=token, intent=context.intent,
             )

@@ -14,6 +14,7 @@ from safe_agent.evidence.ledger import OfficePhase
 from safe_agent.integrations.google_calendar.contracts import stable_event_id
 from safe_agent.integrations.google_calendar.errors import GoogleTestWriteBlocked
 from safe_agent.integrations.google_calendar.recovery import (
+    GoogleDispatchDenied,
     GoogleWorkerFault,
     InjectedGoogleWorkerCrash,
     OfflineGoogleTestRecoveryWorker,
@@ -26,6 +27,7 @@ from tests.m5.test_google_test_outbox import stage, staging as source_staging  #
 
 @pytest.fixture(name="staging")
 def _staging_alias(request: pytest.FixtureRequest):
+    assert source_staging is not None
     return request.getfixturevalue("source_staging")
 
 
@@ -204,3 +206,21 @@ def test_service_model_path_is_still_fully_blocked(staging):
     with pytest.raises(GoogleTestWriteBlocked):
         staging["service"].execute_model_proposal("task_m2")
     assert staging["sim"].insert_calls == 0
+
+
+
+def test_runtime_transport_swap_refuses_claim_without_network(staging):
+    stage(staging)
+    w = worker(staging)
+    service = staging["service"]
+    original = service._api._http
+    substituted = httpx.Client(trust_env=False)
+    try:
+        service._api._http = substituted
+        with pytest.raises(GoogleDispatchDenied, match="OFFLINE_TRANSPORT_CHANGED"):
+            w.process_one(task_id="task_m2", now=NOW)
+    finally:
+        service._api._http = original
+        substituted.close()
+    assert staging["sim"].insert_calls == 0
+    assert staging["kit"]["repo"].read_outbox("task_m2")["attempts"] == 0
