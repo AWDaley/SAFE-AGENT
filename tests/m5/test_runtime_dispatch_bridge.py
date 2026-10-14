@@ -13,13 +13,13 @@ from safe_agent.execution.recovery import (
     SyntheticRecoveryWorker,
 )
 from safe_agent.tal.trusted_dispatch import TrustedTALOfficeDispatchCheck
-from tests.m2.conftest import NOW
+from tests.m2.conftest import NOW, kit as office_kit  # noqa: F401
 from tests.m4.test_recovery import stage_calendar
 
-pytest_plugins = ("tests.m2.conftest",)
 
 
-def test_tal_import_error_blocks_new_synthetic_dispatch(kit, monkeypatch) -> None:
+def test_tal_import_error_blocks_new_synthetic_dispatch(office_kit, monkeypatch) -> None:
+    kit = office_kit
     """Absence of the TAL runtime never silently falls back to local authority."""
     stage_hash, adapter = stage_calendar(kit)
 
@@ -39,7 +39,8 @@ def test_tal_import_error_blocks_new_synthetic_dispatch(kit, monkeypatch) -> Non
     assert stage_hash == receipt.action_hash
 
 
-def test_upstream_runtime_allows_one_pinned_synthetic_effect(kit) -> None:
+def test_upstream_runtime_allows_one_pinned_synthetic_effect(office_kit) -> None:
+    kit = office_kit
     pytest.importorskip("tal.runtime")
     _, adapter = stage_calendar(kit)
     worker = SyntheticRecoveryWorker(
@@ -53,7 +54,8 @@ def test_upstream_runtime_allows_one_pinned_synthetic_effect(kit) -> None:
     assert worker.process_one(task_id="task_m2", now=NOW) is None
 
 
-def test_upstream_failure_does_not_undo_previously_committed_effect(kit, monkeypatch) -> None:
+def test_upstream_failure_does_not_undo_previously_committed_effect(office_kit, monkeypatch) -> None:
+    kit = office_kit
     """For committed effects, reconcile by key/readback without a second grant."""
     _, adapter = stage_calendar(kit)
     before = SyntheticRecoveryWorker(kit["repo"], kit["broker"], adapter)
