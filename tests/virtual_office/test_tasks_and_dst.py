@@ -13,7 +13,11 @@ from safe_agent.canonical import sha256
 from safe_agent.contracts.office import SimulatedChange
 from safe_agent.virtual_office import StaleProjection, SyntheticOfficeState, VirtualOffice
 from safe_agent.virtual_office.models import InternalTaskChange, ObserveCalendar, ObserveTasks
-from safe_agent.virtual_office.timezones import CalendarTimeError, checked_instant, checked_local_time
+from safe_agent.virtual_office.timezones import (
+    CalendarTimeError,
+    checked_instant,
+    checked_local_time,
+)
 
 
 def test_internal_task_creation_is_preview_only(
