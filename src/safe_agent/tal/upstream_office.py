@@ -9,6 +9,7 @@ and evidence before accepting a simulated calendar proposal. It is neither a
 from __future__ import annotations
 
 from datetime import datetime
+from importlib import import_module
 
 from safe_agent.broker import ReferenceBroker
 from safe_agent.canonical import sha256
@@ -75,17 +76,17 @@ class UpstreamOfficePolicyGate(OfficeGate):
                 or not isinstance(simulation, CalendarSimulation)):
             return denied("TAL_DOMAIN_CONTRACT_MISMATCH")
         try:
-            from tal.core import (
-                sha256 as tal_sha256,  # type: ignore[import-not-found,import-untyped]
-            )
-            from tal.office import (  # type: ignore[import-not-found,import-untyped]
-                OfficeAdmissionStatus,
-                OfficeCalendarGrantDraft,
-                OfficeCalendarProposal,
-                TrustedOfficeCalendarEvidence,
-                admit_office_calendar,
-                compile_office_calendar_grant,
-            )
+            # Optional pinned TAL package. Runtime-only loading works both in
+            # baseline CI (TAL absent) and pinned interoperability CI (TAL present).
+            tal_core = import_module("tal.core")
+            tal_office = import_module("tal.office")
+            tal_sha256 = tal_core.sha256
+            OfficeAdmissionStatus = tal_office.OfficeAdmissionStatus
+            OfficeCalendarGrantDraft = tal_office.OfficeCalendarGrantDraft
+            OfficeCalendarProposal = tal_office.OfficeCalendarProposal
+            TrustedOfficeCalendarEvidence = tal_office.TrustedOfficeCalendarEvidence
+            admit_office_calendar = tal_office.admit_office_calendar
+            compile_office_calendar_grant = tal_office.compile_office_calendar_grant
 
             # SHA equivalence is required; incompatible canonicalizers cannot
             # silently produce approvals under different object identities.
