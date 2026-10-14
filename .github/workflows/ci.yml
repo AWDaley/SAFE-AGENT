@@ -55,6 +55,6 @@ jobs:
         run: |
           python -m pip install -r requirements.lock
           python -m pip install -e '.[dev]'
-          python -m pip install 'git+https://github.com/AWDaley/TervoroAgenticLanguage-TAL-.git@5b3fc28380894dab0e4f0819ea2a6e950613ccf3'
+          python -m pip install 'git+https://github.com/AWDaley/TervoroAgenticLanguage-TAL-.git@e9d09ef47c0e0e18f3955f9c58f7a8941baf6c38'
       - name: Verify TAL office-domain interoperability
         run: pytest -q tests/m5/test_upstream_office_bridge.py tests/m4/test_tal_runtime_dispatch.py tests/m5/test_tal_execution_authority.py
