@@ -66,7 +66,7 @@ def test_excessive_duration_and_different_target_cannot_grant(kit):
 def test_denial_does_not_increment_projection_version_or_consume_effect_budget(kit):
     coordinator, state, _, _, proposal = arrange(kit)
     bad = proposal.model_copy(update={"template_id": "not_permitted"})
-    for i in range(4):
+    for _ in range(4):
         answer = coordinator.propose(kit["principal"], "task_m2", bad.model_dump_json(),
                                       expected_state_version=state.state_version, now=NOW)
         assert answer.decision is DecisionStatus.DENIED
