@@ -12,6 +12,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
     UniqueConstraint,
 )
@@ -167,3 +168,30 @@ class FakeProviderEffectRow(Base):
     operation: Mapped[str] = mapped_column(String(48), nullable=False)
     request_hash: Mapped[str] = mapped_column(String(72), nullable=False)
     effect_ref: Mapped[str] = mapped_column(String(128), nullable=False)
+
+
+class GoogleOAuthPendingRow(Base):
+    """Short-lived state + encrypted PKCE verifier; never model-visible."""
+
+    __tablename__ = "safe_google_oauth_pending"
+    state_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    actor_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    verifier_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    calendar_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class GoogleTestConnectionRow(Base):
+    """Secret vault, test-only: no provider identifiers or tokens in model projection."""
+
+    __tablename__ = "safe_google_test_connections"
+    connection_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    actor_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    refresh_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    calendar_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    scopes: Mapped[str] = mapped_column(String(256), nullable=False)
+    revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

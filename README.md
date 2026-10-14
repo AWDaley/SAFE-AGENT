@@ -145,3 +145,15 @@ python -m safe_agent m4-demo
 See [`docs/M4_DELIVERY.md`](docs/M4_DELIVERY.md) for the fault matrix,
 operator-facing outbox status (`/v1/tasks/{task_id}/execution`), and the remaining
 upstream TAL / real-provider constraints. **No production connector is enabled.**
+
+## M5: isolated Google Calendar connector (offline-tested, no live writes)
+
+The `safe_agent.integrations.google_calendar` package now supplies a Google Calendar test-account OAuth2 PKCE flow, an encrypted server-side refresh-token vault with an explicit test-calendar allowlist, sanitized free/busy observations, and a trusted low-level deterministic event insert/readback API exercised only against an HTTP simulator. **The agent cannot send model-proposed writes to Google Calendar:** upstream TAL office-domain certification and live test-account acceptance have not been completed. No Google credentials are included or required to run the offline tests.
+
+```bash
+python -m safe_agent m5-demo
+pytest -q tests/m5
+python scripts/export_m5_schemas.py --check
+```
+
+See [M5 delivery/limitations](docs/M5_DELIVERY.md), [test-account setup](docs/M5_GOOGLE_TEST_SETUP.md), and [ADR 0005](docs/adr/0005-google-calendar-test-boundary.md). Do not use a production/personal calendar or put client secrets, provider IDs or refresh tokens in agent context or source control.

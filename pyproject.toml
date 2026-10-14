@@ -14,6 +14,7 @@ dependencies = ["pydantic==2.13.5", "sqlalchemy==2.0.50", "alembic==1.18.4"]
 dev = ["pytest==9.0.2", "ruff==0.12.12", "mypy==1.17.1", "httpx==0.28.1"]
 api = ["fastapi==0.128.2", "uvicorn>=0.34,<1"]
 postgres = ["psycopg[binary]>=3.2,<4"]
+google-test = ["httpx==0.28.1", "cryptography==46.0.4"]
 
 [project.scripts]
 safe-agent = "safe_agent.__main__:main"

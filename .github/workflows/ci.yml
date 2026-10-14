@@ -25,6 +25,7 @@ jobs:
           python scripts/export_m1_schemas.py --check
           python scripts/export_m2_schemas.py --check
           python scripts/export_m3_schemas.py --check
+          python scripts/export_m5_schemas.py --check
       - name: Static typing
         run: mypy src/safe_agent
       - name: Tests
@@ -34,10 +35,12 @@ jobs:
       - name: Synthetic M4 process-restart recovery smoke
         run: |
           python -m safe_agent m4-demo
+      - name: M5 Google test connector offline smoke
+        run: python -m safe_agent m5-demo
       - name: Migration head smoke (isolated SQLite fixture)
         env:
           SAFE_AGENT_DATABASE_URL: sqlite+pysqlite:///./ci-m4-migration.sqlite
         run: |
           alembic upgrade head
-          python -c "from sqlalchemy import create_engine, inspect; e=create_engine('sqlite+pysqlite:///./ci-m4-migration.sqlite'); assert {'safe_action_outbox', 'safe_fake_provider_effects', 'safe_fake_provider_state'} <= set(inspect(e).get_table_names())"
+          python -c "from sqlalchemy import create_engine, inspect; e=create_engine('sqlite+pysqlite:///./ci-m4-migration.sqlite'); assert {'safe_action_outbox', 'safe_fake_provider_effects', 'safe_fake_provider_state', 'safe_google_test_connections', 'safe_google_oauth_pending'} <= set(inspect(e).get_table_names())"
 
