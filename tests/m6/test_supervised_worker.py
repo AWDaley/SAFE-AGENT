@@ -176,7 +176,10 @@ def test_google_bound_outbox_cannot_be_claimed_by_supervisor(kit):
     assert pass_result.status == "IDLE" and pass_result.receipts == 0
     assert kit["repo"].read_outbox(task_id)["status"] == "QUEUED"
     assert internal.effect_count == calendar.effect_count == 0
-    assert kit["repo"].replay_task(task_id).phase is OfficePhase.EXECUTING
+    # Reclassifying a synthetic row as Google without the sealed TAL/provider
+    # binding must also fail independent ledger replay, not appear valid.
+    with pytest.raises(ValueError, match="Google outbox authorization/binding"):
+        kit["repo"].replay_task(task_id)
 
 
 def test_stop_signal_prevents_processing_any_queued_action(kit):
