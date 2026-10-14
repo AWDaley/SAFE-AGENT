@@ -33,7 +33,6 @@ from tests.m2.conftest import NOW
 from tests.m6.test_synthetic_workflow import grant, new_task, queue
 from tests.m6.test_task_intake import SIGNING_KEY, auth, provisioner
 
-ROOT = Path(__file__).resolve().parents[2]
 COMMAND = {
     "schema_version": "safe_agent.planning_command.v1",
     "expected_state_version": 0,
