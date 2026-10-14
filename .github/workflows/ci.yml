@@ -42,7 +42,7 @@ jobs:
           SAFE_AGENT_DATABASE_URL: sqlite+pysqlite:///./ci-m4-migration.sqlite
         run: |
           alembic upgrade head
-          python -c "from sqlalchemy import create_engine, inspect; e=create_engine('sqlite+pysqlite:///./ci-m4-migration.sqlite'); assert {'safe_action_outbox', 'safe_fake_provider_effects', 'safe_fake_provider_state', 'safe_google_test_connections', 'safe_google_oauth_pending'} <= set(inspect(e).get_table_names())"
+          python -c "from sqlalchemy import create_engine, inspect; e=create_engine('sqlite+pysqlite:///./ci-m4-migration.sqlite'); assert {'safe_action_outbox', 'safe_fake_provider_effects', 'safe_fake_provider_state', 'safe_google_test_connections', 'safe_google_oauth_pending', 'safe_office_execution_authorizations', 'safe_google_test_outbox_bindings'} <= set(inspect(e).get_table_names())"
 
   tal-office-interop:
     runs-on: ubuntu-latest
@@ -57,4 +57,4 @@ jobs:
           python -m pip install -e '.[dev]'
           python -m pip install 'git+https://github.com/AWDaley/TervoroAgenticLanguage-TAL-.git@e9d09ef47c0e0e18f3955f9c58f7a8941baf6c38'
       - name: Verify TAL office-domain interoperability
-        run: pytest -q tests/m5/test_upstream_office_bridge.py tests/m4/test_tal_runtime_dispatch.py tests/m5/test_tal_execution_authority.py
+        run: pytest -q tests/m5/test_upstream_office_bridge.py tests/m4/test_tal_runtime_dispatch.py tests/m5/test_tal_execution_authority.py tests/m5/test_google_test_outbox.py

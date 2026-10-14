@@ -25,6 +25,7 @@ from safe_agent.contracts.internal import (
     InternalTaskRecord,
 )
 from safe_agent.evidence.ledger import EventKind, OfficePhase, TaskSnapshot
+from safe_agent.storage.models import GoogleTestOutboxBindingRow
 from safe_agent.storage.provider import ProviderIntegrityError
 from safe_agent.storage.repository import LedgerRepository, OutboxClaim, StateConflict
 from safe_agent.tal.trusted_dispatch import (
@@ -157,7 +158,11 @@ class SyntheticRecoveryWorker:
         with self._repo.write_task(claim.task_id) as tx:
             task, manifest, snap = tx.task, tx.manifest, tx.snapshot
             outbox = tx.read_outbox(claim.action_hash)
-            if (outbox.status != "LEASED" or outbox.lease_owner != claim.worker_id
+            if (claim.provider_kind != "synthetic"
+                    or outbox.provider_kind != "synthetic"
+                    or tx.session.get(GoogleTestOutboxBindingRow, claim.action_hash) is not None
+                    or outbox.status != "LEASED"
+                    or outbox.lease_owner != claim.worker_id
                     or snap.phase is not OfficePhase.EXECUTING
                     or snap.proposal_hash != claim.proposal_hash
                     or task.manifest_hash != claim.manifest_hash
