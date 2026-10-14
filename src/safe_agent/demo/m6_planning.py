@@ -17,6 +17,7 @@ from safe_agent.contracts.actions import CalendarCreateEvent
 from safe_agent.contracts.intake import TaskIntakeRequest
 from safe_agent.contracts.planning import PlanningCommand
 from safe_agent.evidence.ledger import OfficePhase
+from safe_agent.model_runtime import ModelIsolationDenied
 from safe_agent.orchestration.office_tasks import TrustedOfficeTasks
 from safe_agent.orchestration.persistent_planning import TrustedPersistentPlanning
 from safe_agent.orchestration.synthetic_workflow import TrustedSyntheticWorkflow
@@ -40,11 +41,18 @@ def run_m6_planning_demo(
                / "fixtures/synthetic_office/office_state.json")
     source = SyntheticOfficeState.from_fixture(fixture)
     messages: list[str] = []
+    safe_isolation_errors: list[str] = []
 
     def text_only_synthetic_stub(text: str) -> str:
         messages.append(text)
         if isolated_generate is not None:
-            return isolated_generate(text)
+            try:
+                return isolated_generate(text)
+            except ModelIsolationDenied as error:
+                # Local synthetic CI reports only a fixed-category error,
+                # never a prompt, provider ID, stdout, stderr or secret.
+                safe_isolation_errors.append(str(error))
+                raise
         safe = json.loads(text)
         context = safe["task"]
         opening = safe["availability"]["free_slots"][0]
@@ -106,7 +114,11 @@ def run_m6_planning_demo(
             if (result.status != "PREPARED" or result.attempts_used != 1
                     or replayed.phase is not OfficePhase.AWAITING_APPROVAL
                     or replayed.external_effects != 0 or len(messages) != 1):
-                raise AssertionError("bounded synthetic model planning not recorded")
+                raise AssertionError(
+                    "bounded synthetic model planning not recorded: "
+                    f"status={result.status}; reason={result.reason_code}; "
+                    f"runtime={safe_isolation_errors[:1]}"
+                )
             if any(private in messages[0] for private in (
                 "cal_main_private", "cust_c1", "oauth", "customer_name",
             )):

@@ -292,7 +292,10 @@ class DockerIsolatedTextGenerator:
                     timeout_seconds=policy.timeout_seconds,
                     max_output_bytes=max_output,
                 )
-            except (ModelIsolationDenied, OSError) as error:
+            except ModelIsolationDenied:
+                self._cleanup_failed_container(cidfile)
+                raise
+            except OSError as error:
                 self._cleanup_failed_container(cidfile)
                 raise ModelIsolationDenied("isolated planner execution denied") from error
         if not 0 < len(output) <= max_output:
