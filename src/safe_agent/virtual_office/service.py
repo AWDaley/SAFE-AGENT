@@ -239,6 +239,7 @@ class VirtualOffice:
             except CalendarTimeError as error:
                 timezone_valid = False
                 msg = str(error)
+                code: CalendarConflict
                 if "ambiguous" in msg:
                     code = "DST_AMBIGUOUS"
                 elif "nonexistent" in msg:
