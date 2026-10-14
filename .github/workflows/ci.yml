@@ -57,4 +57,4 @@ jobs:
           python -m pip install -e '.[dev]'
           python -m pip install 'git+https://github.com/AWDaley/TervoroAgenticLanguage-TAL-.git@c869390752f4a142e0a9605bb211a827510d1cff'
       - name: Verify TAL office-domain interoperability
-        run: pytest -q tests/m5/test_upstream_office_bridge.py tests/m5/test_runtime_dispatch_bridge.py
+        run: pytest -q tests/m5/test_upstream_office_bridge.py tests/m4/test_tal_runtime_dispatch.py

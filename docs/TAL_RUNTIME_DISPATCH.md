@@ -13,7 +13,7 @@
 ## Verification
 
 - Run base offline tests with `pytest -q`.
-- Install pinned TAL from a reviewed commit; run `pytest -q tests/m5/test_runtime_dispatch_bridge.py tests/m5/test_upstream_office_bridge.py`.
+- Install pinned TAL from a reviewed commit; run `pytest -q tests/m4/test_tal_runtime_dispatch.py tests/m5/test_upstream_office_bridge.py`.
 - Assert a missing/import-failing TAL runtime creates zero new bookings and requires review.
 - Assert exactly one booking with the real TAL runtime and no duplicate after crash/recovery.
 - Verify that Google insertion cannot be reached by any branch of the synthetic worker.
