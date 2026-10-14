@@ -202,6 +202,20 @@ def test_tampered_test_binding_is_not_accepted(staging):
         ).values(observation_hash=sha256({"tamper": True})))
     with pytest.raises(StateConflict, match="GOOGLE_OUTBOX_BINDING_INTEGRITY_ERROR"):
         repo.read_google_test_action_binding("task_m2", receipt.action_hash)
+    with pytest.raises(ValueError, match="Google outbox authorization/binding replay mismatch"):
+        repo.replay_task("task_m2")
+    assert staging["sim"].insert_calls == 0
+
+
+def test_request_hash_tampering_is_rejected_by_trusted_reader(staging):
+    receipt = stage(staging)
+    repo = staging["kit"]["repo"]
+    with repo._sessions.begin() as session:
+        session.execute(update(GoogleTestOutboxBindingRow).where(
+            GoogleTestOutboxBindingRow.action_hash == receipt.action_hash,
+        ).values(provider_request_hash=sha256({"wrong": "request"})))
+    with pytest.raises(StateConflict, match="GOOGLE_OUTBOX_REQUEST_HASH_TAMPERED"):
+        repo.read_google_test_action_binding("task_m2", receipt.action_hash)
     assert staging["sim"].insert_calls == 0
 
 
@@ -213,6 +227,9 @@ def test_connection_revoked_after_staging_denies_future_binding_read(staging):
     with pytest.raises(StateConflict, match="GOOGLE_BOUND_CONNECTION_UNAVAILABLE"):
         staging["kit"]["repo"].read_google_test_action_binding(
             "task_m2", receipt.action_hash)
+    # Revocation blocks a future attempt; historical evidence remains replayable.
+    assert staging["kit"]["repo"].replay_task(
+        "task_m2").phase is OfficePhase.EXECUTING
     assert staging["sim"].insert_calls == 0
 
 
