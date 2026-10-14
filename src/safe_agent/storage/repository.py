@@ -19,11 +19,17 @@ from sqlalchemy.pool import StaticPool
 
 from safe_agent.canonical import sha256
 from safe_agent.contracts.actions import CalendarCreateEvent
+from safe_agent.contracts.internal import (
+    InternalTaskRecord, InternalTaskManifest, InternalTaskCreateProposal,
+)
 from safe_agent.contracts.base import require_aware
-from safe_agent.contracts.control import Approval, Task, TaskManifest
+from safe_agent.contracts.control import (
+    Approval, Task, TaskManifest, ExecutionOutcome, ExecutionReceipt,
+)
 from safe_agent.evidence.ledger import (
     EventKind,
     LedgerEvent,
+    OfficePhase,
     TaskSnapshot,
     reduce_event,
     replay,
@@ -37,10 +43,13 @@ from safe_agent.storage.models import (
     ProjectionRow,
     ProposalRow,
     ReferenceRow,
+    ExecutionRow,
     SimulationRow,
     TaskRow,
 )
-from safe_agent.virtual_office.models import CalendarProjection, CalendarSimulation
+from safe_agent.virtual_office.models import (
+    CalendarProjection, CalendarSimulation, TaskListProjection, InternalTaskSimulation,
+)
 
 M = TypeVar("M", bound=BaseModel)
 
@@ -51,6 +60,18 @@ def _pack(model: BaseModel) -> dict[str, object]:
 
 def _unpack(cls: type[M], value: object) -> M:
     return cls.model_validate_json(json.dumps(value, ensure_ascii=False))
+
+
+def _task_record(value: object) -> Task | InternalTaskRecord:
+    if isinstance(value, dict) and value.get("schema_version") == "safe_agent.internal_task_record.v1":
+        return _unpack(InternalTaskRecord, value)
+    return _unpack(Task, value)
+
+
+def _manifest_record(value: object) -> TaskManifest | InternalTaskManifest:
+    if isinstance(value, dict) and value.get("schema_version") == "safe_agent.internal_task_manifest.v1":
+        return _unpack(InternalTaskManifest, value)
+    return _unpack(TaskManifest, value)
 
 
 class StateConflict(ValueError):
@@ -73,15 +94,15 @@ class TaskTransaction:
         return _unpack(TaskSnapshot, self.row.snapshot_json)
 
     @property
-    def task(self) -> Task:
-        return _unpack(Task, self.row.task_json)
+    def task(self) -> Task | InternalTaskRecord:
+        return _task_record(self.row.task_json)
 
     @property
-    def manifest(self) -> TaskManifest:
+    def manifest(self) -> TaskManifest | InternalTaskManifest:
         record = self.session.get(ManifestRow, self.row.manifest_hash)
         if record is None or record.task_id != self.row.task_id:
             raise ValueError("pinned manifest missing")
-        manifest = _unpack(TaskManifest, record.manifest_json)
+        manifest = _manifest_record(record.manifest_json)
         if sha256(manifest) != record.manifest_hash:
             raise ValueError("manifest digest mismatch")
         return manifest
@@ -101,7 +122,23 @@ class TaskTransaction:
             raise StateConflict("projection/simulation persistence integrity failure")
         return projection, simulation
 
-    def write_preview(self, projection: CalendarProjection, simulation: CalendarSimulation,
+    def task_preview(self, simulation_ref: str) -> tuple[TaskListProjection, InternalTaskSimulation]:
+        simulation_row = self.session.get(SimulationRow, simulation_ref)
+        if simulation_row is None or simulation_row.task_id != self.row.task_id:
+            raise StateConflict("unknown or cross-task simulation")
+        projection_row = self.session.get(ProjectionRow, simulation_row.projection_rev)
+        if projection_row is None or projection_row.task_id != self.row.task_id:
+            raise StateConflict("task projection missing or outside task")
+        projection = _unpack(TaskListProjection, projection_row.projection_json)
+        simulation = _unpack(InternalTaskSimulation, simulation_row.simulation_json)
+        if (sha256(projection) != projection_row.projection_hash
+                or simulation.simulation_hash != simulation_row.simulation_hash
+                or simulation.projection_rev != projection.revision):
+            raise StateConflict("task preview persistence integrity failure")
+        return projection, simulation
+
+    def write_preview(self, projection: CalendarProjection | TaskListProjection,
+                      simulation: CalendarSimulation | InternalTaskSimulation,
                       *, now: datetime) -> None:
         existing = self.session.get(SimulationRow, simulation.simulation_ref)
         if existing is not None:
@@ -132,18 +169,51 @@ class TaskTransaction:
             proposal_json=_pack(proposal), recorded_at=now,
         ))
 
+    def write_execution_intent(self, action_hash: str, proposal_hash: str,
+                               *, now: datetime) -> None:
+        if self.snapshot.phase.value != "READY_TO_COMMIT":
+            raise StateConflict("execution intent requires ready task")
+        effect_id = "fake_action_" + action_hash[7:39]
+        if self.session.get(ExecutionRow, effect_id) is not None:
+            raise StateConflict("action intent already exists")
+        self.session.add(ExecutionRow(
+            effect_id=effect_id, task_id=self.row.task_id,
+            proposal_hash=proposal_hash, outcome="INTENT_RECORDED",
+            receipt_json={"action_hash": action_hash, "status": "INTENT_RECORDED"},
+            recorded_at=now,
+        ))
+        self.session.flush()
+
+    def write_execution_outcome(self, action_hash: str, *, outcome: str,
+                                receipt_json: dict[str, object]) -> None:
+        effect_id = "fake_action_" + action_hash[7:39]
+        record = self.session.get(ExecutionRow, effect_id)
+        if (record is None or record.task_id != self.row.task_id
+                or record.outcome != "INTENT_RECORDED"):
+            raise StateConflict("no pending execution intent")
+        if outcome not in {"VERIFIED", "OUTCOME_UNKNOWN"}:
+            raise StateConflict("invalid synthetic outcome")
+        record.outcome = outcome
+        record.receipt_json = receipt_json
+        self.session.flush()
+
     def read_approval(self, approval_id: str) -> Approval | None:
         row = self.session.get(ApprovalRow, approval_id)
         if row is None or row.task_id != self.row.task_id:
             return None
         return _unpack(Approval, row.approval_json)
 
-    def read_active_proposal(self) -> CalendarCreateEvent | None:
+    def read_active_proposal(self) -> CalendarCreateEvent | InternalTaskCreateProposal | None:
         current = self.snapshot
         row = self.session.get(ProposalRow, (self.row.task_id, current.cycles_used))
         if row is None or row.proposal_hash != current.proposal_hash:
             return None
-        proposal = _unpack(CalendarCreateEvent, row.proposal_json)
+        if row.proposal_json.get("operation") == "tasks.create":
+            proposal: CalendarCreateEvent | InternalTaskCreateProposal = _unpack(
+                InternalTaskCreateProposal, row.proposal_json,
+            )
+        else:
+            proposal = _unpack(CalendarCreateEvent, row.proposal_json)
         if sha256(proposal) != row.proposal_hash:
             raise StateConflict("persisted proposal hash mismatch")
         return proposal
@@ -209,7 +279,8 @@ class LedgerRepository:
             raise ValueError("production repository requires PostgreSQL/psycopg")
         return cls(create_engine(url, pool_pre_ping=True))
 
-    def create_task(self, task: Task, manifest: TaskManifest, *, actor: str,
+    def create_task(self, task: Task | InternalTaskRecord,
+                    manifest: TaskManifest | InternalTaskManifest, *, actor: str,
                     now: datetime) -> TaskSnapshot:
         if (task.task_id != manifest.task_id or task.organization_id != manifest.organization_id
                 or task.manifest_id != manifest.manifest_id
@@ -271,12 +342,12 @@ class LedgerRepository:
                 raise MissingTask("unknown task")
             return _unpack(TaskSnapshot, row.snapshot_json)
 
-    def read_task_record(self, task_id: str) -> Task:
+    def read_task_record(self, task_id: str) -> Task | InternalTaskRecord:
         with self._sessions() as session:
             row = session.get(TaskRow, task_id)
             if row is None:
                 raise MissingTask("unknown task")
-            return _unpack(Task, row.task_json)
+            return _task_record(row.task_json)
 
     def read_events(self, task_id: str) -> tuple[LedgerEvent, ...]:
         with self._sessions() as session:
@@ -309,6 +380,48 @@ class LedgerRepository:
         rebuilt = replay(events)
         if rebuilt != persisted:
             raise ValueError("replay projection diverged from durable state")
+        # The pure reducer proves ledger order and event contents. This
+        # additional check binds trusted execution receipts to the final
+        # evidence chain without querying an external provider during replay.
+        with self._sessions() as session:
+            effects = session.scalars(select(ExecutionRow).where(
+                ExecutionRow.task_id == task_id)).all()
+            intent = next((e for e in events if e.kind is EventKind.ACTION_INTENT_RECORDED), None)
+            if persisted.phase in {OfficePhase.EXECUTING, OfficePhase.COMPLETED,
+                                   OfficePhase.NEEDS_REVIEW}:
+                if len(effects) != 1 or intent is None:
+                    raise ValueError("effect intent/evidence is missing")
+                effect = effects[0]
+                expected_effect_id = "fake_action_" + intent.payload["action_hash"][7:39]
+                if (effect.effect_id != expected_effect_id
+                        or effect.proposal_hash != intent.payload["proposal_hash"]
+                        or effect.proposal_hash != persisted.proposal_hash):
+                    raise ValueError("execution intent binding mismatch")
+                if persisted.phase is OfficePhase.EXECUTING:
+                    if effect.outcome != "INTENT_RECORDED":
+                        raise ValueError("pending intent outcome mismatch")
+                else:
+                    receipt = _unpack(ExecutionReceipt, effect.receipt_json)
+                    if (receipt.action_hash != intent.payload["action_hash"]
+                            or receipt.manifest_hash != persisted.manifest_hash):
+                        raise ValueError("execution receipt is not bound to intent")
+                    if persisted.phase is OfficePhase.COMPLETED:
+                        verified = events[-1]
+                        if (effect.outcome != "VERIFIED"
+                                or receipt.outcome is not ExecutionOutcome.COMMITTED
+                                or verified.kind is not EventKind.ACTION_VERIFIED
+                                or verified.payload["effect_ref"] != receipt.effect_ref
+                                or receipt.effect_ref != persisted.effect_ref
+                                or receipt.verification_ref != (
+                                    "verification_" + verified.payload["verification_hash"][7:39]
+                                ) or persisted.verification_hash != verified.payload["verification_hash"]):
+                            raise ValueError("verified receipt/evidence mismatch")
+                    elif (effect.outcome != "OUTCOME_UNKNOWN"
+                          or receipt.outcome is not ExecutionOutcome.OUTCOME_UNKNOWN
+                          or events[-1].kind is not EventKind.ACTION_UNVERIFIED):
+                        raise ValueError("uncertain outcome evidence mismatch")
+            elif effects:
+                raise ValueError("execution record present before dispatch intent")
         return rebuilt
 
     def close(self) -> None:

@@ -14,10 +14,15 @@ from typing import Literal
 from safe_agent.broker import BrokerScope, ReferenceBroker, ReferenceDenied, ResourceKind
 from safe_agent.canonical import sha256
 from safe_agent.contracts.actions import CalendarCreateEvent
+from safe_agent.contracts.internal import (
+    InternalTaskCreateProposal, InternalTaskManifest, InternalTaskRecord,
+)
 from safe_agent.contracts.base import Digest, Identifier, StrictModel, require_aware
 from safe_agent.contracts.control import ActionDecision, DecisionStatus, Task, TaskManifest
 from safe_agent.evidence.ledger import OfficePhase, TaskSnapshot
-from safe_agent.virtual_office.models import CalendarProjection, CalendarSimulation
+from safe_agent.virtual_office.models import (
+    CalendarProjection, CalendarSimulation, TaskListProjection, InternalTaskSimulation,
+)
 
 
 class CompiledOfficeGrant(StrictModel):
@@ -60,11 +65,28 @@ class OfficeGate:
     def __init__(self, broker: ReferenceBroker):
         self._broker = broker
 
-    def evaluate(self, *, task: Task, manifest: TaskManifest,
-                 snapshot: TaskSnapshot, proposal: CalendarCreateEvent,
-                 projection: CalendarProjection, simulation: CalendarSimulation,
+    def evaluate(self, *, task: Task | InternalTaskRecord,
+                 manifest: TaskManifest | InternalTaskManifest,
+                 snapshot: TaskSnapshot,
+                 proposal: CalendarCreateEvent | InternalTaskCreateProposal,
+                 projection: CalendarProjection | TaskListProjection,
+                 simulation: CalendarSimulation | InternalTaskSimulation,
                  now: datetime) -> ActionDecision:
         now = require_aware(now)
+        if isinstance(proposal, InternalTaskCreateProposal):
+            if (not isinstance(manifest, InternalTaskManifest)
+                    or not isinstance(task, InternalTaskRecord)
+                    or not isinstance(projection, TaskListProjection)
+                    or not isinstance(simulation, InternalTaskSimulation)):
+                return ActionDecision(
+                    decision=DecisionStatus.DENIED, manifest_hash=task.manifest_hash,
+                    proposal_hash=sha256(proposal), reason_code="DOMAIN_CONTRACT_MISMATCH",
+                    state_version=snapshot.state_version,
+                )
+            return self._evaluate_internal_task(
+                task=task, manifest=manifest, snapshot=snapshot,
+                proposal=proposal, projection=projection, simulation=simulation, now=now,
+            )
         proposal_hash = sha256(proposal)
 
         def deny(code: str) -> ActionDecision:
@@ -74,6 +96,11 @@ class OfficeGate:
                 reason_code=code, state_version=snapshot.state_version,
             )
 
+        if (not isinstance(manifest, TaskManifest)
+                or not isinstance(task, Task)
+                or not isinstance(projection, CalendarProjection)
+                or not isinstance(simulation, CalendarSimulation)):
+            return deny("DOMAIN_CONTRACT_MISMATCH")
         # This policy only establishes local eligibility, NEVER authority to dispatch.
         if (task.manifest_hash != sha256(manifest)
                 or manifest.task_id != task.task_id
@@ -139,6 +166,84 @@ class OfficeGate:
                       else DecisionStatus.AUTHORIZED),
             manifest_hash=task.manifest_hash,
             proposal_hash=proposal_hash,
+            reason_code=("OFFLINE_APPROVAL_REQUIRED" if manifest.requires_approval
+                         else "OFFLINE_POLICY_ELIGIBLE_NOT_UPSTREAM_TAL"),
+            state_version=snapshot.state_version,
+        )
+
+
+    def _evaluate_internal_task(
+        self, *, task: InternalTaskRecord, manifest: InternalTaskManifest,
+        snapshot: TaskSnapshot, proposal: InternalTaskCreateProposal,
+        projection: TaskListProjection, simulation: InternalTaskSimulation,
+        now: datetime,
+    ) -> ActionDecision:
+        """Same TAL-style admission gate, additive task-create domain contract."""
+        proposal_hash = sha256(proposal)
+
+        def deny(reason: str) -> ActionDecision:
+            return ActionDecision(
+                decision=DecisionStatus.DENIED, manifest_hash=task.manifest_hash,
+                proposal_hash=proposal_hash, reason_code=reason,
+                state_version=snapshot.state_version,
+            )
+
+        if (task.manifest_hash != sha256(manifest)
+                or task.manifest_id != manifest.manifest_id
+                or task.organization_id != manifest.organization_id
+                or task.initiator_id != manifest.initiator_id
+                or task.task_id != manifest.task_id
+                or snapshot.manifest_hash != task.manifest_hash
+                or snapshot.task_id != task.task_id):
+            return deny("MANIFEST_OR_TASK_MISMATCH")
+        if snapshot.phase is not OfficePhase.SIMULATED:
+            return deny("INVALID_TASK_PHASE")
+        if snapshot.cycles_used >= manifest.budget.max_cycles:
+            return deny("CYCLE_BUDGET_EXCEEDED")
+        if manifest.budget.max_external_effects < 1:
+            return deny("EFFECT_BUDGET_EXCEEDED")
+        if now >= task.deadline:
+            return deny("TASK_DEADLINE_EXPIRED")
+        if "tasks.create" not in manifest.permitted_operations:
+            return deny("OPERATION_NOT_GRANTED")
+        if (proposal.customer_ref != manifest.customer_ref
+                or proposal.task_code != manifest.task_code):
+            return deny("TARGET_OUTSIDE_SCOPE")
+        if (proposal.due_at < manifest.allowed_due_start
+                or proposal.due_at > manifest.allowed_due_end
+                or proposal.due_at <= now):
+            return deny("TASK_DUE_DATE_OUTSIDE_AUTHORITY")
+        if now < projection.fetched_at or now >= projection.expires_at:
+            return deny("STALE_PROJECTION")
+        if (projection.organization_id != task.organization_id
+                or projection.task_id != task.task_id
+                or projection.customer_ref != manifest.customer_ref
+                or proposal.projection_rev != projection.revision
+                or proposal.simulation_ref != simulation.simulation_ref
+                or simulation.projection_rev != projection.revision
+                or simulation.source_revision != projection.source_revision
+                or simulation.conflicts or simulation.expected_postconditions != ("task_created",)):
+            return deny("SIMULATION_NOT_VALID")
+        diff = simulation.change_diff.after
+        if (diff.customer_ref != proposal.customer_ref
+                or diff.task_code != proposal.task_code
+                or diff.due_at != proposal.due_at):
+            return deny("SIMULATION_CHANGE_MISMATCH")
+        try:
+            self._broker.resolve(
+                manifest.customer_ref,
+                scope=BrokerScope(
+                    organization_id=task.organization_id, initiator_id=task.initiator_id,
+                    task_id=task.task_id, operation="tasks.create", now=now,
+                ),
+                kind=ResourceKind.CUSTOMER,
+            )
+        except ReferenceDenied:
+            return deny("REFERENCE_SCOPE_DENIED")
+        return ActionDecision(
+            decision=(DecisionStatus.APPROVAL_REQUIRED if manifest.requires_approval
+                      else DecisionStatus.AUTHORIZED),
+            manifest_hash=task.manifest_hash, proposal_hash=proposal_hash,
             reason_code=("OFFLINE_APPROVAL_REQUIRED" if manifest.requires_approval
                          else "OFFLINE_POLICY_ELIGIBLE_NOT_UPSTREAM_TAL"),
             state_version=snapshot.state_version,

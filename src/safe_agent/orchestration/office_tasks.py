@@ -7,14 +7,18 @@ requirements. SAFE-AGENT's model-side TaskRunner remains non-authoritative.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from safe_agent.execution.synthetic import SyntheticExecutionGateway
 
 from pydantic import Field, field_validator
 
 from safe_agent.canonical import sha256
-from safe_agent.contracts.actions import (
-    CalendarCreateEvent,
-    RequestClarification,
-    parse_proposal_json,
+from safe_agent.contracts.actions import CalendarCreateEvent, RequestClarification
+from safe_agent.contracts.internal import (
+    InternalTaskCreateProposal, InternalTaskManifest, InternalTaskRecord,
+    parse_office_proposal_json,
 )
 from safe_agent.contracts.base import Digest, StrictModel, require_aware
 from safe_agent.contracts.control import (
@@ -30,7 +34,9 @@ from safe_agent.security.principal import AccessDenied, Principal
 from safe_agent.storage.repository import LedgerRepository, StateConflict
 from safe_agent.tal.office_gate import OfficeGate
 from safe_agent.virtual_office import VirtualOffice
-from safe_agent.virtual_office.models import CalendarProjection, CalendarSimulation
+from safe_agent.virtual_office.models import (
+    CalendarProjection, CalendarSimulation, TaskListProjection, InternalTaskSimulation,
+)
 
 
 class ApprovalInput(StrictModel):
@@ -54,12 +60,15 @@ class TrustedOfficeTasks:
     Neither this service nor its decisions are callable as provider commits.
     """
 
-    def __init__(self, repo: LedgerRepository, office: VirtualOffice, gate: OfficeGate):
+    def __init__(self, repo: LedgerRepository, office: VirtualOffice, gate: OfficeGate,
+                 *, synthetic_gateway: SyntheticExecutionGateway | None = None):
         self._repo = repo
         self._office = office
         self._gate = gate
+        self._synthetic_gateway = synthetic_gateway
 
-    def register(self, principal: Principal, task: Task, manifest: TaskManifest,
+    def register(self, principal: Principal, task: Task | InternalTaskRecord,
+                 manifest: TaskManifest | InternalTaskManifest,
                  *, now: datetime) -> TaskSnapshot:
         now = require_aware(now)
         principal.require("task:create", task.organization_id, now)
@@ -80,31 +89,72 @@ class TrustedOfficeTasks:
         now = require_aware(now)
         with self._repo.write_task(task_id) as tx:
             task = tx.task
+            manifest = tx.manifest
             principal.require("task:prepare", task.organization_id, now)
             if principal.actor_id != task.initiator_id:
                 raise AccessDenied("cannot prepare another actor's task")
             if expected_state_version != tx.snapshot.state_version:
                 raise StateConflict("stale task state version")
+            if not isinstance(manifest, TaskManifest):
+                raise StateConflict("wrong domain for calendar preview")
             if (projection.organization_id != task.organization_id
-                    or projection.task_id != task_id or projection.calendar_ref != tx.manifest.calendar_ref
+                    or projection.task_id != task_id or projection.calendar_ref != manifest.calendar_ref
                     or simulation.projection_rev != projection.revision
                     or simulation.conflicts or simulation.advisory_only is not True):
                 raise StateConflict("invalid or conflicting preview")
             if not projection.fetched_at <= now < projection.expires_at:
                 raise StateConflict("preview expired")
             change = simulation.change_diff.after
-            if (change.calendar_ref != tx.manifest.calendar_ref
-                    or change.customer_ref != tx.manifest.customer_ref
-                    or change.template_id != tx.manifest.template_id):
+            if (change.calendar_ref != manifest.calendar_ref
+                    or change.customer_ref != manifest.customer_ref
+                    or change.template_id != manifest.template_id):
                 raise StateConflict("preview not within manifest scope")
             # The model cannot forge valid previews: recompute through trusted
             # VirtualOffice issuance cache and current synthetic source.
             check = self._office.simulate(
                 projection, change, actor=task.initiator_id,
-                customer_ref=tx.manifest.customer_ref, now=now,
+                customer_ref=manifest.customer_ref, now=now,
             )
             if check != simulation or check.simulation_hash != simulation.simulation_hash:
                 raise StateConflict("preview fails independent simulation")
+            tx.write_preview(projection, simulation, now=now)
+            tx.append(EventKind.PREVIEW_REGISTERED, actor=principal.actor_id, now=now,
+                      payload={"simulation_ref": simulation.simulation_ref,
+                               "simulation_hash": simulation.simulation_hash,
+                               "projection_rev": projection.revision})
+            return tx.snapshot
+
+    def preview_internal_task(
+        self, principal: Principal, task_id: str,
+        projection: TaskListProjection, simulation: InternalTaskSimulation,
+        *, expected_state_version: int, now: datetime,
+    ) -> TaskSnapshot:
+        """Trusted synthetic internal-task preview via the existing ledger plane."""
+        now = require_aware(now)
+        with self._repo.write_task(task_id) as tx:
+            task, manifest, snap = tx.task, tx.manifest, tx.snapshot
+            principal.require("task:prepare", task.organization_id, now)
+            if principal.actor_id != task.initiator_id:
+                raise AccessDenied("cannot prepare another actor's task")
+            if not isinstance(manifest, InternalTaskManifest):
+                raise StateConflict("wrong domain for task preview")
+            if expected_state_version != snap.state_version:
+                raise StateConflict("stale task state version")
+            if (projection.organization_id != task.organization_id
+                    or projection.task_id != task_id
+                    or projection.customer_ref != manifest.customer_ref
+                    or simulation.projection_rev != projection.revision
+                    or simulation.conflicts or simulation.advisory_only is not True
+                    or not projection.fetched_at <= now < projection.expires_at):
+                raise StateConflict("internal task preview rejected")
+            change = simulation.change_diff.after
+            if (change.customer_ref != manifest.customer_ref
+                    or change.task_code != manifest.task_code):
+                raise StateConflict("task preview outside manifest scope")
+            verified = self._office.simulate_task(projection, change,
+                                                   actor=task.initiator_id, now=now)
+            if verified != simulation:
+                raise StateConflict("task preview fails independent simulation")
             tx.write_preview(projection, simulation, now=now)
             tx.append(EventKind.PREVIEW_REGISTERED, actor=principal.actor_id, now=now,
                       payload={"simulation_ref": simulation.simulation_ref,
@@ -117,7 +167,7 @@ class TrustedOfficeTasks:
         now = require_aware(now)
         # JSON parsing is closed; malformed text never enters event logs.
         try:
-            parsed = parse_proposal_json(proposal_json)
+            parsed = parse_office_proposal_json(proposal_json)
             proposal_hash = sha256(parsed)
         except (ValueError, TypeError):
             parsed = None
@@ -144,12 +194,15 @@ class TrustedOfficeTasks:
                 return reject("INVALID_PROPOSAL_SCHEMA")
             if isinstance(parsed, RequestClarification):
                 return reject("CLARIFICATION_REQUIRED")
-            assert isinstance(parsed, CalendarCreateEvent)
+            assert isinstance(parsed, CalendarCreateEvent | InternalTaskCreateProposal)
             if snap.simulation_ref != parsed.simulation_ref:
                 return reject("SIMULATION_NOT_ACTIVE")
             try:
-                projection, simulation = tx.preview(parsed.simulation_ref)
-            except StateConflict:
+                if isinstance(parsed, InternalTaskCreateProposal):
+                    projection, simulation = tx.task_preview(parsed.simulation_ref)
+                else:
+                    projection, simulation = tx.preview(parsed.simulation_ref)
+            except (StateConflict, ValueError):
                 return reject("SIMULATION_NOT_REGISTERED")
             decision = self._gate.evaluate(
                 task=task, manifest=tx.manifest, snapshot=snap,
@@ -252,7 +305,10 @@ class TrustedOfficeTasks:
                         or approval.proposal_hash != snap.proposal_hash
                         or now >= approval.expires_at):
                     return deny("APPROVAL_EXPIRED_OR_INVALID")
-            projection, simulation = tx.preview(proposal.simulation_ref)
+            if isinstance(proposal, InternalTaskCreateProposal):
+                projection, simulation = tx.task_preview(proposal.simulation_ref)
+            else:
+                projection, simulation = tx.preview(proposal.simulation_ref)
             hypothetical = snap.model_copy(update={
                 "phase": OfficePhase.SIMULATED,
                 "cycles_used": snap.cycles_used - 1,
@@ -284,3 +340,14 @@ class TrustedOfficeTasks:
         state = self._repo.read_task(task_id)
         principal.require("task:audit", state.organization_id, now)
         return self._repo.replay_task(task_id)
+
+    def execute_synthetic(self, principal: Principal, task_id: str, *,
+                          expected_state_version: int, now: datetime):
+        """Only the installed fake gateway can execute a synthetic eligible action."""
+        from safe_agent.contracts.control import ExecutionReceipt
+        if self._synthetic_gateway is None:
+            raise StateConflict("synthetic execution not configured")
+        receipt: ExecutionReceipt = self._synthetic_gateway.execute(
+            principal, task_id, now=now, expected_state_version=expected_state_version,
+        )
+        return receipt

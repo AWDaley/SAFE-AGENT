@@ -2,11 +2,12 @@
 
 A contract-first, privacy-minimized foundation for an autonomous office agent.
 
-**Status: M2 implemented — synthetic office authority and replay only.** SAFE-AGENT
-exposes a sanitized Virtual Office, typed local policy gate, immutable task
-manifests, proposal-specific approvals, and a persistent hash-linked evidence
-ledger. There are **no calendar/provider writes**, and the provisional office
-policy does **not** constitute upstream TAL calendar-domain authorization.
+**Status: M3 implemented — verified synthetic effects only.** SAFE-AGENT
+provides a sanitized Virtual Office, a provisional local TAL-style office gate,
+immutable manifests, proposal-specific approvals, a hash-linked evidence ledger,
+and trusted fake calendar/internal-task adapters with independent read-back.
+**No real provider writes exist**; upstream TAL calendar/task authorization is
+not yet certified or integrated.
 
 ## Architecture and milestones
 
@@ -14,6 +15,8 @@ policy does **not** constitute upstream TAL calendar-domain authorization.
 - [MVP implementation plan](docs/MVP_IMPLEMENTATION_PLAN.md)
 - [M1 delivery and reproducibility](docs/M1_DELIVERY.md)
 - [M2 delivery, limitations and verification](docs/M2_DELIVERY.md)
+- [M3 verified synthetic scheduling and limitations](docs/M3_DELIVERY.md)
+- [M3 synthetic execution decision](docs/adr/0004-verified-synthetic-execution.md)
 - [M2 authority and ledger decision](docs/adr/0003-office-authority-ledger.md)
 - [M1 architecture/security decision](docs/adr/0002-virtual-office-simulation.md)
 - [M0 foundation decision](docs/adr/0001-mvp-scope.md)
@@ -39,6 +42,7 @@ mypy src/safe_agent
 python scripts/export_schemas.py --check
 python scripts/export_m1_schemas.py --check
 python scripts/export_m2_schemas.py --check
+python scripts/export_m3_schemas.py --check
 ```
 
 `requirements.lock` pins direct packages only, not their full transitive closure.
@@ -81,9 +85,10 @@ For dev database only: `docker compose up -d postgres` starts a local test
 PostgreSQL instance; M1 does not use it. Never apply synthetic credentials or
 fixtures to real business systems.
 
-**Next: M2.** Integrate the upstream TAL action gate, immutable manifest
-validation, approval binding, durable evidence/replay, and tenant-authenticated
-trusted execution path without permitting an unverified effect.
+**M3 milestone:** A trusted offline gateway now performs fake calendar and
+internal-task creation, independently verifies read-back, and emits verified
+completion evidence. M4 must provide crash-safe outbox/reconciliation. Upstream
+TAL office-domain integration remains mandatory before any real provider.
 
 
 ## M2 — Trusted offline policy and durable evidence (synthetic only)
@@ -104,3 +109,23 @@ reports zero external effects. This is **not a real authorization or booking**:
 upstream TAL v0.3's calendar domain is still unimplemented. See
 [`docs/M2_DELIVERY.md`](docs/M2_DELIVERY.md) and
 [`docs/adr/0003-office-authority-ledger.md`](docs/adr/0003-office-authority-ledger.md).
+
+
+## M3 — Verified synthetic office execution
+
+```bash
+python -m safe_agent m3-demo
+```
+
+The demo uses one synthetic calendar and customer, a deterministic fake planner,
+scoped references, a trusted offline approval/eligibility gate, a versioned fake
+calendar writer, and independent read-back. It prints the before/after booking
+count, action evidence receipt, `COMPLETED` snapshot, and hash-linked timeline.
+The same trusted gate additionally supports synthetic `tasks.create` under an
+explicit internal-task manifest. Optional `ClosedJsonPlanner` accepts a text-only
+model callback with sanitized context; it exposes **no direct connector tools**.
+See [`docs/M3_DELIVERY.md`](docs/M3_DELIVERY.md) for test and security limits.
+
+**No live writes:** the runtime rejects any adapter except its specific fake
+classes. The upstream TAL calendar domain pack, resilient outbox, real-provider
+read-back, and production sandbox are intentionally not present.

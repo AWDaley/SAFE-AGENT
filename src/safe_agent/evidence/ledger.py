@@ -26,6 +26,9 @@ class EventKind(StrEnum):
     APPROVAL_GRANTED = "APPROVAL_GRANTED"
     APPROVAL_DENIED = "APPROVAL_DENIED"
     ACTION_ELIGIBLE = "ACTION_ELIGIBLE"
+    ACTION_INTENT_RECORDED = "ACTION_INTENT_RECORDED"
+    ACTION_VERIFIED = "ACTION_VERIFIED"
+    ACTION_UNVERIFIED = "ACTION_UNVERIFIED"
 
 
 class OfficePhase(StrEnum):
@@ -35,10 +38,15 @@ class OfficePhase(StrEnum):
     AWAITING_APPROVAL = "AWAITING_APPROVAL"
     READY_TO_COMMIT = "READY_TO_COMMIT"
     REJECTED = "REJECTED"
+    EXECUTING = "EXECUTING"
+    COMPLETED = "COMPLETED"
+    NEEDS_REVIEW = "NEEDS_REVIEW"
 
 
 class TaskSnapshot(StrictModel):
-    schema_version: Literal["safe_agent.task_snapshot.v1"] = "safe_agent.task_snapshot.v1"
+    schema_version: Literal[
+        "safe_agent.task_snapshot.v1", "safe_agent.task_snapshot.v2"
+    ] = "safe_agent.task_snapshot.v1"
     task_id: Identifier
     organization_id: Identifier
     initiator_id: Identifier
@@ -47,14 +55,18 @@ class TaskSnapshot(StrictModel):
     state_version: int = Field(ge=0)
     ledger_sequence: int = Field(ge=1)
     cycles_used: int = Field(default=0, ge=0)
-    external_effects: Literal[0] = 0  # M2 has no dispatcher or provider write path.
+    external_effects: int = Field(default=0, ge=0)
+    effect_ref: Identifier | None = None
+    verification_hash: Digest | None = None
     simulation_ref: Identifier | None = None
     proposal_hash: Digest | None = None
     approval_id: Identifier | None = None
 
 
 class LedgerEvent(StrictModel):
-    schema_version: Literal["safe_agent.ledger_event.v1"] = "safe_agent.ledger_event.v1"
+    schema_version: Literal[
+        "safe_agent.ledger_event.v1", "safe_agent.ledger_event.v2"
+    ] = "safe_agent.ledger_event.v1"
     event_id: Identifier
     task_id: Identifier
     organization_id: Identifier
@@ -78,8 +90,13 @@ def seal_event(*, task_id: str, organization_id: str, actor_id: str,
                kind: EventKind, sequence: int, state_version: int, now: datetime,
                payload: dict[str, str], previous_hash: str | None) -> LedgerEvent:
     """Compute a deterministic event digest from explicit trusted inputs."""
+    m3_kinds = {EventKind.ACTION_INTENT_RECORDED,
+                EventKind.ACTION_VERIFIED, EventKind.ACTION_UNVERIFIED}
+    event_schema_version = (
+        "safe_agent.ledger_event.v2" if kind in m3_kinds else "safe_agent.ledger_event.v1"
+    )
     basis = {
-        "schema_version": "safe_agent.ledger_event.v1",
+        "schema_version": event_schema_version,
         "task_id": task_id,
         "organization_id": organization_id,
         "actor_id": actor_id,
@@ -92,6 +109,7 @@ def seal_event(*, task_id: str, organization_id: str, actor_id: str,
     }
     digest = sha256(basis)
     return LedgerEvent(
+        schema_version=event_schema_version,
         event_id="evt_" + digest[7:37],
         event_hash=digest,
         task_id=task_id,
@@ -178,6 +196,29 @@ def reduce_event(previous: TaskSnapshot | None, event: LedgerEvent) -> TaskSnaps
                     or data["proposal_hash"] != previous.proposal_hash):
                 raise ValueError("action eligibility requires active proposal")
             updates["phase"] = OfficePhase.READY_TO_COMMIT
+        elif kind is EventKind.ACTION_INTENT_RECORDED:
+            _required(data, "proposal_hash", "action_hash")
+            if (previous.phase is not OfficePhase.READY_TO_COMMIT
+                    or previous.proposal_hash != data["proposal_hash"]):
+                raise ValueError("intent requires eligible active proposal")
+            updates.update(phase=OfficePhase.EXECUTING,
+                           schema_version="safe_agent.task_snapshot.v2")
+        elif kind is EventKind.ACTION_VERIFIED:
+            _required(data, "proposal_hash", "effect_ref", "verification_hash")
+            if (previous.phase is not OfficePhase.EXECUTING
+                    or previous.proposal_hash != data["proposal_hash"]
+                    or previous.external_effects != 0):
+                raise ValueError("verification requires one pending trusted effect")
+            updates.update(
+                phase=OfficePhase.COMPLETED, external_effects=previous.external_effects + 1,
+                effect_ref=data["effect_ref"], verification_hash=data["verification_hash"],
+            )
+        elif kind is EventKind.ACTION_UNVERIFIED:
+            _required(data, "proposal_hash", "reason_code")
+            if (previous.phase is not OfficePhase.EXECUTING
+                    or previous.proposal_hash != data["proposal_hash"]):
+                raise ValueError("uncertain result requires pending intent")
+            updates["phase"] = OfficePhase.NEEDS_REVIEW
         else:
             raise ValueError("unknown or duplicate task genesis event")
         mutates = kind is not EventKind.PROPOSAL_DENIED

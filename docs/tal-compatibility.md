@@ -64,3 +64,7 @@ Before enabling any provider writes: implement TAL calendar domain pack and
 upstream conformance fixtures; ensure the single external authorization gate
 uses upstream TAL and verifies current business/provider state; do not rely on
 M2's synthetic policy result as a privileged execution token.
+
+## M3 update — synthetic execution (October 13, 2026)
+
+M3 adds `SyntheticExecutionGateway` and *fake-provider* postcondition read-back to the existing SAFE-AGENT office admission boundary. It also adds a **versioned internal-task domain** under the same local `OfficeGate`. These are synthetic-only tests of the intended separation of duties and evidence model. They are **not** a claim that the upstream invoice-domain TAL v0.3 runtime recognizes `calendar.create_event` or `tasks.create`. `UnconfiguredTALAuthority` remains deny-all for real providers. Before M5, implement and verify the upstream TAL office packs, canonical fixtures, and genuine `TALRuntime.apply_proposal` bridge.

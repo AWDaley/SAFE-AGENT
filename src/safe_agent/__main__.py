@@ -184,14 +184,17 @@ def _m2_demo() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="SAFE-AGENT synthetic demos")
-    parser.add_argument("command", choices=["demo", "virtual-office-demo", "m2-demo"])
+    parser.add_argument("command", choices=["demo", "virtual-office-demo", "m2-demo", "m3-demo"])
     options = parser.parse_args()
     if options.command == "demo":
         _m0_demo()
     elif options.command == "virtual-office-demo":
         _m1_demo()
-    else:
+    elif options.command == "m2-demo":
         _m2_demo()
+    else:
+        from safe_agent.demo.m3 import print_m3_demo
+        print_m3_demo()
 
 
 if __name__ == "__main__":
