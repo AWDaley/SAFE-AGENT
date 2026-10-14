@@ -4,7 +4,10 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 
 from safe_agent.integrations.google_calendar import (
-    GoogleCalendarError, GoogleCalendarTestAdapter, GoogleCalendarUnavailable, HttpResponse,
+    GoogleCalendarError,
+    GoogleCalendarTestAdapter,
+    GoogleCalendarUnavailable,
+    HttpResponse,
 )
 from safe_agent.integrations.oauth import build_google_test_authorization
 
