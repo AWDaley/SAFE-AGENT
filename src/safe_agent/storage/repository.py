@@ -607,7 +607,7 @@ class LedgerRepository:
             outbox = session.scalar(select(OutboxRow).where(OutboxRow.task_id == task_id))
             if persisted.phase in {OfficePhase.EXECUTING, OfficePhase.COMPLETED,
                                    OfficePhase.NEEDS_REVIEW}:
-                if outbox is None or outbox.manifest_hash != persisted.manifest_hash:
+                if outbox is None or intent is None or outbox.manifest_hash != persisted.manifest_hash:
                     raise ValueError("outbox missing or manifest changed")
                 if (outbox.action_hash != intent.payload["action_hash"]
                         or outbox.proposal_hash != persisted.proposal_hash):

@@ -7,6 +7,7 @@ one using this durable fake provider's atomic, provider-owned idempotency key.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from secrets import token_hex
@@ -17,12 +18,17 @@ from safe_agent.broker import BrokerScope, ReferenceBroker, ResourceKind
 from safe_agent.canonical import sha256
 from safe_agent.contracts.actions import CalendarCreateEvent
 from safe_agent.contracts.base import require_aware
-from safe_agent.contracts.control import ExecutionOutcome, ExecutionReceipt, TaskManifest
-from safe_agent.contracts.internal import InternalTaskCreateProposal, InternalTaskManifest
-from safe_agent.evidence.ledger import EventKind, OfficePhase
+from safe_agent.contracts.control import ExecutionOutcome, ExecutionReceipt, Task, TaskManifest
+from safe_agent.contracts.internal import (
+    InternalTaskCreateProposal,
+    InternalTaskManifest,
+    InternalTaskRecord,
+)
+from safe_agent.evidence.ledger import EventKind, OfficePhase, TaskSnapshot
 from safe_agent.storage.provider import ProviderIntegrityError
 from safe_agent.storage.repository import LedgerRepository, OutboxClaim, StateConflict
 from safe_agent.virtual_office import VirtualOffice
+from safe_agent.virtual_office.models import CalendarProjection, TaskListProjection
 
 
 class FaultPoint(StrEnum):
@@ -38,6 +44,18 @@ class InjectedCrash(BaseException):
 
 class KnownNoEffect(ValueError):
     """Provider definitively did not accept the attempted operation."""
+
+
+@dataclass(frozen=True)
+class DispatchContext:
+    """Trusted, typed dispatch inputs reconstructed from durable task state."""
+
+    task: Task | InternalTaskRecord
+    manifest: TaskManifest | InternalTaskManifest
+    proposal: CalendarCreateEvent | InternalTaskCreateProposal
+    projection: CalendarProjection | TaskListProjection
+    snap: TaskSnapshot
+    recorded_at: datetime
 
 
 class SyntheticRecoveryWorker:
@@ -121,22 +139,27 @@ class SyntheticRecoveryWorker:
                     proposal, CalendarCreateEvent
                 ):
                     raise StateConflict("wrong calendar domain")
-                projection, simulation = tx.preview(proposal.simulation_ref)
-                if (simulation.conflicts or projection.source_revision != claim.source_revision
-                        or proposal.projection_rev != projection.revision
-                        or simulation.change_diff.after.start_at != proposal.start_at
-                        or simulation.change_diff.after.end_at != proposal.end_at):
+                projection: CalendarProjection | TaskListProjection
+                calendar_projection, calendar_simulation = tx.preview(proposal.simulation_ref)
+                projection = calendar_projection
+                if (calendar_simulation.conflicts
+                        or calendar_projection.source_revision != claim.source_revision
+                        or proposal.projection_rev != calendar_projection.revision
+                        or calendar_simulation.change_diff.after.start_at != proposal.start_at
+                        or calendar_simulation.change_diff.after.end_at != proposal.end_at):
                     raise StateConflict("calendar intent/preview mismatch")
             elif claim.operation == "tasks.create":
                 if not isinstance(manifest, InternalTaskManifest) or not isinstance(
                     proposal, InternalTaskCreateProposal
                 ) or self._tasks is None:
                     raise StateConflict("wrong internal task domain")
-                projection, simulation = tx.task_preview(proposal.simulation_ref)
-                if (simulation.conflicts or projection.source_revision != claim.source_revision
-                        or proposal.projection_rev != projection.revision
-                        or simulation.change_diff.after.task_code != proposal.task_code
-                        or simulation.change_diff.after.due_at != proposal.due_at):
+                task_projection, task_simulation = tx.task_preview(proposal.simulation_ref)
+                projection = task_projection
+                if (task_simulation.conflicts
+                        or task_projection.source_revision != claim.source_revision
+                        or proposal.projection_rev != task_projection.revision
+                        or task_simulation.change_diff.after.task_code != proposal.task_code
+                        or task_simulation.change_diff.after.due_at != proposal.due_at):
                     raise StateConflict("task intent/preview mismatch")
             else:
                 raise StateConflict("unrecognized outbox operation")
@@ -147,11 +170,10 @@ class SyntheticRecoveryWorker:
             self._broker.trusted_import(protected)
             # Trusted reference resolution using recorded action time is for
             # EXISTING-EFFECT READBACK ONLY; it does not authorize a new write.
-            context = {
-                "task": task, "manifest": manifest, "proposal": proposal,
-                "projection": projection, "snap": snap,
-                "recorded_at": outbox.created_at,
-            }
+            context = DispatchContext(
+                task=task, manifest=manifest, proposal=proposal,
+                projection=projection, snap=snap, recorded_at=outbox.created_at,
+            )
         if claim.operation == "calendar.create_event":
             assert isinstance(manifest, TaskManifest)
             assert isinstance(proposal, CalendarCreateEvent)
@@ -160,12 +182,10 @@ class SyntheticRecoveryWorker:
         assert isinstance(proposal, InternalTaskCreateProposal)
         return self._task_effect(claim, context, now=now, fault=fault)
 
-    def _scope(self, claim: OutboxClaim, context: dict[str, object], *, now: datetime,
+    def _scope(self, claim: OutboxClaim, context: DispatchContext, *, now: datetime,
                committed: bool) -> BrokerScope:
-        task = context["task"]
-        assert hasattr(task, "initiator_id")
-        scope_time = context["recorded_at"] if committed else now
-        assert isinstance(scope_time, datetime)
+        task = context.task
+        scope_time = context.recorded_at if committed else now
         if scope_time.utcoffset() is None:
             # SQLite stores UTC without tzinfo; PostgreSQL returns aware UTC.
             scope_time = scope_time.replace(tzinfo=UTC)
@@ -175,10 +195,10 @@ class SyntheticRecoveryWorker:
             now=scope_time,
         )
 
-    def _allow_new_dispatch(self, claim: OutboxClaim, context: dict[str, object],
+    def _allow_new_dispatch(self, claim: OutboxClaim, context: DispatchContext,
                             *, now: datetime) -> None:
         task, manifest, projection, snap = (
-            context["task"], context["manifest"], context["projection"], context["snap"],
+            context.task, context.manifest, context.projection, context.snap,
         )
         if (now >= task.deadline or now >= projection.expires_at or now < projection.fetched_at
                 or snap.external_effects >= manifest.budget.max_external_effects):
@@ -194,9 +214,9 @@ class SyntheticRecoveryWorker:
                         or now >= approval.expires_at):
                     raise KnownNoEffect("approval expired or mismatched")
 
-    def _calendar_effect(self, claim: OutboxClaim, context: dict[str, object],
+    def _calendar_effect(self, claim: OutboxClaim, context: DispatchContext,
                          *, now: datetime, fault: FaultPoint | None) -> ExecutionReceipt:
-        manifest, proposal = context["manifest"], context["proposal"]
+        manifest, proposal = context.manifest, context.proposal
         assert isinstance(manifest, TaskManifest)
         assert isinstance(proposal, CalendarCreateEvent)
         scope = self._scope(claim, context, now=now, committed=True)
@@ -271,10 +291,10 @@ class SyntheticRecoveryWorker:
         })
         return self._verify(claim, found, verification_hash, now=now)
 
-    def _task_effect(self, claim: OutboxClaim, context: dict[str, object],
+    def _task_effect(self, claim: OutboxClaim, context: DispatchContext,
                      *, now: datetime, fault: FaultPoint | None) -> ExecutionReceipt:
         assert self._tasks is not None
-        manifest, proposal = context["manifest"], context["proposal"]
+        manifest, proposal = context.manifest, context.proposal
         assert isinstance(manifest, InternalTaskManifest)
         assert isinstance(proposal, InternalTaskCreateProposal)
         customer_id = self._broker.resolve(
