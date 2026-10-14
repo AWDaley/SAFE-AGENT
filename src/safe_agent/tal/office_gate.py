@@ -42,7 +42,16 @@ def compile_office_grant(manifest: TaskManifest) -> CompiledOfficeGrant | None:
         "calendar_ref": manifest.calendar_ref, "customer_ref": manifest.customer_ref,
         "allowed_operation": "calendar.create_event",
     }
-    return CompiledOfficeGrant(**claim, grant_hash=sha256(claim))
+    return CompiledOfficeGrant(
+        manifest_hash=sha256(manifest),
+        organization_id=manifest.organization_id,
+        task_id=manifest.task_id,
+        initiator_id=manifest.initiator_id,
+        calendar_ref=manifest.calendar_ref,
+        customer_ref=manifest.customer_ref,
+        allowed_operation="calendar.create_event",
+        grant_hash=sha256(claim),
+    )
 
 
 class OfficeGate:
