@@ -44,6 +44,10 @@ jobs:
         run: |
           pytest -q tests/m7/test_inference_sidecar.py tests/m7/test_offline_billing_verifier.py
           python scripts/smoke_inference_sidecar.py
+      - name: M7 combined PR27 budget migration and PR28 sidecar acceptance
+        run: |
+          python scripts/check_m7_budget_lineage.py
+          pytest -q tests/m7/test_budget_lineage.py tests/m7/test_inference_budget.py tests/m7/test_offline_billing_verifier.py tests/m7/test_inference_sidecar.py
       - name: M5 offline release preparation (live gate stays blocked)
         run: python scripts/check_m5_release.py --mode offline
       - name: Compile source
@@ -68,6 +72,7 @@ jobs:
           SAFE_AGENT_DATABASE_URL: sqlite+pysqlite:///./ci-m4-migration.sqlite
         run: |
           alembic upgrade head
+          python scripts/check_m7_budget_lineage.py --verify-database
           python -c "from sqlalchemy import create_engine, inspect; e=create_engine('sqlite+pysqlite:///./ci-m4-migration.sqlite'); assert {'safe_action_outbox', 'safe_fake_provider_effects', 'safe_fake_provider_state', 'safe_google_test_connections', 'safe_google_oauth_pending', 'safe_office_execution_authorizations', 'safe_google_test_outbox_bindings', 'safe_task_intake_keys', 'safe_planning_workspaces', 'safe_planning_attempts', 'safe_planning_outcomes', 'safe_inference_budget_accounts', 'safe_inference_budget_reservations', 'safe_inference_budget_events', 'safe_inference_billing_attestations'} <= set(inspect(e).get_table_names()); assert {'provider_simulation_hash', 'provider_simulation_json'} <= {x['name'] for x in inspect(e).get_columns('safe_google_test_outbox_bindings')}"
 
   tal-office-interop:

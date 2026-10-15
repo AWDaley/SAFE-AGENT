@@ -5,6 +5,34 @@ which depends on PR #26 and PR #25. Independent security review and
 protected main-branch rules are required before merging or deployment.
 **M5 LIVE GOOGLE ACCEPTANCE: BLOCKED.**
 
+## Budget migration conflict resolution — PR #27 is authoritative
+
+PR #27 is the selected M7-03 budget foundation. PR #29 introduced an
+independently developed, incompatible `0009_inference_budget` migration
+and a distinct reservation/reconciliation API. PR #29 has been closed as
+superseded; its branch was preserved, not merged.
+
+PR #28 MUST continue to target PR #27 and retain the single migration
+`0009_inference_cost_accounts` with parent `0008_planning_workspace`.
+The M7-04 synthetic verifier imports PR #27's
+`BillingChargeAttestation`, and calls
+`InferenceBudgetLedger.reconcile_attested` from PR #27.
+It must NOT import PR #29's budget contracts or migration.
+
+The regression script `scripts/check_m7_budget_lineage.py` validates
+the one-head Alembic ancestry, rejects any competing `0009` migration,
+checks the canonical account/reservation/event/attestation ORM columns,
+and checks the verifier-to-ledger method signatures. Under the SQLite
+CI fixture it also verifies the **actual migrated database** revision,
+tables and columns; the separate M7 integration tests verify a synthetic
+billing attestation and budget settlement against that selected interface.
+
+Changes to M7 budget semantics require a separate **forward Alembic
+migration**, not a replacement of an already selected `0009` revision.
+Do not merge PR #29 or cherry-pick its historical conflicting migration.
+PRs #25, #26, #27 and #28 remain awaiting independent review; choosing
+a migration does not authorize production deployment or Google writes.
+
 ## 1. What runs where
 
 M7-04 adds a minimal, independently hosted ASGI inference-only service.
@@ -159,6 +187,8 @@ Run:
     pytest -q tests/m7/test_inference_sidecar.py
     pytest -q tests/m7/test_offline_billing_verifier.py
     python scripts/smoke_inference_sidecar.py
+    python scripts/check_m7_budget_lineage.py
+    pytest -q tests/m7/test_budget_lineage.py
     pytest
     mypy src/safe_agent
     ruff check src tests scripts
