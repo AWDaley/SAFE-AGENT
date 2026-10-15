@@ -14,8 +14,8 @@ from datetime import timedelta
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from safe_agent.agent.json_planner import ClosedJsonPlanner, PLANNER_INSTRUCTION
-from safe_agent.canonical import canonical_json, sha256
+from safe_agent.agent.json_planner import PLANNER_INSTRUCTION, ClosedJsonPlanner
+from safe_agent.canonical import sha256
 from safe_agent.contracts.inference import (
     InferenceRequest,
     InferenceRoutePolicy,
@@ -27,7 +27,6 @@ from safe_agent.inference import (
 from safe_agent.inference.restricted_https import (
     RestrictedEgressDenied,
     RestrictedHTTPSInferenceTransport,
-    StrictPinnedTLSWire,
     TrustedInferenceEgressPolicy,
     WireReply,
     _PinnedHTTPSConnection,

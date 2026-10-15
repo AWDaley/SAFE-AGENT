@@ -113,7 +113,7 @@ def _public_ip_answers(
 ) -> tuple[str, int]:
     try:
         results = resolver(host, 443, type=socket.SOCK_STREAM)
-    except (OSError, ValueError, TypeError) as exc:
+    except (OSError, ValueError, TypeError):
         raise RestrictedEgressDenied() from None
     addresses: list[tuple[str, int]] = []
     try:
