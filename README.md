@@ -223,10 +223,19 @@ authority and readback decisions to the existing SyntheticRecoveryWorker;
 the operator HTTP API still never dispatches effects. Run the isolated
 demo with: python -m safe_agent m6-worker-demo.
 
+M6-01e adds a durable, task-scoped, versioned planning workspace with a
+strict 3-attempt default budget, expiring planning leases and safe
+clarification/replan outcomes. An optional ClosedJsonPlanner callback
+receives only sanitized task context and availability, never tools, private
+source IDs, credentials, or authority to execute. A proposal and its
+planning success outcome commit atomically under the trusted policy gate.
+Run the isolated model-stub demo with: python -m safe_agent m6-planning-demo.
+
 Operators continue to use trusted local test tokens only. Deployment without
 the optional provisioner/workflow components remains review-only. See
 docs/M6_OPERATOR_INBOX.md, docs/M6_TASK_INTAKE.md and
-docs/M6_SYNTHETIC_WORKFLOW.md and docs/M6_SUPERVISED_SYNTHETIC_WORKER.md.
+docs/M6_SYNTHETIC_WORKFLOW.md, docs/M6_SUPERVISED_SYNTHETIC_WORKER.md
+and docs/M6_PERSISTENT_PLANNING.md.
 
 **M5 LIVE ACCEPTANCE: BLOCKED.** Passing offline tests and creating a synthetic
 task never authorize real provider execution or production deployment.

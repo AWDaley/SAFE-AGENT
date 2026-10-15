@@ -33,6 +33,7 @@ from safe_agent.contracts.operator import (
     OperatorInboxPage,
     OperatorProposalPreview,
 )
+from safe_agent.contracts.planning import PlanningLease
 from safe_agent.evidence.ledger import EventKind, OfficePhase, TaskSnapshot
 from safe_agent.orchestration.runner import PlanningResult
 from safe_agent.security.principal import AccessDenied, Principal
@@ -248,6 +249,7 @@ class TrustedOfficeTasks:
         simulation: CalendarSimulation | InternalTaskSimulation,
         proposal: CalendarCreateEvent | InternalTaskCreateProposal,
         *, expected_state_version: int, now: datetime,
+        planning_lease: PlanningLease | None = None,
     ) -> ActionDecision:
         """Atomically register one trusted synthetic preview and gated proposal.
 
@@ -262,6 +264,13 @@ class TrustedOfficeTasks:
             principal.require("task:propose", task.organization_id, now)
             if principal.actor_id != task.initiator_id:
                 raise AccessDenied("only the task initiator may prepare a proposal")
+            # A claimed planning workspace is not an alternative grant. No
+            # unmetered direct preparation may bypass its durable attempt budget.
+            from safe_agent.storage.models import PlanningWorkspaceRow
+
+            if (planning_lease is None
+                    and tx.session.get(PlanningWorkspaceRow, task_id) is not None):
+                raise StateConflict("planning workspace requires a bounded attempt")
             if (snap.phase is not OfficePhase.ASSIGNED
                     or snap.state_version != expected_state_version
                     or snap.cycles_used != 0 or snap.external_effects != 0
@@ -344,6 +353,13 @@ class TrustedOfficeTasks:
             else:
                 tx.append(EventKind.ACTION_ELIGIBLE, actor="offline_office_gate", now=now,
                           payload={"proposal_hash": digest})
+            if planning_lease is not None:
+                from safe_agent.storage.planning import finish_planning_attempt
+
+                finish_planning_attempt(
+                    tx, planning_lease, result_kind="PROPOSED",
+                    reason_code=None, proposal_hash=digest, now=now,
+                )
             return decision.model_copy(update={"state_version": tx.snapshot.state_version})
 
     def approve(self, principal: Principal, task_id: str, request: ApprovalInput,
