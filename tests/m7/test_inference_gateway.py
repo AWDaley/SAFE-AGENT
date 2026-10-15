@@ -10,8 +10,8 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from safe_agent.agent.interfaces import SafeTaskContext
+from safe_agent.agent.json_planner import PLANNER_INSTRUCTION, ClosedJsonPlanner
 from safe_agent.api import create_app
-from safe_agent.agent.json_planner import ClosedJsonPlanner, PLANNER_INSTRUCTION
 from safe_agent.canonical import canonical_json, sha256
 from safe_agent.contracts.actions import CalendarCreateEvent, RequestClarification
 from safe_agent.contracts.inference import (
@@ -19,7 +19,6 @@ from safe_agent.contracts.inference import (
     InferenceReportedUsage,
     InferenceRequest,
     InferenceRoutePolicy,
-    InferenceTransportReply,
 )
 from safe_agent.contracts.office import AvailableSlot, Projection
 from safe_agent.inference import (
