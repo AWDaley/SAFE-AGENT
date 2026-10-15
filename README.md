@@ -2,11 +2,10 @@
 
 A contract-first, privacy-minimized foundation for an autonomous office agent.
 
-**Status (October 14, 2026): M0–M6 synthetic task intake, deterministic
-workflows, durable planning, supervised fake-worker recovery and no-network
-Docker model isolation are integrated into main (PRs #20–24 merged).**
-M7-01 adds a provider-neutral inference contract and offline mock, without
-giving the model privileged provider tools or access to sensitive identifiers.
+**Status (October 15, 2026): M0–M6 and the offline M7-01–04 stack are
+integrated into main (PRs #25–28 merged in dependency order).**
+M7-05a adds invocation identity, pure lifecycle replay and the 0010 forward
+schema foundation. Runtime durable dispatch/recovery is not wired yet.
 **M5 LIVE ACCEPTANCE: BLOCKED.** The Google test recovery worker remains
 MockTransport-only. No actual hosted Google event write or independently
 verified live readback has been approved. The code is not production-approved;
@@ -16,6 +15,7 @@ external security review and main-branch protection are still outstanding.
 
 - [System design](docs/SAFE_AGENT_DESIGN.md)
 - [MVP implementation plan](docs/MVP_IMPLEMENTATION_PLAN.md)
+- [M7-05a invocation foundation and next increment](docs/M7_DURABLE_INFERENCE_DISPATCH.md)
 - [M1 delivery and reproducibility](docs/M1_DELIVERY.md)
 - [M2 delivery, limitations and verification](docs/M2_DELIVERY.md)
 - [M3 verified synthetic scheduling and limitations](docs/M3_DELIVERY.md)
@@ -289,6 +289,20 @@ Neither component connects a live model, verifies a real provider
 invoice, or gains business-system authority. Run
 python scripts/smoke_inference_sidecar.py; see
 docs/M7_INFERENCE_SERVICE.md.
+
+## M7-05a — Durable invocation schema and replay foundation
+
+Closed invocation bindings connect one planning attempt to an exact task,
+manifest and budget reservation. The additive `0010_inference_dispatch`
+migration preserves canonical PR #27 accounting, rejects duplicate/cross-scope
+bindings and adds PostgreSQL immutable history/transition guards. Pure replay
+rejects tampering, invalid state transitions and late successful results.
+No prompt, raw completion or second money ledger is stored.
+
+This is the first increment of M7-05, **not** a runtime at-most-once dispatch
+or restart-recovery implementation. Existing inference and sidecar behavior
+remain unchanged. Run `python scripts/export_m7_dispatch_schemas.py --check`
+and read [delivery, tests and M7-05b](docs/M7_DURABLE_INFERENCE_DISPATCH.md).
 
 **M5 LIVE ACCEPTANCE: BLOCKED.** Passing offline tests or generating a
 synthetic proposal never authorizes real provider execution or production
