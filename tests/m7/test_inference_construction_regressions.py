@@ -1,7 +1,7 @@
 """Unsupported inference construction must stop before any backend call."""
 import pytest
 
-from safe_agent.inference import InferenceGateway, OfflineMockInferenceTransport
+from safe_agent.inference import InferenceDenied, InferenceGateway, OfflineMockInferenceTransport
 from tests.m2.conftest import NOW
 from tests.m7.test_inference_gateway import fixture, rule
 
@@ -27,3 +27,18 @@ def test_offline_fixture_path_remains_usable():
     result = gateway.infer(fixture()[2])
     assert result.provider_effect_performed is False
     assert result.model_authorized_execution is False
+
+
+def test_backend_substitution_after_construction_is_denied():
+    backend = NonMockBackend()
+    gateway = InferenceGateway(rule(), OfflineMockInferenceTransport(), clock=lambda: NOW)
+    gateway._transport = backend
+    with pytest.raises(InferenceDenied, match="INFERENCE_SCOPE_DENIED"):
+        gateway.infer(fixture()[2])
+    assert backend.calls == 0
+
+
+@pytest.mark.parametrize("mode", ["coordinated_offline", "hosted", "", None])
+def test_legacy_mode_flag_does_not_enable_an_application_path(mode):
+    with pytest.raises(TypeError, match="coordinated"):
+        InferenceGateway(rule(), OfflineMockInferenceTransport(), clock=lambda: NOW, mode=mode)

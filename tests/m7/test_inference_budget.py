@@ -402,10 +402,10 @@ def test_budgeted_gateway_mock_releases_without_network_or_provider_effect(kit):
     assert calendar.effect_count == internal.effect_count == 0
 
 
-def test_budgeted_nonmock_transport_never_treats_reported_usage_as_verified(kit):
+def test_budgeted_nonmock_requires_coordination_and_usage_is_not_billing_evidence(kit):
     client, signer, employee, _, _, _, _ = setup(kit)
     task_id = new_task(client, signer, employee)
-    _, prompt = make_request(kit, task_id)
+    req, _ = make_request(kit, task_id)
     ledger = InferenceBudgetLedger(
         kit["repo"], limits(global_limit=5000, tenant_limit=5000,
                             task_limit=5000, per_call=5000),
@@ -423,20 +423,28 @@ def test_budgeted_nonmock_transport_never_treats_reported_usage_as_verified(kit)
         input_microusd_per_million_tokens=1_000_000,
         output_microusd_per_million_tokens=1_000_000,
     )
-    gw = InferenceGateway(
-        policy, FakeRemote(), clock=lambda: NOW, budget_ledger=ledger,
-    )
-    result = gw.infer(prompt)
+    # Supplying a ledger alone must not unlock the old stateless remote path.
+    with pytest.raises(TypeError, match="coordinated"):
+        InferenceGateway(policy, FakeRemote(), clock=lambda: NOW, budget_ledger=ledger)
+    assert seen == []
+    with kit["repo"]._sessions() as db:
+        assert db.scalars(select(InferenceBudgetReservationRow)).all() == []
+
+    # Preserve direct coverage of canonical REMOTE-bound accounting. Successful
+    # reported usage never authenticates a charge, even when sourced by a mock.
+    ledger.reserve(req, max_microusd=500, synthetic_mock=False, now=NOW)
+    result = OfflineMockInferenceTransport().infer(req)
     assert result.reported_usage is not None
     assert result.reported_usage.independently_verified is False
-    receipt = ledger.receipt(employee, result.request_id, now=NOW)
+    ledger.mark_uncertain(req.request_id, now=NOW, reason="UNVERIFIED_RESULT",
+                          reported_usage=result.reported_usage)
+    receipt = ledger.receipt(employee, req.request_id, now=NOW)
     assert receipt.status == "UNCERTAIN"
     assert receipt.held_microusd == receipt.max_estimated_microusd > 0
     assert receipt.charged_microusd == 0
-    assert len(seen) == 1
 
 
-def test_backend_failure_retains_reserved_cost_without_leaking_error(kit):
+def test_backend_failure_retains_reserved_cost_without_leaking_error(kit, monkeypatch):
     client, signer, employee, _, _, _, _ = setup(kit)
     task_id = new_task(client, signer, employee)
     _, prompt = make_request(kit, task_id)
@@ -444,10 +452,12 @@ def test_backend_failure_retains_reserved_cost_without_leaking_error(kit):
         kit["repo"], limits(global_limit=5000, tenant_limit=5000,
                             task_limit=5000, per_call=5000),
     )
-    class BrokenRemote:
-        def infer(self, request):
-            raise RuntimeError("PRIVATE_INFERENCE_TOKEN_NEVER_PRINT")
+    def broken(request):
+        raise RuntimeError("PRIVATE_INFERENCE_TOKEN_NEVER_PRINT")
 
+    backend = OfflineMockInferenceTransport()
+    # Test-only fault injection, not a runtime arbitrary-backend escape hatch.
+    monkeypatch.setattr(backend, "infer", broken)
     gateway = InferenceGateway(
         InferenceRoutePolicy(
             route_id="budget_route", model_revision="budget_model_v1",
@@ -456,7 +466,7 @@ def test_backend_failure_retains_reserved_cost_without_leaking_error(kit):
             input_microusd_per_million_tokens=1_000_000,
             output_microusd_per_million_tokens=1_000_000,
         ),
-        BrokenRemote(), clock=lambda: NOW,
+        backend, clock=lambda: NOW,
         budget_ledger=ledger,
     )
     with pytest.raises(InferenceDenied, match="INFERENCE_BACKEND_UNAVAILABLE") as error:
