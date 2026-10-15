@@ -2,6 +2,12 @@
 
 from .gateway import InferenceDenied, InferenceGateway
 from .mock import OfflineMockInferenceTransport
+from .restricted_https import (
+    InferenceCredentialSource,
+    RestrictedEgressDenied,
+    RestrictedHTTPSInferenceTransport,
+    TrustedInferenceEgressPolicy,
+)
 from .transport import InferenceTransport
 
 __all__ = [
@@ -9,4 +15,8 @@ __all__ = [
     "InferenceGateway",
     "InferenceTransport",
     "OfflineMockInferenceTransport",
+    "InferenceCredentialSource",
+    "RestrictedEgressDenied",
+    "RestrictedHTTPSInferenceTransport",
+    "TrustedInferenceEgressPolicy",
 ]

@@ -261,6 +261,14 @@ no-network OfflineMockInferenceTransport. A future separately reviewed
 gateway may add isolated model-provider transport and verified billing.
 See docs/M7_INFERENCE_CONTRACTS.md.
 
+M7-02 adds an opt-in restricted HTTPS transport for a separately hosted,
+inference-only sidecar. It requires a trusted fixed FQDN/path, rejects
+private and mixed DNS answers, connects to the checked numeric IP with
+CA-verified hostname/SNI, disallows redirects, and bounds response bytes.
+Inference credentials must be held outside the operator process and model
+container; this change does not connect a live model provider.
+See docs/M7_RESTRICTED_EGRESS.md.
+
 **M5 LIVE ACCEPTANCE: BLOCKED.** Passing offline tests or generating a
 synthetic proposal never authorizes real provider execution or production
 deployment.
