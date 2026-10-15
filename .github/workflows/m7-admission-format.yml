@@ -1,0 +1,45 @@
+name: M7-05b verified import formatting
+on:
+  push:
+    branches: [feature/m7-atomic-inference-admission]
+    paths: ['.github/workflows/m7-admission-format.yml']
+permissions:
+  contents: write
+jobs:
+  format:
+    if: github.repository == 'AWDaley/SAFE-AGENT' && github.ref == 'refs/heads/feature/m7-atomic-inference-admission'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+      - name: Apply exact reviewed import-only corrections
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          pairs = {
+              'from safe_agent.storage.inference_admission import InferenceAdmissionDenied, TrustedInferenceAdmission': 'from safe_agent.storage.inference_admission import (\n    InferenceAdmissionDenied,\n    TrustedInferenceAdmission,\n)',
+              'from safe_agent.contracts.inference_admission import InferenceAdmissionPolicy, InferenceThroughputLimits': 'from safe_agent.contracts.inference_admission import (\n    InferenceAdmissionPolicy,\n    InferenceThroughputLimits,\n)',
+              'from safe_agent.contracts.inference_dispatch import InferenceInvocationBinding, InferenceInvocationView': 'from safe_agent.contracts.inference_dispatch import (\n    InferenceInvocationBinding,\n    InferenceInvocationView,\n)',
+              'from safe_agent.contracts.inference_admission import InferenceAdmissionPolicy, InferenceAdmissionReceipt': 'from safe_agent.contracts.inference_admission import (\n    InferenceAdmissionPolicy,\n    InferenceAdmissionReceipt,\n)',
+          }
+          paths = ['tests/m7/test_inference_admission_postgres.py', 'tests/m7/admission_fixtures.py', 'src/safe_agent/contracts/inference_admission.py', 'tests/m7/test_inference_admission.py', 'src/safe_agent/storage/inference_admission.py']
+          for name in paths:
+              p = Path(name)
+              value = p.read_text()
+              for before, after in pairs.items():
+                  value = value.replace(before, after)
+              p.write_text(value)
+          PY
+          git add src tests
+          git rm .github/workflows/m7-admission-format.yml
+          test "$(git write-tree)" = 'b5a99706c1abfe6c7a7572c899e7ab67c467473b'
+          git diff --cached --check
+          git restore --source=HEAD --staged --worktree .github/workflows/m7-admission-format.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'style: normalize admission imports without semantic changes'
+          git push origin HEAD:refs/heads/feature/m7-atomic-inference-admission
