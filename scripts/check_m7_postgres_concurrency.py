@@ -18,7 +18,7 @@ from safe_agent.storage.inference_budget import InferenceBudgetDenied, _change_a
 from safe_agent.storage.models import InferenceBudgetAccountRow
 from safe_agent.storage.repository import LedgerRepository
 
-EXPECTED_HEAD = "0009_inference_cost_accounts"
+EXPECTED_HEAD = "0010_inference_dispatch"
 EXPECTED_TRIGGERS = {
     "safe_inference_budget_events_immutable",
     "safe_inference_billing_attestations_immutable",
@@ -52,7 +52,7 @@ def main() -> None:
                 text("SELECT version_num FROM alembic_version")
             ).scalars().all()
             if heads != [EXPECTED_HEAD]:
-                raise AssertionError("PostgreSQL is not at canonical PR #27 revision")
+                raise AssertionError("PostgreSQL is not at reviewed 0010 with canonical PR #27 ancestry")
             triggers = set(connection.execute(
                 text(
                     "SELECT tgname FROM pg_trigger "

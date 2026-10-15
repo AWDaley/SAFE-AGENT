@@ -9,8 +9,10 @@ from sqlalchemy import (
     JSON,
     BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     LargeBinary,
@@ -38,7 +40,11 @@ class TaskRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     deadline: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
-    __table_args__ = (Index("ix_safe_tasks_org_actor", "organization_id", "initiator_id"),)
+    __table_args__ = (
+        Index("ix_safe_tasks_org_actor", "organization_id", "initiator_id"),
+        Index("uq_safe_tasks_inference_binding", "task_id", "organization_id",
+              "manifest_hash", unique=True),
+    )
 
 
 class TaskIntakeRow(Base):
@@ -94,6 +100,8 @@ class PlanningAttemptRow(Base):
     lease_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     __table_args__ = (
         UniqueConstraint("task_id", "attempt_number", name="uq_safe_planning_attempt_order"),
+        Index("uq_safe_planning_attempt_inference_binding", "attempt_id", "task_id",
+              "manifest_hash", "task_state_version", "lease_until", unique=True),
     )
 
 
@@ -154,6 +162,12 @@ class InferenceBudgetReservationRow(Base):
     latest_event_hash: Mapped[str] = mapped_column(String(72), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
+    __table_args__ = (
+        Index("uq_safe_inference_reservation_binding", "request_id", "organization_id",
+              "task_id", "route_id", "model_revision", "prompt_digest", "deadline_at",
+              unique=True),
+    )
+
 
 class InferenceBudgetEventRow(Base):
     """Append-only, hash-linked inference budget transitions. No raw prompts."""
@@ -188,6 +202,162 @@ class InferenceBillingAttestationRow(Base):
     source_evidence_hash: Mapped[str] = mapped_column(String(72), nullable=False)
     attestation_digest: Mapped[str] = mapped_column(String(72), nullable=False)
     accepted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class InferenceInvocationRow(Base):
+    """M7-05a schema foundation only; runtime admission is not wired yet.
+
+    Composite references bind one planning attempt to its exact cost reservation.
+    Identity is immutable on migrated PostgreSQL; no prompt/output is retained.
+    """
+
+    __tablename__ = "safe_inference_invocations"
+    request_id: Mapped[str] = mapped_column(String(128), primary_key=True, nullable=False)
+    organization_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    task_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    attempt_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    task_state_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    workspace_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    manifest_hash: Mapped[str] = mapped_column(String(72), nullable=False)
+    route_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    model_revision: Mapped[str] = mapped_column(String(128), nullable=False)
+    prompt_digest: Mapped[str] = mapped_column(String(72), nullable=False)
+    request_digest: Mapped[str] = mapped_column(String(72), nullable=False)
+    binding_hash: Mapped[str] = mapped_column(String(72), nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    lease_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    state_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    claim_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    claim_owner: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    claim_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    dispatch_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    proposal_hash: Mapped[str | None] = mapped_column(String(72), nullable=True)
+    reason_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    event_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    latest_event_hash: Mapped[str] = mapped_column(String(72), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ['task_id', 'organization_id', 'manifest_hash'],
+            ['safe_tasks.task_id', 'safe_tasks.organization_id', 'safe_tasks.manifest_hash'],
+            name='fk_infer_invocation_task',
+        ),
+        ForeignKeyConstraint(
+            ['attempt_id', 'task_id', 'manifest_hash', 'task_state_version', 'lease_expires_at'],
+            ['safe_planning_attempts.attempt_id', 'safe_planning_attempts.task_id', 'safe_planning_attempts.manifest_hash', 'safe_planning_attempts.task_state_version', 'safe_planning_attempts.lease_until'],
+            name='fk_infer_invocation_attempt',
+        ),
+        ForeignKeyConstraint(
+            ['request_id', 'organization_id', 'task_id', 'route_id', 'model_revision', 'prompt_digest', 'deadline_at'],
+            ['safe_inference_budget_reservations.request_id', 'safe_inference_budget_reservations.organization_id', 'safe_inference_budget_reservations.task_id', 'safe_inference_budget_reservations.route_id', 'safe_inference_budget_reservations.model_revision', 'safe_inference_budget_reservations.prompt_digest', 'safe_inference_budget_reservations.deadline_at'],
+            name='fk_infer_invocation_reservation',
+        ),
+        UniqueConstraint("organization_id", "task_id", "attempt_id",
+                         name="uq_infer_invocation_attempt"),
+        UniqueConstraint("request_id", "binding_hash", name="uq_infer_invocation_identity"),
+        Index("ix_safe_inference_invocations_recovery", "state", "deadline_at"),
+        CheckConstraint(
+            "state IN ('RESERVED', 'DISPATCH_STARTED', 'RESPONSE_VALIDATED', "
+            "'FAILED_BEFORE_DISPATCH', 'UNKNOWN')",
+            name='ck_infer_invocation_state',
+        ),
+        CheckConstraint(
+            'task_state_version >= 0 AND workspace_version >= 1 AND state_version >= 0 AND '
+            'claim_version >= 0',
+            name='ck_infer_invocation_versions',
+        ),
+        CheckConstraint(
+            'event_sequence >= 1 AND state_version = event_sequence - 1',
+            name='ck_infer_invocation_sequence',
+        ),
+        CheckConstraint(
+            'issued_at < deadline_at AND deadline_at <= lease_expires_at AND updated_at >= '
+            'issued_at',
+            name='ck_infer_invocation_deadline',
+        ),
+        CheckConstraint(
+            '((claim_owner IS NULL AND claim_until IS NULL) OR (claim_owner IS NOT NULL AND '
+            'claim_until IS NOT NULL AND claim_version > 0 AND issued_at < claim_until AND '
+            'claim_until <= deadline_at))',
+            name='ck_infer_invocation_claim',
+        ),
+        CheckConstraint(
+            "((state IN ('RESERVED', 'FAILED_BEFORE_DISPATCH') AND dispatch_started_at IS "
+            "NULL) OR (state IN ('DISPATCH_STARTED', 'RESPONSE_VALIDATED', 'UNKNOWN') AND "
+            'dispatch_started_at IS NOT NULL AND issued_at <= dispatch_started_at AND '
+            'dispatch_started_at < deadline_at AND dispatch_started_at <= updated_at))',
+            name='ck_infer_invocation_dispatch',
+        ),
+        CheckConstraint(
+            "((state = 'RESPONSE_VALIDATED' AND proposal_hash IS NOT NULL) OR (state <> "
+            "'RESPONSE_VALIDATED' AND proposal_hash IS NULL))",
+            name='ck_infer_invocation_result',
+        ),
+        CheckConstraint(
+            "((state = 'FAILED_BEFORE_DISPATCH' AND reason_code IS NOT NULL AND reason_code "
+            "IN ('AUTHORITY_EXPIRED', 'CANCELLED_BEFORE_DISPATCH', "
+            "'INFRASTRUCTURE_UNAVAILABLE')) OR (state = 'UNKNOWN' AND reason_code IS NOT NULL "
+            "AND reason_code IN ('DISPATCH_OUTCOME_UNKNOWN', 'RESPONSE_REJECTED')) OR (state "
+            "IN ('RESERVED', 'DISPATCH_STARTED', 'RESPONSE_VALIDATED') AND reason_code IS "
+            'NULL))',
+            name='ck_infer_invocation_reason',
+        ),
+    )
+
+
+class InferenceInvocationEventRow(Base):
+    """Append-only lifecycle metadata; billing and business effects stay separate."""
+
+    __tablename__ = "safe_inference_invocation_events"
+    request_id: Mapped[str] = mapped_column(String(128), primary_key=True, nullable=False)
+    sequence: Mapped[int] = mapped_column(Integer, primary_key=True, nullable=False)
+    binding_hash: Mapped[str] = mapped_column(String(72), nullable=False)
+    previous_state: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    reason_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    proposal_hash: Mapped[str | None] = mapped_column(String(72), nullable=True)
+    preceding_hash: Mapped[str | None] = mapped_column(String(72), nullable=True)
+    event_hash: Mapped[str] = mapped_column(String(72), nullable=False)
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ['request_id', 'binding_hash'],
+            ['safe_inference_invocations.request_id', 'safe_inference_invocations.binding_hash'],
+            name='fk_infer_invocation_event_binding',
+        ),
+        CheckConstraint(
+            'sequence >= 1',
+            name='ck_infer_invocation_event_sequence',
+        ),
+        CheckConstraint(
+            '((sequence = 1 AND previous_state IS NULL AND preceding_hash IS NULL AND state = '
+            "'RESERVED') OR (sequence > 1 AND previous_state IS NOT NULL AND preceding_hash "
+            'IS NOT NULL))',
+            name='ck_infer_invocation_event_order',
+        ),
+        CheckConstraint(
+            "((previous_state IS NULL AND state = 'RESERVED') OR (previous_state = 'RESERVED' "
+            "AND state IN ('DISPATCH_STARTED', 'FAILED_BEFORE_DISPATCH')) OR (previous_state "
+            "= 'DISPATCH_STARTED' AND state IN ('RESPONSE_VALIDATED', 'UNKNOWN')))",
+            name='ck_infer_invocation_event_transition',
+        ),
+        CheckConstraint(
+            "((state = 'RESPONSE_VALIDATED' AND proposal_hash IS NOT NULL) OR (state <> "
+            "'RESPONSE_VALIDATED' AND proposal_hash IS NULL))",
+            name='ck_infer_invocation_event_result',
+        ),
+        CheckConstraint(
+            "((state = 'FAILED_BEFORE_DISPATCH' AND reason_code IS NOT NULL AND reason_code "
+            "IN ('AUTHORITY_EXPIRED', 'CANCELLED_BEFORE_DISPATCH', "
+            "'INFRASTRUCTURE_UNAVAILABLE')) OR (state = 'UNKNOWN' AND reason_code IS NOT NULL "
+            "AND reason_code IN ('DISPATCH_OUTCOME_UNKNOWN', 'RESPONSE_REJECTED')) OR (state "
+            "IN ('RESERVED', 'DISPATCH_STARTED', 'RESPONSE_VALIDATED') AND reason_code IS "
+            'NULL))',
+            name='ck_infer_invocation_event_reason',
+        ),
+    )
 
 
 class ManifestRow(Base):
