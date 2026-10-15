@@ -1,0 +1,48 @@
+name: M7-05b exact source materialization
+on:
+  push:
+    branches: [feature/m7-atomic-inference-admission]
+    paths:
+      - 'ci/m7-05b-transfer/**'
+      - '.github/workflows/m7-admission-materialize.yml'
+permissions:
+  contents: write
+jobs:
+  materialize:
+    if: github.repository == 'AWDaley/SAFE-AGENT' && github.ref == 'refs/heads/feature/m7-atomic-inference-admission'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+      - name: Verify and materialize the locally tested patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import base64, gzip, hashlib
+          from pathlib import Path
+          directory = Path('ci/m7-05b-transfer')
+          names = ['00.b64', '01.b64', '02a.b64', '02b.b64', '02c.b64', '02d.b64', '03a.b64', '03b.b64', '03c.b64', '03d.b64']
+          assert sorted(p.name for p in directory.iterdir()) == names
+          encoded = ''.join((directory / name).read_text().strip() for name in names)
+          payload = gzip.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(payload).hexdigest() == 'ee61d6e8c914573022cc5523d83d4f9f7a39f25fd3543ceea727eb9be3e54412'
+          Path('/tmp/m7-05b.patch').write_bytes(payload)
+          print('M7_05B_PATCH_SHA256=VERIFIED')
+          PY
+          git rm -r ci/m7-05b-transfer .github/workflows/m7-admission-materialize.yml
+          git apply --check /tmp/m7-05b.patch
+          git apply --index /tmp/m7-05b.patch
+          test "$(git write-tree)" = '16f3c10c1e62536c7ddc70f50e2f3f00774ff9e2'
+          git diff --cached --check
+          echo 'M7_05B_LOCALLY_TESTED_TREE=VERIFIED'
+          # The contents-only token never modifies workflow configuration.
+          # The GitHub connector will separately commit the checked CI update
+          # and delete this temporary materializer from the final source tree.
+          git restore --source=HEAD --staged --worktree .github/workflows/ci.yml .github/workflows/m7-admission-materialize.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'M7-05b: atomic inference admission and durable quotas'
+          git push origin HEAD:refs/heads/feature/m7-atomic-inference-admission
