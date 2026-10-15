@@ -249,7 +249,8 @@ def test_inference_only_secret_must_be_valid_header_value(token):
 
 @pytest.mark.parametrize("kind", [
     "redirect", "unauthorized", "rate_limit", "server",
-    "gzip", "html", "oversized", "wrong_request", "garbage",
+    "gzip", "html", "oversized", "wrong_request",
+    "duplicate_request", "nonfinite_extra", "garbage",
 ])
 def test_no_redirects_untrusted_mime_or_invalid_reply_metadata(kind):
     kwargs = {}
@@ -273,6 +274,13 @@ def test_no_redirects_untrusted_mime_or_invalid_reply_metadata(kind):
             obj["request_id"] = "inf_" + "a" * 32
             return json.dumps(obj).encode()
         kwargs["replace"] = mismatched
+    elif kind == "duplicate_request":
+        kwargs["replace"] = lambda data: data.replace(
+            b'"request_id":',
+            b'"request_id":"inf_' + b"f" * 32 + b'","request_id":', 1,
+        )
+    elif kind == "nonfinite_extra":
+        kwargs["replace"] = lambda data: data[:-1] + b',"extra":NaN}'
     else:
         kwargs["replace"] = lambda _data: b'{"secret":true}'
     transport, _, _ = build(wire=FakeWire(**kwargs))

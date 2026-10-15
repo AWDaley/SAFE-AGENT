@@ -13,6 +13,7 @@ credential. It does not establish production process isolation by itself.
 from __future__ import annotations
 
 import http.client
+import json
 import ipaddress
 import re
 import socket
@@ -81,6 +82,19 @@ class TrustedInferenceEgressPolicy(StrictModel):
                 or not re.fullmatch(r"/[A-Za-z0-9/_-]+", value)):
             raise ValueError("trusted inference path must be a single normalized path")
         return value
+
+
+def _closed_json_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise RestrictedEgressDenied()
+        result[key] = value
+    return result
+
+
+def _deny_nonfinite(_token: str) -> None:
+    raise RestrictedEgressDenied()
 
 
 class InferenceCredentialSource(Protocol):
@@ -293,9 +307,14 @@ class RestrictedHTTPSInferenceTransport:
                     or not 0 < len(reply.body) <= policy.max_wire_response_bytes):
                 # Includes every 3xx redirect, 429, 5xx or malformed MIME.
                 raise RestrictedEgressDenied()
-            result = InferenceTransportReply.model_validate_json(
-                reply.body.decode("utf-8", errors="strict"),
+            safe_text = reply.body.decode("utf-8", errors="strict")
+            parsed = json.loads(
+                safe_text, object_pairs_hook=_closed_json_pairs,
+                parse_constant=_deny_nonfinite,
             )
+            if not isinstance(parsed, dict):
+                raise RestrictedEgressDenied()
+            result = InferenceTransportReply.model_validate_json(safe_text)
             # The caller gateway ALSO validates this binding.
             if (result.request_id != trusted.request_id
                     or result.route_id != trusted.route_id
