@@ -9,6 +9,7 @@ and operational alerting must be configured by the host administrator.
 from __future__ import annotations
 
 import os
+import socket
 import stat
 from pathlib import Path
 
@@ -80,12 +81,23 @@ def main() -> None:
     app, socket_path = bootstrap()
     import uvicorn
 
-    uvicorn.run(
-        app, uds=str(socket_path),
-        access_log=False, proxy_headers=False,
-        server_header=False, date_header=False,
-        log_level="warning", lifespan="off",
-    )
+    # Bind and permission the Unix listener BEFORE Uvicorn accepts any
+    # connection. Uvicorn's default UDS mode is not an authorization boundary.
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        listener.bind(str(socket_path))
+        os.chmod(socket_path, 0o600)
+        listener.listen(32)
+        uvicorn.run(
+            app, fd=listener.fileno(),
+            access_log=False, proxy_headers=False,
+            server_header=False, date_header=False,
+            log_level="warning", lifespan="off",
+        )
+    finally:
+        listener.close()
+        if socket_path.is_socket():
+            socket_path.unlink()
 
 
 if __name__ == "__main__":
