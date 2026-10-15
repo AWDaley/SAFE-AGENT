@@ -104,6 +104,15 @@ offline Docker smoke and pinned TAL interop. Tests must demonstrate:
 - Existing M6 persistent planning can call the mock gateway with zero
   office effects. There is no direct /v1/inference endpoint.
 
+## M7-02 restricted inference-only gateway (stacked follow-up)
+
+M7-02 implements a trusted-sidecar HTTPS egress transport with exact
+host/path allowlisting, public-only DNS and numeric address pinning, TLS
+hostname/SNI verification, isolated inference-only credential sourcing
+and strict status/content/response-size checks. All demonstrations are
+mock-wire synthetic tests, not real hosted inference. See
+M7_RESTRICTED_EGRESS.md for design and remaining production blockers.
+
 ## Next PR — M7-02 restricted inference-only gateway
 
 The future hosted adapter must run with isolated inference credentials,

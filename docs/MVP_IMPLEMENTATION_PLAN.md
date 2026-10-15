@@ -325,7 +325,10 @@ M6_PERSISTENT_PLANNING.md and M6_ISOLATED_MODEL_RUNTIME.md.
 
 The first M7 increment defines closed InferenceRoutePolicy, InferenceRequest,
 InferenceTransportReply and InferenceOutcome contracts, an inference-only
-transport interface and a deterministic offline mock. The model is not a
+transport interface and a deterministic offline mock. M7-02 adds a
+restricted trusted-sidecar HTTPS egress adapter with DNS address checks,
+numeric IP pinning, TLS hostname verification and strict response limits,
+tested against synthetic wire/DNS mocks only. The model is not a
 trusted actor and never receives credentials or software execution access.
 See M7_INFERENCE_CONTRACTS.md. Later gated increments will add authenticated,
 restricted inference egress, independently verified token and cost accounting,
