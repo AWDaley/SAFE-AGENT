@@ -184,9 +184,8 @@ def test_public_dns_pins_exact_numeric_ip_before_loading_token():
 def test_private_reserved_or_metadata_address_denied_before_secret(bad):
     family = socket.AF_INET6 if ":" in bad else socket.AF_INET
     sockaddr = (bad, 443, 0, 0) if family == socket.AF_INET6 else (bad, 443)
-    resolver = lambda *_args, **_kwargs: [
-        (family, socket.SOCK_STREAM, 6, "", sockaddr),
-    ]
+    def resolver(*_args, **_kwargs):
+        return [(family, socket.SOCK_STREAM, 6, "", sockaddr)]
     transport, secrets, wire = build(resolver=resolver)
     with pytest.raises(RestrictedEgressDenied):
         transport.infer(outbound_request())
