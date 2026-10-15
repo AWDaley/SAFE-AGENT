@@ -49,7 +49,7 @@ def sqlite_engine(path: Path):
 @pytest.fixture(scope="module")
 def migrated_template(tmp_path_factory):
     path = tmp_path_factory.mktemp("invocation_schema") / "template.sqlite"
-    migrate(path)
+    migrate(path, "0010_inference_dispatch")  # Keep the original foundation acceptance pinned.
     return path
 
 

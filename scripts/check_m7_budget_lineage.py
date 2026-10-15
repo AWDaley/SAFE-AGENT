@@ -1,8 +1,8 @@
-"""Fail-closed M7-03/04/05a migration-lineage and interface integration gate.
+"""Fail-closed M7-03/04/05a/05b migration-lineage and interface integration gate.
 
 The PR #27 cost-account migration is the ONE canonical successor to 0008.
 PR #29's alternative 0009_inference_budget must never be combined with it.
-0010 is the sole reviewed successor; 0009 remains content-pinned.
+0011 extends 0010; both canonical 0009 and invocation 0010 stay content-pinned.
 No production connection is opened; optional DB verification is SQLite-only.
 """
 
@@ -24,12 +24,20 @@ from safe_agent.storage.inference_budget import InferenceBudgetLedger
 from safe_agent.storage.models import Base
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_HEAD = "0010_inference_dispatch"
+EXPECTED_HEAD = "0011_inference_admission"
+CANONICAL_DISPATCH = "0010_inference_dispatch"
+CANONICAL_DISPATCH_SHA256 = "a4e8104707cab13541bf19befc4761f4e8512e9ffff97d97e5f1c5fe344f429a"
 CANONICAL_BUDGET = "0009_inference_cost_accounts"
 EXPECTED_PARENT = "0008_planning_workspace"
 ALTERNATIVE_HEAD = "0009_inference_budget"
 CANONICAL_BUDGET_SHA256 = "5af5edacd8a8b1b72969452dd02437a295335c7cc8567714b398872813052fdb"
 REQUIRED_COLUMNS = {
+    "safe_inference_admission_authority": {
+        "authority_key", "policy_hash", "created_at", "last_seen_at",
+    },
+    "safe_inference_admissions": {
+        "request_id", "binding_hash", "authority_key", "policy_hash", "intent_hash", "admitted_at",
+    },
     "safe_inference_invocations": {
         "request_id", "organization_id", "task_id", "attempt_id", "manifest_hash",
         "request_digest", "binding_hash", "route_id", "model_revision", "prompt_digest",
@@ -71,8 +79,14 @@ def check_migration_and_contract() -> None:
     if set(heads) != {EXPECTED_HEAD} or len(heads) != 1:
         raise RuntimeError("M7 budget migration conflict: expected exactly one canonical head")
     head = script.get_revision(EXPECTED_HEAD)
-    if head is None or head.down_revision != CANONICAL_BUDGET:
+    if head is None or head.down_revision != CANONICAL_DISPATCH:
+        raise RuntimeError("M7 admission migration must directly extend canonical 0010")
+    dispatch = script.get_revision(CANONICAL_DISPATCH)
+    if dispatch is None or dispatch.down_revision != CANONICAL_BUDGET:
         raise RuntimeError("M7 invocation migration must directly extend the canonical budget")
+    dispatch_file = ROOT / "migrations" / "versions" / (CANONICAL_DISPATCH + ".py")
+    if hashlib.sha256(dispatch_file.read_bytes().replace(b"\r\n", b"\n")).hexdigest() != CANONICAL_DISPATCH_SHA256:
+        raise RuntimeError("canonical 0010 was rewritten; use a reviewed forward migration")
     migration = script.get_revision(CANONICAL_BUDGET)
     if migration is None or migration.down_revision != EXPECTED_PARENT:
         raise RuntimeError("M7 budget migration does not follow 0008_planning_workspace")
@@ -134,7 +148,7 @@ def check_migrated_test_database() -> None:
         with engine.connect() as conn:
             revisions = conn.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
         if revisions != [EXPECTED_HEAD]:
-            raise RuntimeError("SQLite migration head does not match reviewed 0010")
+            raise RuntimeError("SQLite migration head does not match reviewed 0011")
     finally:
         engine.dispose()
 

@@ -360,6 +360,47 @@ class InferenceInvocationEventRow(Base):
     )
 
 
+class InferenceAdmissionAuthorityRow(Base):
+    """Singleton lock and immutable host profile for coordinated admission."""
+
+    __tablename__ = "safe_inference_admission_authority"
+    authority_key: Mapped[str] = mapped_column(String(16), primary_key=True)
+    policy_hash: Mapped[str] = mapped_column(String(72), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    __table_args__ = (
+        UniqueConstraint("authority_key", "policy_hash", name="uq_infer_admission_authority"),
+        CheckConstraint("authority_key = 'global'", name="ck_infer_admission_singleton"),
+        CheckConstraint("last_seen_at >= created_at", name="ck_infer_admission_clock"),
+    )
+
+
+class InferenceAdmissionRow(Base):
+    """Immutable admission/quota record; contains no prompt or model response."""
+
+    __tablename__ = "safe_inference_admissions"
+    request_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    binding_hash: Mapped[str] = mapped_column(String(72), nullable=False)
+    authority_key: Mapped[str] = mapped_column(String(16), nullable=False)
+    policy_hash: Mapped[str] = mapped_column(String(72), nullable=False)
+    intent_hash: Mapped[str] = mapped_column(String(72), nullable=False)
+    admitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["request_id", "binding_hash"],
+            ["safe_inference_invocations.request_id", "safe_inference_invocations.binding_hash"],
+            name="fk_infer_admission_invocation",
+        ),
+        ForeignKeyConstraint(
+            ["authority_key", "policy_hash"],
+            ["safe_inference_admission_authority.authority_key",
+             "safe_inference_admission_authority.policy_hash"],
+            name="fk_infer_admission_authority",
+        ),
+        Index("ix_safe_inference_admissions_window", "admitted_at"),
+    )
+
+
 class ManifestRow(Base):
     __tablename__ = "safe_manifest_versions"
     manifest_hash: Mapped[str] = mapped_column(String(72), primary_key=True)
