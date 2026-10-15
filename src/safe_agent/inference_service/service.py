@@ -28,6 +28,10 @@ from starlette.concurrency import run_in_threadpool
 from safe_agent.contracts.actions import parse_proposal_json
 from safe_agent.contracts.base import Identifier, StrictModel, require_aware
 from safe_agent.contracts.inference import InferenceRequest, InferenceTransportReply
+from safe_agent.contracts.inference_coordinator import (
+    CoordinatedInferenceEnvelope,
+    TrustedDispatchAuthenticator,
+)
 from safe_agent.inference.gateway import _check_candidate
 from safe_agent.inference.mock import OfflineMockInferenceTransport
 
@@ -203,7 +207,8 @@ class _ServiceDispatch:
             if not 0 < len(answer.model_dump_json().encode("utf-8")) <= policy.max_response_bytes:
                 raise ValueError("inference reply output limit exceeded")
             checked = parse_proposal_json(answer.output_json)
-            _check_candidate(checked, req.task, req.availability)
+            candidate = _check_candidate(checked, req.task, req.availability)
+            answer = answer.model_copy(update={"output_json": candidate.model_dump_json()})
             with self._lock:
                 self._completed += 1
             return answer
@@ -239,6 +244,7 @@ def create_inference_service(
     authenticator: TrustedWorkloadAuthenticator,
     *,
     backend: OfflineMockInferenceTransport | None = None,
+    dispatch_authenticator: TrustedDispatchAuthenticator | None = None,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     monotonic: Callable[[], float] = time.monotonic,
 ) -> FastAPI:
@@ -248,6 +254,8 @@ def create_inference_service(
     if type(authenticator) is not TrustedWorkloadAuthenticator:
         raise TypeError("trusted exact authenticator required")
 
+    if dispatch_authenticator is not None and type(dispatch_authenticator) is not TrustedDispatchAuthenticator:
+        raise TypeError("exact trusted dispatch authenticator required")
     dispatch = _ServiceDispatch(
         policy,
         backend if backend is not None else OfflineMockInferenceTransport(),
@@ -279,7 +287,8 @@ def create_inference_service(
             media_type="application/json", headers={"Cache-Control": "no-store"},
         )
 
-    @app.post("/v1/infer")
+    # Coordinated mode does not expose the legacy raw inference endpoint.
+    @app.post("/v1/dispatch" if dispatch_authenticator is not None else "/v1/infer")
     async def inference(request: Request) -> Response:
         if not _authenticate(request):
             dispatch.reject()
@@ -306,9 +315,15 @@ def create_inference_service(
             )
             if not isinstance(parsed, dict):
                 raise ValueError("not one inference request object")
-            admitted = InferenceRequest.model_validate_json(
-                output.decode("utf-8", errors="strict"),
-            )
+            if dispatch_authenticator is not None:
+                envelope = CoordinatedInferenceEnvelope.model_validate_json(
+                    output.decode("utf-8", errors="strict"),
+                )
+                admitted = dispatch_authenticator.verify(envelope)
+            else:
+                admitted = InferenceRequest.model_validate_json(
+                    output.decode("utf-8", errors="strict"),
+                )
         except Exception:
             dispatch.reject()
             return Response(status_code=400, content=b"", headers={"Cache-Control": "no-store"})

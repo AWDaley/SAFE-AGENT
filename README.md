@@ -321,3 +321,17 @@ planner/sidecar through an at-most-once dispatcher. Expired or uncertain
 invocations retain conservative capacity. See
 [atomic admission and limitations](docs/M7_ATOMIC_INFERENCE_ADMISSION.md).
 **M5 LIVE GOOGLE ACCEPTANCE remains BLOCKED; no hosted model is enabled.**
+
+## M7-05c — opt-in fenced offline inference dispatch
+
+`TrustedInferenceCoordinator` now joins durable admission to a fenced,
+commit-before-send invocation marker and a coordinator-authenticated private
+Unix-socket sidecar request. Caller crashes and lost replies never silently
+resend a started invocation; uncertain work retains its cost hold and outstanding
+capacity. Coordinated mode disables the raw `/v1/infer` endpoint. Ownership-journal
+socket recovery rejects unowned stale paths. No historical migrations change.
+
+Run `python scripts/smoke_inference_coordinator.py` for the synthetic caller-crash
+and sidecar-restart acceptance. See [M7 coordinated dispatch](docs/M7_COORDINATED_DISPATCH.md)
+for exact trust boundaries and remaining M7-05d/e work. Existing operator planning
+routes are not yet wired to the coordinator. **M5 LIVE GOOGLE ACCEPTANCE: BLOCKED.**

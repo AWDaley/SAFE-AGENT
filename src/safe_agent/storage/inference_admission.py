@@ -252,6 +252,37 @@ class TrustedInferenceAdmission:
             issued_at=issued_at, deadline_at=deadline_at, task=context, availability=projection,
         )
 
+    def _existing(self, tx: TaskTransaction, row: InferenceInvocationRow,
+                  claim: PlanningLease, context: SafeTaskContext, projection: Projection,
+                  intent_hash: str, upper: int) -> InferenceAdmissionReceipt:
+        """Verify existing bindings and both ledgers inside the caller's task lock."""
+        bound = _binding(row)
+        request = self._request(
+            context, projection, request_id=bound.request_id,
+            issued_at=bound.issued_at, deadline_at=bound.deadline_at,
+        )
+        if bind_planning_attempt(request, claim) != bound:
+            raise InferenceAdmissionDenied()
+        admission = tx.session.get(InferenceAdmissionRow, row.request_id)
+        reserve = tx.session.get(InferenceBudgetReservationRow, row.request_id)
+        if (admission is None or reserve is None
+                or admission.binding_hash != bound.binding_hash
+                or admission.policy_hash != self._policy_hash
+                or admission.authority_key != "global" or admission.intent_hash != intent_hash
+                or _utc(admission.admitted_at) != bound.issued_at
+                or reserve.organization_id != context.organization_id
+                or reserve.task_id != claim.task_id or reserve.backend_kind != "REMOTE"
+                or reserve.route_id != bound.route_id or reserve.model_revision != bound.model_revision
+                or reserve.prompt_digest != bound.prompt_digest
+                or reserve.max_microusd != upper or _utc(reserve.deadline_at) != bound.deadline_at
+                or _utc(reserve.reserved_at) != bound.issued_at):
+            raise InferenceAdmissionDenied()
+        _audit_events(tx, reserve)
+        return InferenceAdmissionReceipt(
+            disposition="EXISTING", binding=bound, invocation=_history(tx, row, bound),
+            reservation=_receipt(reserve),
+        )
+
     def admit(self, principal: Principal, lease: PlanningLease, prompt: str) -> InferenceAdmissionReceipt:
         """Durable admission or exact-repeat metadata; never calls a model.
 
@@ -290,32 +321,7 @@ class TrustedInferenceAdmission:
                                       "lease": claim, "prompt_hash": sha256(data.decode("utf-8")),
                                       "max_microusd": upper})
                 if row is not None:
-                    bound = _binding(row)
-                    request = self._request(
-                        context, projection, request_id=bound.request_id,
-                        issued_at=bound.issued_at, deadline_at=bound.deadline_at,
-                    )
-                    if bind_planning_attempt(request, claim) != bound:
-                        raise InferenceAdmissionDenied()
-                    admission = tx.session.get(InferenceAdmissionRow, row.request_id)
-                    reserve = tx.session.get(InferenceBudgetReservationRow, row.request_id)
-                    if (admission is None or reserve is None
-                            or admission.binding_hash != bound.binding_hash
-                            or admission.policy_hash != self._policy_hash
-                            or admission.authority_key != "global" or admission.intent_hash != intent_hash
-                            or _utc(admission.admitted_at) != bound.issued_at
-                            or reserve.organization_id != context.organization_id
-                            or reserve.task_id != claim.task_id or reserve.backend_kind != "REMOTE"
-                            or reserve.route_id != bound.route_id or reserve.model_revision != bound.model_revision
-                            or reserve.prompt_digest != bound.prompt_digest
-                            or reserve.max_microusd != upper or _utc(reserve.deadline_at) != bound.deadline_at
-                            or _utc(reserve.reserved_at) != bound.issued_at):
-                        raise InferenceAdmissionDenied()
-                    _audit_events(tx, reserve)
-                    return InferenceAdmissionReceipt(
-                        disposition="EXISTING", binding=bound, invocation=_history(tx, row, bound),
-                        reservation=_receipt(reserve),
-                    )
+                    return self._existing(tx, row, claim, context, projection, intent_hash, upper)
                 _live_attempt(tx, claim, now)
                 self._capacity(tx, context, now)
                 deadline = min(now + timedelta(seconds=pol.timeout_seconds),
