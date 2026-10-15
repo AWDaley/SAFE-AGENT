@@ -1,8 +1,8 @@
-"""M7-01 inference-only gateway. A proposal is data, never execution authority.
+"""Inference-only gateway: model output never becomes execution authority.
 
-This module has no HTTP client, connector, broker, database, provider secrets,
-or model tool registry. Only trusted bootstrap can select the route/transport.
-Outbound-network transports are NOT implemented by this milestone.
+Trusted bootstrap selects the transport and optional M7-03 SQL cost ledger.
+Models and operator requests see neither the SQL budget store nor provider
+credentials, business-system adapters, or an executable tool registry.
 """
 
 from __future__ import annotations
@@ -29,7 +29,9 @@ from safe_agent.contracts.inference import (
     InferenceTransportReply,
 )
 from safe_agent.contracts.office import Projection
+from safe_agent.inference.mock import OfflineMockInferenceTransport
 from safe_agent.inference.transport import InferenceTransport
+from safe_agent.storage.inference_budget import InferenceBudgetDenied, InferenceBudgetLedger
 
 _DENIAL_CODES = (
     "INVALID_INFERENCE_CONTEXT",
@@ -150,23 +152,24 @@ def _check_candidate(
 
 
 class InferenceGateway:
-    """Trusted route + typed provider-neutral interface, mock-backed for M7-01.
+    """Typed inference admission and optional durable spending reservation.
 
-    Actual network transports must provide their own enforced deadlines,
-    isolated credentials, usage reconciliation and egress policy (M7-02).
-    Wall-clock checks here can reject late results but cannot interrupt an
-    arbitrary blocking Python backend, so untrusted transports are forbidden.
+    The M7-02 restricted network transport must run on a separately secured
+    inference-only host. A Python callback can still block indefinitely;
+    OS hard deadlines and verified external billing are release blockers.
     """
 
     def __init__(
         self, policy: InferenceRoutePolicy, transport: InferenceTransport, *,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        budget_ledger: InferenceBudgetLedger | None = None,
     ) -> None:
         if transport is None or not callable(getattr(transport, "infer", None)):
             raise TypeError("trusted inference transport is required")
         self._policy = policy
         self._transport = transport
         self._clock = clock
+        self._budget_ledger = budget_ledger
 
     @property
     def policy(self) -> InferenceRoutePolicy:
@@ -211,50 +214,91 @@ class InferenceGateway:
             issued_at=now, deadline_at=deadline,
             task=context, availability=projection,
         )
-        try:
-            raw = self._transport.infer(request)
-        except Exception:
-            # Neither the backend exception nor a raw model response is trusted
-            # to be shown to the operator or recorded as a task event.
-            raise InferenceDenied("INFERENCE_BACKEND_UNAVAILABLE") from None
+        # Reserve estimated maximum cost atomically BEFORE the backend call.
+        # A valid remote response is still unverified for billing purposes.
+        budget = self._budget_ledger
+        if budget is not None:
+            try:
+                budget.reserve(
+                    request, max_microusd=upper_cost,
+                    synthetic_mock=type(self._transport) is OfflineMockInferenceTransport,
+                    now=now,
+                )
+            except InferenceBudgetDenied:
+                raise InferenceDenied("INFERENCE_BUDGET_EXCEEDED") from None
+            except Exception:
+                raise InferenceDenied("INFERENCE_BACKEND_UNAVAILABLE") from None
 
-        if require_aware(self._clock()) >= deadline:
-            raise InferenceDenied("INFERENCE_DEADLINE_EXCEEDED")
-        if type(raw) is not InferenceTransportReply:
-            raise InferenceDenied("INFERENCE_RESPONSE_REJECTED")
-        if (raw.request_id != request.request_id
-                or raw.route_id != request.route_id
-                or raw.model_revision != request.model_revision
-                or raw.prompt_digest != request.prompt_digest):
-            raise InferenceDenied("INFERENCE_RESPONSE_REJECTED")
+        validated = False
+        reported = None
         try:
-            output_bytes = raw.output_json.encode("utf-8", errors="strict")
-        except UnicodeError:
-            raise InferenceDenied("INFERENCE_RESPONSE_REJECTED") from None
-        if not 0 < len(output_bytes) <= max_reply_bytes:
-            raise InferenceDenied("INFERENCE_BUDGET_EXCEEDED")
-        if (raw.reported_usage is not None
-                and (raw.reported_usage.input_tokens > policy.max_prompt_token_proxy
-                     or raw.reported_usage.output_tokens
-                     > policy.max_response_token_proxy)):
-            raise InferenceDenied("INFERENCE_BUDGET_EXCEEDED")
-        try:
-            proposal = _check_candidate(
-                parse_proposal_json(raw.output_json), context, projection,
+            try:
+                raw = self._transport.infer(request)
+            except Exception:
+                # Neither the backend exception nor a raw model response is trusted
+                # to be shown to the operator or recorded as a task event.
+                raise InferenceDenied("INFERENCE_BACKEND_UNAVAILABLE") from None
+    
+            if require_aware(self._clock()) >= deadline:
+                raise InferenceDenied("INFERENCE_DEADLINE_EXCEEDED")
+            if type(raw) is not InferenceTransportReply:
+                raise InferenceDenied("INFERENCE_RESPONSE_REJECTED")
+            if (raw.request_id != request.request_id
+                    or raw.route_id != request.route_id
+                    or raw.model_revision != request.model_revision
+                    or raw.prompt_digest != request.prompt_digest):
+                raise InferenceDenied("INFERENCE_RESPONSE_REJECTED")
+            try:
+                output_bytes = raw.output_json.encode("utf-8", errors="strict")
+            except UnicodeError:
+                raise InferenceDenied("INFERENCE_RESPONSE_REJECTED") from None
+            if not 0 < len(output_bytes) <= max_reply_bytes:
+                raise InferenceDenied("INFERENCE_BUDGET_EXCEEDED")
+            if (raw.reported_usage is not None
+                    and (raw.reported_usage.input_tokens > policy.max_prompt_token_proxy
+                         or raw.reported_usage.output_tokens
+                         > policy.max_response_token_proxy)):
+                raise InferenceDenied("INFERENCE_BUDGET_EXCEEDED")
+            reported = raw.reported_usage
+            try:
+                proposal = _check_candidate(
+                    parse_proposal_json(raw.output_json), context, projection,
+                )
+            except InferenceDenied:
+                raise
+            except (ValueError, TypeError, UnicodeError):
+                raise InferenceDenied("INFERENCE_RESPONSE_REJECTED") from None
+            result = InferenceOutcome(
+                request_id=request.request_id,
+                route_id=request.route_id,
+                model_revision=request.model_revision,
+                prompt_digest=request.prompt_digest,
+                proposal_digest=sha256(proposal),
+                proposal=proposal,
+                reported_usage=raw.reported_usage,
             )
-        except InferenceDenied:
-            raise
-        except (ValueError, TypeError, UnicodeError):
-            raise InferenceDenied("INFERENCE_RESPONSE_REJECTED") from None
-        return InferenceOutcome(
-            request_id=request.request_id,
-            route_id=request.route_id,
-            model_revision=request.model_revision,
-            prompt_digest=request.prompt_digest,
-            proposal_digest=sha256(proposal),
-            proposal=proposal,
-            reported_usage=raw.reported_usage,
-        )
+            validated = True
+            return result
+        finally:
+            if budget is not None:
+                try:
+                    at = require_aware(self._clock())
+                    if validated and type(self._transport) is OfflineMockInferenceTransport:
+                        budget.close_synthetic(
+                            request.request_id, now=at, exact_offline_mock=True,
+                        )
+                    else:
+                        # All uncertain, failed or remote-inference requests
+                        # retain their reservation until verified reconciliation.
+                        budget.mark_uncertain(
+                            request.request_id, now=at,
+                            reason="UNVERIFIED_RESULT" if validated else "UNKNOWN_EFFECT",
+                            reported_usage=reported,
+                        )
+                except Exception:
+                    # Never claim a free call if ledger reconciliation fails.
+                    # Its durable reservation continues to consume capacity.
+                    raise InferenceDenied("INFERENCE_BACKEND_UNAVAILABLE") from None
 
     def generate(self, prompt: str) -> str:
         """Drop-in text-only callback for ClosedJsonPlanner at trusted startup."""

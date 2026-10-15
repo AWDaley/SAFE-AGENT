@@ -269,6 +269,16 @@ Inference credentials must be held outside the operator process and model
 container; this change does not connect a live model provider.
 See docs/M7_RESTRICTED_EGRESS.md.
 
+M7-03 adds opt-in SQL-backed, global/tenant/task inference cost ceilings
+using integer micro-USD, atomic reservations BEFORE any metered backend
+call, hash-linked budget evidence, and fail-closed indefinite holds on
+uncertain charges. Only the exact offline mock can settle at zero without
+external billing evidence; a separate trusted billing verifier may supply
+one scoped HMAC attestation to reconcile reserved cost. Provider-reported
+token counts never count as verified billing. The legacy unbudgeted
+M7 test interface remains available for synthetic fixtures ONLY; no
+hosted inference is production-approved. See docs/M7_INFERENCE_BUDGETS.md.
+
 **M5 LIVE ACCEPTANCE: BLOCKED.** Passing offline tests or generating a
 synthetic proposal never authorizes real provider execution or production
 deployment.
