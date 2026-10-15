@@ -2,12 +2,15 @@
 
 A contract-first, privacy-minimized foundation for an autonomous office agent.
 
-**Status (October 14, 2026): M0–M4 synthetic execution, the offline M5
-TAL/Google integration and the opt-in M6 operator inbox are on main.**
-A trusted synthetic task assignment increment (M6-01b) is being added without
-granting the model direct provider access. **M5 LIVE ACCEPTANCE: BLOCKED.**
-The Google test recovery worker remains MockTransport-only; no actual Google
-event insertion and independent readback has been approved or verified.
+**Status (October 14, 2026): M0–M6 synthetic task intake, deterministic
+workflows, durable planning, supervised fake-worker recovery and no-network
+Docker model isolation are integrated into main (PRs #20–24 merged).**
+M7-01 adds a provider-neutral inference contract and offline mock, without
+giving the model privileged provider tools or access to sensitive identifiers.
+**M5 LIVE ACCEPTANCE: BLOCKED.** The Google test recovery worker remains
+MockTransport-only. No actual hosted Google event write or independently
+verified live readback has been approved. The code is not production-approved;
+external security review and main-branch protection are still outstanding.
 
 ## Architecture and milestones
 
@@ -22,6 +25,7 @@ event insertion and independent readback has been approved or verified.
 - [M0 foundation decision](docs/adr/0001-mvp-scope.md)
 - [Upstream TAL compatibility findings](docs/tal-compatibility.md)
 - [Security conformance coverage](docs/security-test-matrix.md)
+- [M7-01 inference contracts and offline mock](docs/M7_INFERENCE_CONTRACTS.md)
 
 Upstream TAL: [TervoroAgenticLanguage-TAL-](https://github.com/AWDaley/TervoroAgenticLanguage-TAL-)
 (historical M0 baseline `23d48c4a4c66ab4d7ef722794f755f0bfcd753d4`).
@@ -246,5 +250,17 @@ docs/M6_OPERATOR_INBOX.md, docs/M6_TASK_INTAKE.md and
 docs/M6_SYNTHETIC_WORKFLOW.md, docs/M6_SUPERVISED_SYNTHETIC_WORKER.md
 docs/M6_PERSISTENT_PLANNING.md and docs/M6_ISOLATED_MODEL_RUNTIME.md.
 
-**M5 LIVE ACCEPTANCE: BLOCKED.** Passing offline tests and creating a synthetic
-task never authorize real provider execution or production deployment.
+## M7-01 — Inference-only contracts (offline mock)
+
+A trusted, versioned InferenceRoutePolicy chooses a narrow calendar
+proposal/clarification capability and caps response bytes, time,
+conservative token proxies and estimated cost. The new InferenceGateway
+accepts only canonical, sanitized task/projection input, returns typed
+proposal data (never execution authority), and supports a deterministic
+no-network OfflineMockInferenceTransport. A future separately reviewed
+gateway may add isolated model-provider transport and verified billing.
+See docs/M7_INFERENCE_CONTRACTS.md.
+
+**M5 LIVE ACCEPTANCE: BLOCKED.** Passing offline tests or generating a
+synthetic proposal never authorizes real provider execution or production
+deployment.
