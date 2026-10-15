@@ -75,6 +75,40 @@ jobs:
           python scripts/check_m7_budget_lineage.py --verify-database
           python -c "from sqlalchemy import create_engine, inspect; e=create_engine('sqlite+pysqlite:///./ci-m4-migration.sqlite'); assert {'safe_action_outbox', 'safe_fake_provider_effects', 'safe_fake_provider_state', 'safe_google_test_connections', 'safe_google_oauth_pending', 'safe_office_execution_authorizations', 'safe_google_test_outbox_bindings', 'safe_task_intake_keys', 'safe_planning_workspaces', 'safe_planning_attempts', 'safe_planning_outcomes', 'safe_inference_budget_accounts', 'safe_inference_budget_reservations', 'safe_inference_budget_events', 'safe_inference_billing_attestations'} <= set(inspect(e).get_table_names()); assert {'provider_simulation_hash', 'provider_simulation_json'} <= {x['name'] for x in inspect(e).get_columns('safe_google_test_outbox_bindings')}"
 
+  m7-postgres-budget-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.6
+        env:
+          POSTGRES_USER: safe_infer_ci
+          POSTGRES_PASSWORD: synthetic_ci_only_not_production
+          POSTGRES_DB: safe_infer_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U safe_infer_ci -d safe_infer_ci"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      SAFE_AGENT_DATABASE_URL: postgresql+psycopg://safe_infer_ci:synthetic_ci_only_not_production@localhost:5432/safe_infer_ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies and PostgreSQL driver
+        run: |
+          python -m pip install -r requirements.lock
+          python -m pip install -e '.[dev,postgres]'
+      - name: Check canonical M7 budget schema before migration
+        run: python scripts/check_m7_budget_lineage.py
+      - name: Apply PR27 canonical Alembic migrations to real PostgreSQL
+        run: alembic upgrade head
+      - name: Verify concurrent global and tenant cost holds, rollback, and immutable triggers
+        run: python scripts/check_m7_postgres_concurrency.py
+
   tal-office-interop:
     runs-on: ubuntu-latest
     steps:
