@@ -185,7 +185,7 @@ def _change_account(
     # Conditional SQL UPDATE is atomic even under simultaneous tenant tasks;
     # never rely on SELECT/modify/flush in a SQLite test or multi-worker host.
     table = InferenceBudgetAccountRow
-    result = tx.session.execute(
+    result = tx.session.connection().execute(
         update(table)
         .where(
             table.scope_key == key,
