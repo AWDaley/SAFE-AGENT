@@ -22,13 +22,13 @@ from safe_agent.contracts.actions import (
     parse_proposal_json,
 )
 from safe_agent.contracts.base import require_aware
-from safe_agent.contracts.inference_budget import UncertaintyReason
 from safe_agent.contracts.inference import (
     InferenceOutcome,
     InferenceRequest,
     InferenceRoutePolicy,
     InferenceTransportReply,
 )
+from safe_agent.contracts.inference_budget import UncertaintyReason
 from safe_agent.contracts.office import Projection
 from safe_agent.inference.transport import InferenceTransport
 
