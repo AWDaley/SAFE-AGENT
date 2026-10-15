@@ -1,0 +1,22 @@
+name: M7 tracked source snapshot
+on:
+  push:
+    branches: [feature/m7-durable-inference-foundation]
+    paths: [.github/workflows/m7-source-snapshot.yml]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Archive tracked source only
+        run: git archive --format=tar.gz --output=/tmp/safe-agent-source.tar.gz HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: safe-agent-tracked-source
+          path: /tmp/safe-agent-source.tar.gz
+          retention-days: 1
+          if-no-files-found: error
