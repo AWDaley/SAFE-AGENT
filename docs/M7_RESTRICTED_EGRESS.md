@@ -164,5 +164,11 @@ Release blockers still requiring independent work:
 - Hosted Google acceptance remains BLOCKED; no production customer
   calendars or OAuth grants are permitted through this inference path.
 
+M7-03 adds an optional durable InferenceBudgetLedger: authenticated task,
+tenant and global reservations are committed before model dispatch, and
+uncertain/unverified charges retain the maximum estimated hold. The
+accounting layer is not a production invoice reconciler. See
+M7_INFERENCE_BUDGETS.md for the exact conservative state machine.
+
 **Never claim provider token reports or local cost estimates as verified
 billing evidence. Never treat inference output as execution permission.**

@@ -269,6 +269,14 @@ Inference credentials must be held outside the operator process and model
 container; this change does not connect a live model provider.
 See docs/M7_RESTRICTED_EGRESS.md.
 
+M7-03 introduces SQL-backed, task/tenant/global inference budgets. The
+trusted harness can reserve a worst-case estimated charge before a model
+call, record unverified reported usage and retain all held capacity when
+a response or billing status is uncertain. A background-free recovery
+API closes expired in-flight slots without crediting back money.
+No inferred token count or returned proposal is a verified invoice.
+See docs/M7_INFERENCE_BUDGETS.md.
+
 **M5 LIVE ACCEPTANCE: BLOCKED.** Passing offline tests or generating a
 synthetic proposal never authorizes real provider execution or production
 deployment.

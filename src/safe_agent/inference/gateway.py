@@ -11,7 +11,7 @@ import json
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from secrets import token_hex
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from safe_agent.agent.interfaces import SafeTaskContext
 from safe_agent.agent.json_planner import PLANNER_INSTRUCTION
@@ -22,6 +22,7 @@ from safe_agent.contracts.actions import (
     parse_proposal_json,
 )
 from safe_agent.contracts.base import require_aware
+from safe_agent.contracts.inference_budget import UncertaintyReason
 from safe_agent.contracts.inference import (
     InferenceOutcome,
     InferenceRequest,
@@ -30,6 +31,9 @@ from safe_agent.contracts.inference import (
 )
 from safe_agent.contracts.office import Projection
 from safe_agent.inference.transport import InferenceTransport
+
+if TYPE_CHECKING:
+    from safe_agent.storage.inference_budget import InferenceBudgetLedger
 
 _DENIAL_CODES = (
     "INVALID_INFERENCE_CONTEXT",
@@ -161,12 +165,14 @@ class InferenceGateway:
     def __init__(
         self, policy: InferenceRoutePolicy, transport: InferenceTransport, *,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        budget: InferenceBudgetLedger | None = None,
     ) -> None:
         if transport is None or not callable(getattr(transport, "infer", None)):
             raise TypeError("trusted inference transport is required")
         self._policy = policy
         self._transport = transport
         self._clock = clock
+        self._budget = budget
 
     @property
     def policy(self) -> InferenceRoutePolicy:
@@ -211,50 +217,87 @@ class InferenceGateway:
             issued_at=now, deadline_at=deadline,
             task=context, availability=projection,
         )
-        try:
-            raw = self._transport.infer(request)
-        except Exception:
-            # Neither the backend exception nor a raw model response is trusted
-            # to be shown to the operator or recorded as a task event.
-            raise InferenceDenied("INFERENCE_BACKEND_UNAVAILABLE") from None
+        # A durable spending reservation is mandatory when a trusted host
+        # configures the budget ledger. No optional broker/model fallback can
+        # bypass its admission, and no transport call precedes the SQL commit.
+        budget = self._budget
+        if budget is not None:
+            try:
+                budget.reserve(request, policy, now=now)
+            except Exception:
+                raise InferenceDenied("INFERENCE_BUDGET_EXCEEDED") from None
 
-        if require_aware(self._clock()) >= deadline:
-            raise InferenceDenied("INFERENCE_DEADLINE_EXCEEDED")
-        if type(raw) is not InferenceTransportReply:
-            raise InferenceDenied("INFERENCE_RESPONSE_REJECTED")
-        if (raw.request_id != request.request_id
-                or raw.route_id != request.route_id
-                or raw.model_revision != request.model_revision
-                or raw.prompt_digest != request.prompt_digest):
-            raise InferenceDenied("INFERENCE_RESPONSE_REJECTED")
+        reason: UncertaintyReason = "BACKEND_EXCEPTION"
         try:
-            output_bytes = raw.output_json.encode("utf-8", errors="strict")
-        except UnicodeError:
-            raise InferenceDenied("INFERENCE_RESPONSE_REJECTED") from None
-        if not 0 < len(output_bytes) <= max_reply_bytes:
-            raise InferenceDenied("INFERENCE_BUDGET_EXCEEDED")
-        if (raw.reported_usage is not None
-                and (raw.reported_usage.input_tokens > policy.max_prompt_token_proxy
-                     or raw.reported_usage.output_tokens
-                     > policy.max_response_token_proxy)):
-            raise InferenceDenied("INFERENCE_BUDGET_EXCEEDED")
-        try:
-            proposal = _check_candidate(
-                parse_proposal_json(raw.output_json), context, projection,
+            try:
+                raw = self._transport.infer(request)
+            except Exception:
+                raise InferenceDenied("INFERENCE_BACKEND_UNAVAILABLE") from None
+
+            reason = "LATE_RESPONSE"
+            if require_aware(self._clock()) >= deadline:
+                raise InferenceDenied("INFERENCE_DEADLINE_EXCEEDED")
+            reason = "INVALID_RESPONSE"
+            if type(raw) is not InferenceTransportReply:
+                raise InferenceDenied("INFERENCE_RESPONSE_REJECTED")
+            if (raw.request_id != request.request_id
+                    or raw.route_id != request.route_id
+                    or raw.model_revision != request.model_revision
+                    or raw.prompt_digest != request.prompt_digest):
+                raise InferenceDenied("INFERENCE_RESPONSE_REJECTED")
+            try:
+                output_bytes = raw.output_json.encode("utf-8", errors="strict")
+            except UnicodeError:
+                raise InferenceDenied("INFERENCE_RESPONSE_REJECTED") from None
+            if not 0 < len(output_bytes) <= max_reply_bytes:
+                raise InferenceDenied("INFERENCE_BUDGET_EXCEEDED")
+            if (raw.reported_usage is not None
+                    and (raw.reported_usage.input_tokens > policy.max_prompt_token_proxy
+                         or raw.reported_usage.output_tokens
+                         > policy.max_response_token_proxy)):
+                reason = "REPORTED_USAGE_OVERRUN"
+                raise InferenceDenied("INFERENCE_BUDGET_EXCEEDED")
+            try:
+                proposal = _check_candidate(
+                    parse_proposal_json(raw.output_json), context, projection,
+                )
+            except InferenceDenied:
+                raise
+            except (ValueError, TypeError, UnicodeError):
+                raise InferenceDenied("INFERENCE_RESPONSE_REJECTED") from None
+
+            result = InferenceOutcome(
+                request_id=request.request_id,
+                route_id=request.route_id,
+                model_revision=request.model_revision,
+                prompt_digest=request.prompt_digest,
+                proposal_digest=sha256(proposal),
+                proposal=proposal,
+                reported_usage=raw.reported_usage,
             )
-        except InferenceDenied:
-            raise
-        except (ValueError, TypeError, UnicodeError):
-            raise InferenceDenied("INFERENCE_RESPONSE_REJECTED") from None
-        return InferenceOutcome(
-            request_id=request.request_id,
-            route_id=request.route_id,
-            model_revision=request.model_revision,
-            prompt_digest=request.prompt_digest,
-            proposal_digest=sha256(proposal),
-            proposal=proposal,
-            reported_usage=raw.reported_usage,
-        )
+            if budget is not None:
+                evidence = budget.finish(
+                    request, now=require_aware(self._clock()),
+                    proposal_digest=result.proposal_digest, usage=raw.reported_usage,
+                )
+                if evidence.status != "RECORDED_UNVERIFIED":
+                    raise InferenceDenied("INFERENCE_DEADLINE_EXCEEDED")
+            return result
+        except Exception as error:
+            if budget is not None:
+                # All post-reservation outcomes are financially uncertain
+                # until an independent verified billing reconciler exists.
+                # Fail closed even if recording uncertainty itself fails.
+                try:
+                    budget.uncertain(
+                        request, reason=reason,
+                        now=require_aware(self._clock()),
+                    )
+                except Exception:
+                    raise InferenceDenied("INFERENCE_BACKEND_UNAVAILABLE") from None
+            if isinstance(error, InferenceDenied):
+                raise error from None
+            raise InferenceDenied("INFERENCE_BACKEND_UNAVAILABLE") from None
 
     def generate(self, prompt: str) -> str:
         """Drop-in text-only callback for ClosedJsonPlanner at trusted startup."""

@@ -7,6 +7,7 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     DateTime,
     ForeignKey,
@@ -111,6 +112,75 @@ class PlanningOutcomeRow(Base):
     proposal_hash: Mapped[str | None] = mapped_column(String(72))
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     outcome_hash: Mapped[str] = mapped_column(String(72), nullable=False)
+
+
+
+class InferenceBudgetScopeRow(Base):
+    """Counters are reserved atomically across global, tenant and task scopes."""
+
+    __tablename__ = "safe_inference_budget_scopes"
+    scope_key: Mapped[str] = mapped_column(String(260), primary_key=True)
+    profile_hash: Mapped[str] = mapped_column(String(72), nullable=False)
+    max_microusd: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    held_microusd: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    max_calls: Mapped[int] = mapped_column(Integer, nullable=False)
+    calls_used: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_inflight: Mapped[int] = mapped_column(Integer, nullable=False)
+    active_calls: Mapped[int] = mapped_column(Integer, nullable=False)
+    requires_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class InferenceBudgetReservationRow(Base):
+    """Privacy-minimized request reservation, never a verified provider bill."""
+
+    __tablename__ = "safe_inference_budget_reservations"
+    request_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    task_id: Mapped[str] = mapped_column(
+        ForeignKey("safe_tasks.task_id"), nullable=False, index=True,
+    )
+    route_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    model_revision: Mapped[str] = mapped_column(String(128), nullable=False)
+    prompt_digest: Mapped[str] = mapped_column(String(72), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(72), nullable=False)
+    profile_hash: Mapped[str] = mapped_column(String(72), nullable=False)
+    price_policy_hash: Mapped[str] = mapped_column(String(72), nullable=False)
+    input_price_microusd: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    output_price_microusd: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    input_proxy_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    output_proxy_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    maximum_held_microusd: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    uncertainty_reason: Mapped[str | None] = mapped_column(String(40))
+    reported_input_tokens: Mapped[int | None] = mapped_column(Integer)
+    reported_output_tokens: Mapped[int | None] = mapped_column(Integer)
+    reported_source: Mapped[str | None] = mapped_column(String(24))
+    reported_estimated_microusd: Mapped[int | None] = mapped_column(BigInteger)
+    proposal_digest: Mapped[str | None] = mapped_column(String(72))
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    __table_args__ = (
+        Index("ix_safe_inference_reservation_state_deadline", "status", "deadline_at"),
+    )
+
+
+class InferenceBudgetEventRow(Base):
+    """Immutable per-request hash-linked event, without prompt text or keys."""
+
+    __tablename__ = "safe_inference_budget_events"
+    request_id: Mapped[str] = mapped_column(
+        ForeignKey("safe_inference_budget_reservations.request_id"),
+        primary_key=True,
+    )
+    ordinal: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    previous_hash: Mapped[str | None] = mapped_column(String(72))
+    event_hash: Mapped[str] = mapped_column(String(72), nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class ManifestRow(Base):
