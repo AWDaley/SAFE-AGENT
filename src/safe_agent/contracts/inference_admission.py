@@ -9,7 +9,10 @@ from pydantic import Field, model_validator
 from safe_agent.contracts.base import StrictModel
 from safe_agent.contracts.inference import InferenceRoutePolicy
 from safe_agent.contracts.inference_budget import InferenceBudgetLimits, InferenceReservationReceipt
-from safe_agent.contracts.inference_dispatch import InferenceInvocationBinding, InferenceInvocationView
+from safe_agent.contracts.inference_dispatch import (
+    InferenceInvocationBinding,
+    InferenceInvocationView,
+)
 
 
 class InferenceThroughputLimits(StrictModel):

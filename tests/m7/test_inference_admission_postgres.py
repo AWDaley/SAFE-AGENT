@@ -16,7 +16,10 @@ from sqlalchemy import create_engine, delete, event, func, select, text, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 
-from safe_agent.storage.inference_admission import InferenceAdmissionDenied, TrustedInferenceAdmission
+from safe_agent.storage.inference_admission import (
+    InferenceAdmissionDenied,
+    TrustedInferenceAdmission,
+)
 from safe_agent.storage.models import (
     InferenceAdmissionAuthorityRow,
     InferenceAdmissionRow,

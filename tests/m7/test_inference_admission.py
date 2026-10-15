@@ -12,8 +12,14 @@ from pydantic import ValidationError
 from sqlalchemy import event, func, select, update
 
 from safe_agent.canonical import canonical_json
-from safe_agent.contracts.inference_admission import InferenceAdmissionPolicy, InferenceThroughputLimits
-from safe_agent.storage.inference_admission import InferenceAdmissionDenied, TrustedInferenceAdmission
+from safe_agent.contracts.inference_admission import (
+    InferenceAdmissionPolicy,
+    InferenceThroughputLimits,
+)
+from safe_agent.storage.inference_admission import (
+    InferenceAdmissionDenied,
+    TrustedInferenceAdmission,
+)
 from safe_agent.storage.inference_budget import InferenceBudgetDenied, InferenceBudgetLedger
 from safe_agent.storage.models import (
     InferenceAdmissionAuthorityRow,

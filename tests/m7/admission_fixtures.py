@@ -8,7 +8,10 @@ from safe_agent.agent.json_planner import PLANNER_INSTRUCTION
 from safe_agent.canonical import canonical_json, sha256
 from safe_agent.contracts.control import Task, TaskBudget, TaskManifest
 from safe_agent.contracts.inference import InferenceRoutePolicy
-from safe_agent.contracts.inference_admission import InferenceAdmissionPolicy, InferenceThroughputLimits
+from safe_agent.contracts.inference_admission import (
+    InferenceAdmissionPolicy,
+    InferenceThroughputLimits,
+)
 from safe_agent.contracts.inference_budget import InferenceBudgetLimits
 from safe_agent.contracts.office import AvailableSlot, Projection
 from safe_agent.security.principal import Principal

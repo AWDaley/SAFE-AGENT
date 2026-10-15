@@ -21,7 +21,10 @@ from safe_agent.canonical import sha256
 from safe_agent.contracts.base import require_aware
 from safe_agent.contracts.control import Task, TaskManifest
 from safe_agent.contracts.inference import InferenceRequest
-from safe_agent.contracts.inference_admission import InferenceAdmissionPolicy, InferenceAdmissionReceipt
+from safe_agent.contracts.inference_admission import (
+    InferenceAdmissionPolicy,
+    InferenceAdmissionReceipt,
+)
 from safe_agent.contracts.inference_dispatch import (
     InferenceInvocationBinding,
     InferenceInvocationEvent,
