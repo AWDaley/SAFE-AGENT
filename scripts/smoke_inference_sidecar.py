@@ -16,10 +16,11 @@ from pathlib import Path
 
 import httpx
 
+from safe_agent.agent.interfaces import SafeTaskContext
 from safe_agent.agent.json_planner import PLANNER_INSTRUCTION
 from safe_agent.canonical import sha256
 from safe_agent.contracts.inference import InferenceRequest
-from tests.m7.test_inference_gateway import fixture
+from safe_agent.contracts.office import AvailableSlot, Projection
 
 WORKLOAD_KEY = "synthetic_offline_udsonly_service_token_0123456789abcdef"
 HOST = "inference.example.com"
@@ -60,14 +61,30 @@ def main() -> None:
             if not socket_path.is_socket() or socket_path.stat().st_mode & 0o077:
                 raise AssertionError("inference service socket permissions unsafe")
 
-            context, projection, _ = fixture()
-            # The real sidecar clock differs from the fixed test clock:
-            # refresh only the synthetic projection's observation timestamps.
+            # Construct a fresh, entirely synthetic task observation; the
+            # standalone script does not import the repository test package.
             actual = datetime.now(UTC)
-            projection = projection.model_copy(update={
-                "fetched_at": actual - timedelta(seconds=1),
-                "expires_at": actual + timedelta(minutes=2),
-            })
+            allowed_start = actual + timedelta(days=1)
+            allowed_end = allowed_start + timedelta(hours=2)
+            context = SafeTaskContext(
+                task_id="task_offline_smoke",
+                organization_id="org_demo",
+                calendar_ref="ref_calendar", customer_ref="ref_customer",
+                allowed_start=allowed_start, allowed_end=allowed_end,
+                duration_minutes=30, time_zone="America/New_York",
+                template_id="follow_up_v1",
+                simulation_ref="simulation_pending",
+            )
+            projection = Projection(
+                task_id=context.task_id,
+                organization_id=context.organization_id,
+                calendar_ref=context.calendar_ref, revision="proj_offline_smoke",
+                fetched_at=actual - timedelta(seconds=1),
+                expires_at=actual + timedelta(minutes=2),
+                free_slots=(AvailableSlot(
+                    start_at=allowed_start, end_at=allowed_end,
+                ),),
+            )
             request = InferenceRequest(
                 request_id="inf_" + "e" * 32,
                 route_id="route_test_only",
