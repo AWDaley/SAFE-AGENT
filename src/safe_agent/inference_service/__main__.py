@@ -9,18 +9,19 @@ and operational alerting must be configured by the host administrator.
 from __future__ import annotations
 
 import os
-import socket
 import stat
 from pathlib import Path
 
 from fastapi import FastAPI
 from pydantic import SecretStr
 
+from safe_agent.contracts.inference_coordinator import TrustedDispatchAuthenticator
 from safe_agent.inference_service.service import (
     TrustedInferenceServicePolicy,
     TrustedWorkloadAuthenticator,
     create_inference_service,
 )
+from safe_agent.inference_service.socket_lifecycle import OwnedUnixListener
 
 
 def _secret_from_file(path: Path) -> SecretStr:
@@ -61,17 +62,23 @@ def bootstrap() -> tuple[FastAPI, Path]:
             or metadata.st_mode & 0o077):
         raise ValueError("inference socket directory permission denied")
     socket_file = socket_dir / "inference.sock"
-    if socket_file.exists() or socket_file.is_symlink():
-        raise ValueError("refusing to overwrite existing inference socket")
-    auth = TrustedWorkloadAuthenticator(
-        _secret_from_file(Path(os.environ["SAFE_INFER_WORKLOAD_TOKEN_FILE"])),
-    )
+    if socket_file.is_symlink():
+        raise ValueError("refusing a symlink inference socket")
+    # OwnedUnixListener, under its lifetime lock, validates any stale socket.
+    token = _secret_from_file(Path(os.environ["SAFE_INFER_WORKLOAD_TOKEN_FILE"]))
+    auth = TrustedWorkloadAuthenticator(token)
+    dispatch_auth = None
+    if os.environ.get("SAFE_INFER_DISPATCH_KEY_FILE"):
+        key = _secret_from_file(Path(os.environ["SAFE_INFER_DISPATCH_KEY_FILE"]))
+        if key == token:
+            raise ValueError("separate workload and dispatch keys required")
+        dispatch_auth = TrustedDispatchAuthenticator(key)
     policy = TrustedInferenceServicePolicy(
         expected_host=os.environ["SAFE_INFER_HOST"],
         route_id=os.environ["SAFE_INFER_ROUTE"],
         model_revision=os.environ["SAFE_INFER_MODEL_REVISION"],
     )
-    return create_inference_service(policy, auth), socket_file
+    return create_inference_service(policy, auth, dispatch_authenticator=dispatch_auth), socket_file
 
 
 def main() -> None:
@@ -83,21 +90,13 @@ def main() -> None:
 
     # Bind and permission the Unix listener BEFORE Uvicorn accepts any
     # connection. Uvicorn's default UDS mode is not an authorization boundary.
-    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    try:
-        listener.bind(str(socket_path))
-        os.chmod(socket_path, 0o600)
-        listener.listen(32)
+    with OwnedUnixListener(socket_path) as listener:
         uvicorn.run(
             app, fd=listener.fileno(),
             access_log=False, proxy_headers=False,
             server_header=False, date_header=False,
             log_level="warning", lifespan="off",
         )
-    finally:
-        listener.close()
-        if socket_path.is_socket():
-            socket_path.unlink()
 
 
 if __name__ == "__main__":

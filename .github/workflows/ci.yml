@@ -28,6 +28,7 @@ jobs:
           python scripts/export_m5_schemas.py --check
           python scripts/export_m7_dispatch_schemas.py --check
           python scripts/export_m7_admission_schemas.py --check
+          python scripts/export_m7_coordinator_schemas.py --check
       - name: Static typing
         run: mypy src/safe_agent
       - name: Tests
@@ -46,6 +47,10 @@ jobs:
         run: |
           pytest -q tests/m7/test_inference_sidecar.py tests/m7/test_offline_billing_verifier.py
           python scripts/smoke_inference_sidecar.py
+      - name: M7 coordinated dispatch and actual caller/sidecar restart acceptance
+        run: |
+          pytest -q tests/m7/test_inference_coordinator.py tests/m7/test_coordinated_sidecar.py tests/m7/test_coordinated_transport.py tests/m7/test_socket_lifecycle.py
+          python scripts/smoke_inference_coordinator.py
       - name: M7 atomic admission, restart and rollback tests
         run: pytest -q tests/m7/test_inference_admission.py tests/m7/test_inference_admission_schema.py
       - name: M7 invocation foundation and canonical forward-migration tests
@@ -127,6 +132,11 @@ jobs:
         env:
           SAFE_AGENT_TEST_POSTGRES_ADMISSION: '1'
         run: pytest -q tests/m7/test_inference_admission_postgres.py
+
+      - name: Mandatory PostgreSQL fenced dispatch and conservative recovery
+        env:
+          SAFE_AGENT_TEST_POSTGRES_COORDINATOR: '1'
+        run: pytest -q tests/m7/test_coordinator_postgres.py
 
   tal-office-interop:
     runs-on: ubuntu-latest
