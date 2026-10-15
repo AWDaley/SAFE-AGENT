@@ -40,6 +40,10 @@ jobs:
         run: pytest -q tests/m7/test_restricted_https.py
       - name: M7 durable inference budget and uncertain-charge tests
         run: pytest -q tests/m7/test_inference_budget.py
+      - name: M7 independent offline inference sidecar and billing verifier tests
+        run: |
+          pytest -q tests/m7/test_inference_sidecar.py tests/m7/test_offline_billing_verifier.py
+          python scripts/smoke_inference_sidecar.py
       - name: M5 offline release preparation (live gate stays blocked)
         run: python scripts/check_m5_release.py --mode offline
       - name: Compile source

@@ -1,0 +1,45 @@
+# EXAMPLE ONLY — review and adapt service users, paths, TLS proxy and kernel policy.
+# Mount a separate inference-workload token through systemd LoadCredential.
+# Do not mount any Google/OAuth/broker/database secrets or the Docker daemon.
+[Unit]
+Description=SAFE-AGENT restricted offline inference sidecar
+After=network.target
+
+[Service]
+Type=simple
+User=safe-inference
+Group=safe-inference
+WorkingDirectory=/opt/safe-agent
+Environment=SAFE_INFER_SOCKET_DIR=/run/safe-inference
+Environment=SAFE_INFER_HOST=inference.example.com
+Environment=SAFE_INFER_ROUTE=approved_offline_route
+Environment=SAFE_INFER_MODEL_REVISION=offline_mock_v1
+Environment=SAFE_INFER_WORKLOAD_TOKEN_FILE=%d/workload-token
+LoadCredential=workload-token:/etc/safe-inference/workload-token
+RuntimeDirectory=safe-inference
+RuntimeDirectoryMode=0700
+UMask=0077
+ExecStart=/opt/safe-agent/venv/bin/python -m safe_agent.inference_service
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=true
+RestrictSUIDSGID=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+TasksMax=32
+MemoryMax=256M
+CPUQuota=50%
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

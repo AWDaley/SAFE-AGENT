@@ -279,6 +279,17 @@ token counts never count as verified billing. The legacy unbudgeted
 M7 test interface remains available for synthetic fixtures ONLY; no
 hosted inference is production-approved. See docs/M7_INFERENCE_BUDGETS.md.
 
+M7-04 adds a separately launched, offline-only inference ASGI service
+over an owner-restricted Unix socket. It requires a trusted workload
+Bearer token, rejects replayed or out-of-scope requests, enforces
+bounded concurrency, rate and response limits, and reports sanitized
+operational status. A separate **synthetic** billing source verifier
+issues scoped attestations only for source-signed offline evidence.
+Neither component connects a live model, verifies a real provider
+invoice, or gains business-system authority. Run
+python scripts/smoke_inference_sidecar.py; see
+docs/M7_INFERENCE_SERVICE.md.
+
 **M5 LIVE ACCEPTANCE: BLOCKED.** Passing offline tests or generating a
 synthetic proposal never authorizes real provider execution or production
 deployment.

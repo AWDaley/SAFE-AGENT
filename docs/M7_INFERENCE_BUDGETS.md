@@ -148,6 +148,16 @@ safe, HMAC-attested partial refunds; attestation forgery/replay and
 over-limit rejection; event-hash integrity; mock/remote backend separation,
 backend failure accounting and continued absence of business effects.
 
+## Offline synthetic source verifier added in M7-04
+
+M7-04 introduces an independently hosted *synthetic-only* billing
+source verifier that checks an offline fixture source HMAC before signing
+the existing M7-03 ledger attestation with a different private issuer key.
+This demonstrates separated trust material, statement binding and
+partial hold reconciliation. It is NOT an actual vendor bill reader and
+cannot be used to claim verified external model charges. See
+M7_INFERENCE_SERVICE.md.
+
 ## Outstanding release prerequisites
 
 - Independent external model-provider **billing source verification** and
