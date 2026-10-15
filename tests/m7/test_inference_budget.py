@@ -41,7 +41,6 @@ from tests.m6.test_synthetic_workflow import new_task
 from tests.m6.test_task_intake import auth
 from tests.m7.test_inference_gateway import fixture
 
-
 BILLING_KEY = b"M7_separate_trusted_billing_verifier_secret_not_for_live_00000001"
 
 
