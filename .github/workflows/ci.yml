@@ -43,6 +43,8 @@ jobs:
           python -m safe_agent m4-demo
       - name: M5 Google test connector offline smoke
         run: python -m safe_agent m5-demo
+      - name: M6 supervised synthetic worker smoke
+        run: python -m safe_agent m6-worker-demo
       - name: Migration head smoke (isolated SQLite fixture)
         env:
           SAFE_AGENT_DATABASE_URL: sqlite+pysqlite:///./ci-m4-migration.sqlite

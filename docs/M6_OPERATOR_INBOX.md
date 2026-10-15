@@ -51,6 +51,17 @@ dispatch or allows Google writes.
 See M6_SYNTHETIC_WORKFLOW.md for bootstrap, role checks, recovery, safety and
 acceptance coverage.
 
+## Supervised fake-provider effects (M6-01d)
+
+The worker host may opt into SupervisedSyntheticWorker to consume already
+queued, synthetic-only intents. The interface still provides only the
+existing queue action and read-only status. The supervisor uses bounded SQL
+claims, interruption-aware pauses and fail-closed error thresholds; provider
+readback and NEEDS_REVIEW decisions remain with the trusted recovery worker.
+No operator HTML/JavaScript gains a worker execution route.
+
+See M6_SUPERVISED_SYNTHETIC_WORKER.md.
+
 ## Setup
 
 Install API dependencies and create the service from trusted harness objects:
