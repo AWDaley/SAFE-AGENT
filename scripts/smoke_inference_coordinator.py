@@ -23,14 +23,25 @@ from safe_agent.inference.coordinator import TrustedInferenceCoordinator
 from safe_agent.storage.inference_admission import TrustedInferenceAdmission
 from safe_agent.storage.inference_dispatch import TrustedInferenceDispatchStore
 from safe_agent.storage.repository import LedgerRepository
-from tests.m7.admission_fixtures import assigned, policy
 
 HOST = "inference.example.com"
+
+
+def _load_fixtures():
+    # This acceptance script runs from a source checkout, not an installed test
+    # package. Resolve that checkout explicitly rather than trusting cwd or an
+    # inherited PYTHONPATH. Spawned callers use the same explicit bootstrap.
+    root = str(Path(__file__).resolve().parents[1])
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from tests.m7.admission_fixtures import assigned, policy
+    return assigned, policy
 
 
 def _send_and_crash(url, args, path, token, key) -> None:
     # A distinct trusted caller process exits AFTER the sidecar executed, before
     # recording finish. No model-origin success report is used as evidence.
+    _, policy = _load_fixtures()
     repo = LedgerRepository.testing_sqlite(url)
     admission = TrustedInferenceAdmission(repo, policy=policy())
     store = TrustedInferenceDispatchStore(admission)
@@ -44,6 +55,7 @@ def _send_and_crash(url, args, path, token, key) -> None:
 
 
 def main() -> None:
+    assigned, policy = _load_fixtures()
     with tempfile.TemporaryDirectory(prefix="safe_dispatch_") as tmp:
         work = Path(tmp)
         work.chmod(0o700)
