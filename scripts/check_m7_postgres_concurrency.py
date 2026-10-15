@@ -18,7 +18,7 @@ from safe_agent.storage.inference_budget import InferenceBudgetDenied, _change_a
 from safe_agent.storage.models import InferenceBudgetAccountRow
 from safe_agent.storage.repository import LedgerRepository
 
-EXPECTED_HEAD = "0010_inference_dispatch"
+EXPECTED_HEAD = "0011_inference_admission"
 EXPECTED_TRIGGERS = {
     "safe_inference_budget_events_immutable",
     "safe_inference_billing_attestations_immutable",

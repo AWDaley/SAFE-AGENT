@@ -448,3 +448,13 @@ For future research, retain the option to compare **CONTROL**, **TAL-STRUCTURED 
 ---
 
 **Next concrete engineering action:** Complete M0: verify the repository and TAL dependencies, create the package/schemas/testing foundation, and demonstrate that an invalid proposal cannot reach an external-effect adapter. That creates the minimum reliable platform on which the first Virtual Office simulation can be built.
+### M7-05b delivery increment — 2026-10-15
+
+Atomic trusted inference admission now builds on the M7-05a invocation
+foundation: exact planning-attempt identity, canonical budget reservation,
+immutable admission/profile records, and restart-persistent quotas in one
+transaction. See `M7_ATOMIC_INFERENCE_ADMISSION.md` for wiring and tests.
+This remains opt-in/offline and non-dispatching. M7-05c must add the protected
+claim/dispatch/recovery path; M7-05d/e must integrate and prove the full
+persistent-planning workflow. No live-model, Google or production acceptance
+is implied. Do not replace canonical migrations or reset uncertain cost holds.

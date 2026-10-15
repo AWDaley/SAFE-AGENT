@@ -677,8 +677,14 @@ class LedgerRepository:
         return initial
 
     @contextmanager
-    def write_task(self, task_id: str) -> Iterator[TaskTransaction]:
+    def write_task(
+        self, task_id: str, *, serialize_sqlite: bool = False,
+    ) -> Iterator[TaskTransaction]:
         with self._sessions.begin() as session:
+            if serialize_sqlite and self.engine.dialect.name == "sqlite":
+                # SQLite ignores FOR UPDATE. Admission's isolated file-backed
+                # tests explicitly acquire the writer before reading any rows.
+                session.connection().exec_driver_sql("BEGIN IMMEDIATE")
             query = select(TaskRow).where(TaskRow.task_id == task_id).with_for_update()
             row = session.scalar(query)
             if row is None:

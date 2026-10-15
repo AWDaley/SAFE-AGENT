@@ -242,49 +242,68 @@ class InferenceBudgetLedger:
         self, request: InferenceRequest, *, max_microusd: int,
         synthetic_mock: bool, now: datetime,
     ) -> InferenceReservationReceipt:
+        # Preserve the original fail-closed API: repeated request IDs are denied.
+        with self._repo.write_task(request.task.task_id) as tx:
+            return self.reserve_in_transaction(
+                tx, request, max_microusd=max_microusd,
+                synthetic_mock=synthetic_mock, now=now,
+            )
+
+    def reserve_in_transaction(
+        self, tx: TaskTransaction, request: InferenceRequest, *, max_microusd: int,
+        synthetic_mock: bool, now: datetime,
+    ) -> InferenceReservationReceipt:
+        """Trusted caller owns commit/rollback; never open or commit a second session.
+
+        Requires the repository's current task transaction. This is not a model
+        API and does not grant permission to invoke a transport or refund a hold.
+        """
+        if (tx.session.get_bind() is not self._repo.engine
+                or not tx.session.in_transaction()
+                or tx.row.task_id != request.task.task_id):
+            raise InferenceBudgetDenied()
         now = require_aware(now).astimezone(UTC)
         if (type(synthetic_mock) is not bool or type(max_microusd) is not int
                 or not 0 <= max_microusd <= self._limits.max_call_microusd):
             raise InferenceBudgetDenied()
         try:
-            request = InferenceRequest.model_validate_json(request.model_dump_json())
+            request = InferenceRequest.model_validate(request.model_dump())
         except (TypeError, ValueError):
             raise InferenceBudgetDenied() from None
         if (now < request.issued_at or now >= request.deadline_at
                 or now >= request.availability.expires_at):
             raise InferenceBudgetDenied()
-        with self._repo.write_task(request.task.task_id) as tx:
-            _assert_task_authority(tx, request)
-            if tx.session.get(InferenceBudgetReservationRow, request.request_id) is not None:
-                # Replaying a reservation is NOT permission to dispatch twice.
-                raise InferenceBudgetDenied()
-            scope = _keys(request.task.organization_id, request.task.task_id)
-            for (kind, key), limit in zip(scope, _limits(self._limits), strict=True):
-                _ensure_account(tx, key, kind, limit)
-            for _, key in scope:
-                _change_account(tx, key, hold_delta=max_microusd, charge_delta=0)
-            row = InferenceBudgetReservationRow(
-                request_id=request.request_id,
-                organization_id=request.task.organization_id,
-                task_id=request.task.task_id,
-                route_id=request.route_id, model_revision=request.model_revision,
-                prompt_digest=request.prompt_digest,
-                backend_kind="MOCK" if synthetic_mock else "REMOTE",
-                max_microusd=max_microusd, held_microusd=max_microusd,
-                charged_microusd=0, status="IN_FLIGHT",
-                reserved_at=now, deadline_at=request.deadline_at,
-                reported_input_tokens=None, reported_output_tokens=None,
-                evidence_hash=None, event_sequence=0, latest_event_hash="",
-                updated_at=now,
-            )
-            # Distinct status for zero-cost, genuine in-process mock. The model
-            # cannot nominate this mode; trusted bootstrap selects the backend.
-            tx.session.add(row)
-            tx.session.flush()
-            _append_event(tx, row, kind="RESERVED", at=now)
-            # Avoid a new separate column; mock proof remains callable only
-            # through the exact type-checked gateway.
-            return _receipt(row)
+        _assert_task_authority(tx, request)
+        if tx.session.get(InferenceBudgetReservationRow, request.request_id) is not None:
+            # Replaying a reservation is NOT permission to dispatch twice.
+            raise InferenceBudgetDenied()
+        scope = _keys(request.task.organization_id, request.task.task_id)
+        for (kind, key), limit in zip(scope, _limits(self._limits), strict=True):
+            _ensure_account(tx, key, kind, limit)
+        for _, key in scope:
+            _change_account(tx, key, hold_delta=max_microusd, charge_delta=0)
+        row = InferenceBudgetReservationRow(
+            request_id=request.request_id,
+            organization_id=request.task.organization_id,
+            task_id=request.task.task_id,
+            route_id=request.route_id, model_revision=request.model_revision,
+            prompt_digest=request.prompt_digest,
+            backend_kind="MOCK" if synthetic_mock else "REMOTE",
+            max_microusd=max_microusd, held_microusd=max_microusd,
+            charged_microusd=0, status="IN_FLIGHT",
+            reserved_at=now, deadline_at=request.deadline_at,
+            reported_input_tokens=None, reported_output_tokens=None,
+            evidence_hash=None, event_sequence=0, latest_event_hash="",
+            updated_at=now,
+        )
+        # Distinct status for zero-cost, genuine in-process mock. The model
+        # cannot nominate this mode; trusted bootstrap selects the backend.
+        tx.session.add(row)
+        tx.session.flush()
+        _append_event(tx, row, kind="RESERVED", at=now)
+        # Avoid a new separate column; mock proof remains callable only
+        # through the exact type-checked gateway.
+        return _receipt(row)
 
     def mark_uncertain(
         self, request_id: str, *, now: datetime,

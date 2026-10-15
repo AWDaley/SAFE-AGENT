@@ -307,3 +307,17 @@ and read [delivery, tests and M7-05b](docs/M7_DURABLE_INFERENCE_DISPATCH.md).
 **M5 LIVE ACCEPTANCE: BLOCKED.** Passing offline tests or generating a
 synthetic proposal never authorizes real provider execution or production
 deployment.
+
+## M7-05b: atomic inference admission (opt-in, no dispatch)
+
+The trusted `TrustedInferenceAdmission` API atomically binds a real planning
+attempt, one stable inference request ID, the existing budget reservation and
+persistent global/tenant/task admission quotas. Exact repeats return the same
+identity without another hold. Forward migration `0011_inference_admission`
+preserves both canonical predecessors. No prompt or raw response is stored.
+
+This is an admission-only increment: it does **not** yet wire the running
+planner/sidecar through an at-most-once dispatcher. Expired or uncertain
+invocations retain conservative capacity. See
+[atomic admission and limitations](docs/M7_ATOMIC_INFERENCE_ADMISSION.md).
+**M5 LIVE GOOGLE ACCEPTANCE remains BLOCKED; no hosted model is enabled.**
