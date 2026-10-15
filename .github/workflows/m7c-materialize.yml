@@ -12,7 +12,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
-      - name: Verify exact patch and publish only to development branch
+      - name: Verify exact patch and publish only non-workflow source
         shell: bash
         run: |
           python - <<'PY'
@@ -32,6 +32,10 @@ jobs:
           tree = subprocess.check_output(['git', 'write-tree'], text=True).strip()
           if tree != '323ae45a98f732bbf7aaf35e449d7ecdbe50332b':
               raise SystemExit('Source tree differs from locally tested tree')
+          # GITHUB_TOKEN may not edit workflows. Publish source only; the
+          # authorized GitHub connector will apply the reviewed CI file and
+          # remove this transfer workflow, then verify the exact final tree.
+          subprocess.run(['git', 'restore', '--source=HEAD', '--staged', '--worktree', '.github/workflows'], check=True)
           PY
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
