@@ -34,6 +34,8 @@ jobs:
         run: |
           pytest -q tests/m6
           node --check src/safe_agent/operator_ui/app.js
+      - name: M7 provider-neutral inference contract and mock tests
+        run: pytest -q tests/m7
       - name: M5 offline release preparation (live gate stays blocked)
         run: python scripts/check_m5_release.py --mode offline
       - name: Compile source

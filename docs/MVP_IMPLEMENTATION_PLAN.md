@@ -8,7 +8,12 @@
 
 **Companion:** [SAFE_AGENT_DESIGN.md](SAFE_AGENT_DESIGN.md)
 
-**Status:** Plan only; milestones and repository code are not yet implemented.
+**Status (updated October 14, 2026):** This document began as the pre-implementation
+design; M0–M4 and the offline M5 foundation are now in main, and M6 task
+intake, workflow, worker supervision, bounded text planning and Docker isolation
+have also been merged via PRs #20–24. M7-01 adds the first inference-only
+contract and mock. Sections describing the initial empty repository remain
+historical. Real Google acceptance and production release remain BLOCKED.
 
 > **Delivery objective:** Demonstrate one officekeeping task end to end: a persistent single agent uses a permission-filtered Virtual Office to schedule a follow-up appointment for a synthetic customer, proposes exactly one typed operation per TAL cycle, passes an independent deterministic authority gate, commits via a trusted adapter, reconciles uncertainty, and reports completion only from verified external state. Once this works in a fake environment, demonstrate it against a deliberately isolated Google Calendar test account.
 
@@ -315,6 +320,17 @@ M6_PERSISTENT_PLANNING.md and M6_ISOLATED_MODEL_RUNTIME.md.
 **Artifacts:** minimal dashboard, installation guide, test report, demo walkthrough, release candidate.
 
 **Exit gate:** all conformance tests pass, user can observe and approve the complete lifecycle, and proposed MVP thresholds in Section 8 are met with no unresolved critical control bypasses.
+
+### M7 — Provider-neutral inference and controlled model integration
+
+The first M7 increment defines closed InferenceRoutePolicy, InferenceRequest,
+InferenceTransportReply and InferenceOutcome contracts, an inference-only
+transport interface and a deterministic offline mock. The model is not a
+trusted actor and never receives credentials or software execution access.
+See M7_INFERENCE_CONTRACTS.md. Later gated increments will add authenticated,
+restricted inference egress, independently verified token and cost accounting,
+held-out evaluation and production runtime isolation review. No hosted model or
+live Google provider write is enabled by M7-01.
 
 ## 6. Suggested PR / issue breakdown
 

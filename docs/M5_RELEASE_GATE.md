@@ -8,8 +8,10 @@ booked or independently read back by this agent.
 ## One reviewed TAL source revision
 
 The authoritative SHA lives in [`ci/tal-office-commit.sha`](../ci/tal-office-commit.sha).
-The revision is `e9d09ef47c0e0e18f3955f9c58f7a8941baf6c38`, an
-experimental, **unmerged** upstream TAL PR5 commit as of this writing.
+The pinned revision is `e9d09ef47c0e0e18f3955f9c58f7a8941baf6c38`,
+the reviewed content commit from upstream TAL PR #5, which has since merged
+into upstream main. The pin intentionally remains the exact tested source
+commit, not a floating upstream branch. Its SHA is not a bearer token.
 Both GitHub Actions workflows run `scripts/read_tal_pin.py` to validate a
 strict 40-character lowercase commit hash before installing that exact source.
 They execute upstream TAL office tests in a job that explicitly installs TAL;
@@ -21,20 +23,25 @@ SQLite office journal is not transactionally atomic with SAFE's SQL ledger.
 Do not treat its admission event or SHA-256 digest as a cryptographic bearer
 permit; reviewers must inspect the actual code and revision, not just the pin.
 
-## Merge order — pending review, not merged
+## Repository integration status (October 14, 2026)
 
-1. TAL upstream [PR #5](https://github.com/AWDaley/TervoroAgenticLanguage-TAL-/pull/5)
-2. SAFE-AGENT [PR #13](https://github.com/AWDaley/SAFE-AGENT/pull/13) (PR1, TAL authorization storage)
-3. SAFE-AGENT [PR #14](https://github.com/AWDaley/SAFE-AGENT/pull/14) (PR2, Google outbox binding)
-4. SAFE-AGENT [PR #15](https://github.com/AWDaley/SAFE-AGENT/pull/15) (PR3, offline-only recovery)
-5. SAFE-AGENT [PR #16](https://github.com/AWDaley/SAFE-AGENT/pull/16) (PR4, advisory simulation and read-only preflight)
-6. SAFE-AGENT [PR #17](https://github.com/AWDaley/SAFE-AGENT/pull/17) (PR5; CI/reporting consolidation)
+Upstream TAL PR #5 and SAFE-AGENT PRs #13–19 are merged. SAFE-AGENT
+PRs #20–24 (trusted task assignment through Docker-isolated offline
+planning) were merged into main in order on October 14, 2026.
+The merged main head after PR #24 was
+`a8a868ca81e8e9cf0d9cff04a4d6255dd7563e17`.
+Its SAFE-AGENT and pinned TAL conformance workflows passed.
 
-Only advance each dependency after a human reviews the code and its checks.
-Review and update the shared TAL pin if the upstream branch changes; never
-silently install TAL `main` or a floating tag. Stacked PR bases need to be
-retargeted in dependency order after the preceding merge, preserving history
-and rerunning CI. Do not publish or deploy based on an unmerged PR stack.
+**Important distinction:** These source merges are NOT independent security
+approval, production acceptance or hosted Google acceptance. The
+PRs #20–24 had no recorded independent reviews, and main did not have
+branch protection enabled at merge time. Establish mandatory reviews,
+branch rules and a documented threat-model review before any production
+release. Future PRs must retain the unconditional live gate until separate
+hosted-provider evidence is independently reviewed.
+
+Do not silently float the TAL source pin. Inspect source revisions and
+re-run integrated CI on every authority-changing commit.
 
 ## Developer/reviewer commands
 
