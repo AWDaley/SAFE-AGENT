@@ -14,7 +14,7 @@ import struct
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from pydantic import SecretStr
 
@@ -42,11 +42,11 @@ class _DeadlineSocket(socket.socket):
             raise TimeoutError("transport deadline")
         self.settimeout(remaining)
 
-    def recv_into(self, buffer, nbytes=0, flags=0):
+    def recv_into(self, buffer: Any, nbytes: int = 0, flags: int = 0) -> int:
         self._remaining()
         return super().recv_into(buffer, nbytes, flags)
 
-    def sendall(self, data, flags=0):
+    def sendall(self, data: Any, flags: int = 0) -> None:
         self._remaining()
         return super().sendall(data, flags)
 

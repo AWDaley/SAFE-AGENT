@@ -14,7 +14,10 @@ from safe_agent.inference_service.service import (
     TrustedWorkloadAuthenticator,
     create_inference_service,
 )
-from tests.m7.test_inference_coordinator import configured, repo  # noqa: F401
+from tests.m7 import test_inference_coordinator as cases
+
+repo = cases.repo
+configured = cases.configured
 
 WORKLOAD = SecretStr("w" * 64)
 SIGNING = SecretStr("s" * 64)

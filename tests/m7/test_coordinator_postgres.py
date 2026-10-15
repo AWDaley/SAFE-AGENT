@@ -3,8 +3,10 @@ import os
 
 import pytest
 
+from tests.m7 import test_inference_admission_postgres as admission_cases
 from tests.m7 import test_inference_coordinator as cases
-from tests.m7.test_inference_admission_postgres import pg_repo  # noqa: F401
+
+pg_repo = admission_cases.pg_repo
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("SAFE_AGENT_TEST_POSTGRES_COORDINATOR") != "1",
