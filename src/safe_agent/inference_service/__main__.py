@@ -12,6 +12,7 @@ import os
 import stat
 from pathlib import Path
 
+from fastapi import FastAPI
 from pydantic import SecretStr
 
 from safe_agent.inference_service.service import (
@@ -40,7 +41,7 @@ def _secret_from_file(path: Path) -> SecretStr:
         os.close(descriptor)
 
 
-def bootstrap() -> tuple[object, Path]:
+def bootstrap() -> tuple[FastAPI, Path]:
     """Create the independent app from trusted service-host environment only."""
     required = (
         "SAFE_INFER_SOCKET_DIR",
