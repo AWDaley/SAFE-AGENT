@@ -328,12 +328,16 @@ InferenceTransportReply and InferenceOutcome contracts, an inference-only
 transport interface and a deterministic offline mock. M7-02 adds a
 restricted trusted-sidecar HTTPS egress adapter with DNS address checks,
 numeric IP pinning, TLS hostname verification and strict response limits,
-tested against synthetic wire/DNS mocks only. The model is not a
+tested against synthetic wire/DNS mocks only. M7-03 introduces durable
+micro-USD inference cost reservations, conservative billing-uncertain
+holds, task/tenant/global limits and signed issuer assertions. A
+separately reviewed external billing verifier is still missing. The model is not a
 trusted actor and never receives credentials or software execution access.
-See M7_INFERENCE_CONTRACTS.md. Later gated increments will add authenticated,
-restricted inference egress, independently verified token and cost accounting,
-held-out evaluation and production runtime isolation review. No hosted model or
-live Google provider write is enabled by M7-01.
+See M7_INFERENCE_CONTRACTS.md, M7_RESTRICTED_EGRESS.md and
+M7_INFERENCE_BUDGETS.md. Later gated increments will need externally
+verified token/invoice evidence, held-out evaluation and production
+runtime isolation review. No hosted model or live Google provider write
+is enabled by this prototype.
 
 ## 6. Suggested PR / issue breakdown
 

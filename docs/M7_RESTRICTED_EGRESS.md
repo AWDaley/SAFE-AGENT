@@ -125,7 +125,12 @@ service identity, audited inference keys and a network segmentation policy.
     )
 
 The service and provider route above are EXAMPLES, not a published live
-endpoint or an implementation of a particular model vendor. Do not
+endpoint or an implementation of a particular model vendor. M7-03
+introduces an opt-in InferenceBudgetLedger, which MUST be installed
+at trusted gateway bootstrap for any future paid inference. Reserved
+cost stays held until independent charge evidence is reconciled, even
+after a successful HTTP inference response. See M7_INFERENCE_BUDGETS.md.
+Do not
 deploy the module inside the web process, agent Docker container or
 provider dispatch process. Never expose it to operator JSON or a model tool.
 
