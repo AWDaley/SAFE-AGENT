@@ -2,15 +2,12 @@
 
 A contract-first, privacy-minimized foundation for an autonomous office agent.
 
-**Status (October 14, 2026): M0–M4 synthetic capabilities are implemented;
-M5 office/TAL integration has been built in stacked, reviewed-by-CI PRs #13–#16,
-while PR5 consolidates the evidence and CI. M5 LIVE ACCEPTANCE: BLOCKED.**
-The upstream office execution record, durable provider-bound outbox, mock-only
-Google recovery worker and provider-sourced advisory simulation have offline
-tests, but **no actual Google account consent or live event insertion/readback
-has been independently verified**. No production or model-triggered Google
-write pathway has been enabled.
-
+**Status (October 14, 2026): M0–M4 synthetic execution, the offline M5
+TAL/Google integration and the opt-in M6 operator inbox are on main.**
+A trusted synthetic task assignment increment (M6-01b) is being added without
+granting the model direct provider access. **M5 LIVE ACCEPTANCE: BLOCKED.**
+The Google test recovery worker remains MockTransport-only; no actual Google
+event insertion and independent readback has been approved or verified.
 
 ## Architecture and milestones
 
@@ -201,19 +198,20 @@ A passing offline gate never marks live Google writes or production authorized.
 Read the [M5 release decision and merge order](docs/M5_RELEASE_GATE.md) and
 [operator acceptance requirements](docs/M5_ACCEPTANCE_READINESS.md).
 
-## M6 operator workspace (offline-only, stacked PR)
+## M6 operator workspace and trusted synthetic assignment
 
-The opt-in local operator dashboard lists authenticated organization-scoped
-SAFE tasks, displays stored synthetic proposal previews and replayable audit
-events, and allows separately authorized human approval/denial. It does not
-create tasks, mint operator tokens, contact external calendars, or dispatch
-provider writes. The browser retains the local token in page memory only.
+The optional local operator interface at /operator exposes task inbox, stored
+simulation preview, exact-proposal approval or denial, and safe audit evidence.
+M6-01b adds an opt-in TrustedTaskProvisioner that creates server-authorized
+synthetic calendar or internal-office tasks from a trusted, actor-scoped
+workflow catalog. POST /v1/tasks never accepts a client-authored manifest,
+grant, raw provider identifier, or external connection. The new Alembic
+revision 0007 persists initial task and private reference bindings atomically,
+with SQL idempotency for response-loss retries.
 
-Install optional API dependencies, configure trusted local onboarding/token
-issuance, then set `enable_operator_ui=True` in
-`safe_agent.api.create_app(...)` and open `/operator`. See
-[operator inbox scope and security](docs/M6_OPERATOR_INBOX.md).
+Task assignment does not run a planner or dispatch an action. Operators continue
+to use trusted test tokens only; a deployment with no provisioner stays
+review-only. See docs/M6_OPERATOR_INBOX.md and docs/M6_TASK_INTAKE.md.
 
-**M5 LIVE ACCEPTANCE: BLOCKED.** The previous PR1–PR5 implementation stack
-is still open for human review; this M6 demonstration does not satisfy the
-Google hosted acceptance criterion or permit production deployment.
+**M5 LIVE ACCEPTANCE: BLOCKED.** Passing offline tests and creating a synthetic
+task never authorize real provider execution or production deployment.

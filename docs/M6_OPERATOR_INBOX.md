@@ -1,6 +1,6 @@
 # M6 foundation — local operator inbox and approval review
 
-**Status:** Offline/local operator usability slice, stacked on SAFE-AGENT PR #17.
+**Status:** Offline/local operator workspace, integrated into main; M6-01b adds optional synthetic task intake.
 M5 LIVE ACCEPTANCE remains **BLOCKED**. This UI cannot dispatch a Google write.
 
 ## Features
@@ -23,6 +23,19 @@ M5 LIVE ACCEPTANCE remains **BLOCKED**. This UI cannot dispatch a Google write.
   explicit preview review checkbox, operator-selected expiration and a
   confirmation prompt. Neither decision creates an event.
 
+## Trusted task assignment (M6-01b)
+
+When the host explicitly supplies a TrustedTaskProvisioner, an operator with
+task:create may view only workflow options preconfigured for their tenant and
+actor, then create a strictly bounded synthetic task through the assignment
+form. The trusted backend creates the manifest, scoped references and
+hash-linked registration atomically; the form has no raw resource ID,
+permission editor, arbitrary manifest field or model/provider action.
+The new task is ASSIGNED only: planning and execution do not begin on submit.
+A repeated idempotency key can return only the original exact task.
+
+See M6_TASK_INTAKE.md for protected persistence, setup, tests and limitations.
+
 ## Setup
 
 Install API dependencies and create the service from trusted harness objects:
@@ -39,9 +52,11 @@ CSRF/session protections when using cookies, security hardening, permissions,
 audit review, and reliable credentials. **Do not paste production credentials.**
 
 The UI is deliberately optional; create_app defaults to
-enable_operator_ui=False. It has no onboarding, free-form model chat, token
-issuer, direct execution control or broad connection-management surface.
-Task creation remains trusted provisioning, not an unauthenticated API.
+enable_operator_ui=False. Trusted synthetic task intake is also optional and
+must be enabled separately through task_provisioner; without it the page
+remains review-only. It has no identity onboarding, free-form model chat,
+token issuer, direct execution control or broad connection-management surface.
+Task creation is privileged and authenticated, never an unrestricted API.
 
 ## Safety and required checks
 
@@ -51,6 +66,7 @@ Ruff, mypy, the offline M5 release gate and migration smoke.
 The UI does not call GoogleTestOutboxStager, GoogleTestCalendarHTTP,
 OfflineGoogleTestRecoveryWorker, or any provider write endpoint.
 
-M6-01 is **partial**: the inbox, preview, explicit decisions and safe timeline
-are implemented; onboarding, full connection UI, evaluation, packaging and
-production identity are still future work. M5 independently remains blocked.
+M6-01 remains **partial**: the inbox, stored previews, explicit decisions,
+safe timeline and opt-in task assignment are implemented. A complete automated
+planning/simulation lifecycle, connection UI, evaluation, packaging and
+production identity remain future work. M5 independently remains blocked.

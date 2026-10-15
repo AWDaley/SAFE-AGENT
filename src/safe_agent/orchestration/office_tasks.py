@@ -80,7 +80,10 @@ class TrustedOfficeTasks:
 
     def register(self, principal: Principal, task: Task | InternalTaskRecord,
                  manifest: TaskManifest | InternalTaskManifest,
-                 *, now: datetime) -> TaskSnapshot:
+                 *, now: datetime,
+                 protected_references: tuple[dict[str, object], ...] = (),
+                 intake_key: str | None = None,
+                 intake_hash: str | None = None) -> TaskSnapshot:
         now = require_aware(now)
         principal.require("task:create", task.organization_id, now)
         if principal.actor_id != task.initiator_id:
@@ -92,7 +95,11 @@ class TrustedOfficeTasks:
             raise ValueError("task/manifest authority does not match")
         if not task.created_at <= now <= task.deadline:
             raise ValueError("task is outside its permitted lifetime")
-        return self._repo.create_task(task, manifest, actor=principal.actor_id, now=now)
+        return self._repo.create_task(
+            task, manifest, actor=principal.actor_id, now=now,
+            protected_references=protected_references,
+            intake_key=intake_key, intake_hash=intake_hash,
+        )
 
     def preview(self, principal: Principal, task_id: str,
                 projection: CalendarProjection, simulation: CalendarSimulation,

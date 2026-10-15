@@ -286,6 +286,12 @@ The M5 exit gate below is NOT satisfied.
 
 ### M6 — Operator UI, acceptance evaluation and packaging
 
+**Progress note (October 14, 2026):** M6-01 includes the merged review-only
+inbox and M6-01b's opt-in trusted synthetic task assignment. Assignment is not
+automatic planning or synthetic execution; the full end-to-end M6-01 gate is
+still open. See M6_TASK_INTAKE.md.
+
+
 **Goal:** Provide a practical demonstration that an office user can understand and evaluate.
 
 **Tasks**

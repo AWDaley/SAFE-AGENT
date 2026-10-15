@@ -1,7 +1,7 @@
-"""Restricted M2 operator API: bearer-authenticated status, evidence and approval.
+"""Authenticated operator API with opt-in trusted synthetic task assignment.
 
-No proposal dispatch, task-grant creation, secret resolution, or raw customer record
-endpoints. Task onboarding remains a privileged internal provisioning step.
+No model-facing grant creation, direct provider dispatch, secret resolution or raw
+customer record endpoints. The trusted provisioner compiles immutable authority.
 """
 
 from datetime import UTC, datetime
@@ -9,11 +9,18 @@ from typing import TYPE_CHECKING, Annotated, Callable
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy.exc import IntegrityError
 from starlette.middleware.base import RequestResponseEndpoint
 
+from safe_agent.contracts.intake import TaskIntakeReceipt, TaskIntakeRequest, TaskOptionsPage
 from safe_agent.contracts.operator import OperatorInboxPage, OperatorProposalPreview
 from safe_agent.evidence.ledger import LedgerEvent, TaskSnapshot
 from safe_agent.orchestration.office_tasks import ApprovalInput, TrustedOfficeTasks
+from safe_agent.orchestration.task_provisioning import (
+    InvalidTaskWindow,
+    OptionUnavailable,
+    TrustedTaskProvisioner,
+)
 from safe_agent.security.principal import AccessDenied, Principal, SignedOperatorTokens
 from safe_agent.storage.repository import MissingTask, StateConflict
 
@@ -24,7 +31,8 @@ if TYPE_CHECKING:
 def create_app(coordinator: TrustedOfficeTasks, authenticator: SignedOperatorTokens,
                *, clock: Callable[[], datetime] = lambda: datetime.now(UTC),
                google_test_oauth: "GoogleOAuthService | None" = None,
-               enable_operator_ui: bool = False) -> FastAPI:
+               enable_operator_ui: bool = False,
+               task_provisioner: TrustedTaskProvisioner | None = None) -> FastAPI:
     app = FastAPI(title="SAFE-AGENT M2 Local Operator", version="0.2.0")
     bearer = HTTPBearer(auto_error=False)
 
@@ -33,6 +41,7 @@ def create_app(coordinator: TrustedOfficeTasks, authenticator: SignedOperatorTok
         """Never cache operator task data or local UI assets at any proxy."""
         response = await call_next(request)
         if (request.url.path.startswith("/v1/tasks")
+                or request.url.path.startswith("/v1/task-options")
                 or request.url.path.startswith("/operator")):
             response.headers["Cache-Control"] = "no-store"
             response.headers["Pragma"] = "no-cache"
@@ -52,6 +61,32 @@ def create_app(coordinator: TrustedOfficeTasks, authenticator: SignedOperatorTok
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok", "mode": "M2_NO_PROVIDER_EXECUTION"}
+
+    if task_provisioner is not None:
+        @app.get("/v1/task-options")
+        def task_options(
+            principal: Annotated[Principal, Depends(operator)],
+        ) -> TaskOptionsPage:
+            try:
+                return task_provisioner.available_options(principal, now=clock())
+            except AccessDenied as error:
+                raise HTTPException(status_code=403, detail="operator scope denied") from error
+
+        @app.post("/v1/tasks", status_code=201)
+        def assign_task(
+            body: TaskIntakeRequest,
+            principal: Annotated[Principal, Depends(operator)],
+        ) -> TaskIntakeReceipt:
+            try:
+                return task_provisioner.create(principal, body, now=clock())
+            except AccessDenied as error:
+                raise HTTPException(status_code=403, detail="operator scope denied") from error
+            except OptionUnavailable as error:
+                raise HTTPException(status_code=404, detail="task option unavailable") from error
+            except InvalidTaskWindow as error:
+                raise HTTPException(status_code=422, detail="invalid task window") from error
+            except (StateConflict, IntegrityError) as error:
+                raise HTTPException(status_code=409, detail="task intake conflict") from error
 
     @app.get("/v1/tasks")
     def inbox(

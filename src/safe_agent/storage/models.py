@@ -40,6 +40,20 @@ class TaskRow(Base):
     __table_args__ = (Index("ix_safe_tasks_org_actor", "organization_id", "initiator_id"),)
 
 
+class TaskIntakeRow(Base):
+    """Immutable, tenant/actor-scoped idempotency record for trusted task intake."""
+
+    __tablename__ = "safe_task_intake_keys"
+    organization_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    initiator_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    idempotency_key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    request_hash: Mapped[str] = mapped_column(String(72), nullable=False)
+    task_id: Mapped[str] = mapped_column(
+        ForeignKey("safe_tasks.task_id"), nullable=False, unique=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class ManifestRow(Base):
     __tablename__ = "safe_manifest_versions"
     manifest_hash: Mapped[str] = mapped_column(String(72), primary_key=True)

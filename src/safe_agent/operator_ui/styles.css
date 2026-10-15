@@ -7,11 +7,11 @@
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 body { margin: 0; min-height: 100vh; line-height: 1.48; }
-button, input { font: inherit; }
+button, input, select { font: inherit; }
 button { border: 1px solid #465c6b; border-radius: 9px; padding: 9px 14px; background: #263845; color: #f7fbff; cursor: pointer; font-weight: 600; }
 button:disabled { opacity: .43; cursor: not-allowed; }
 button:hover:not(:disabled) { background: #345062; }
-button:focus-visible, input:focus-visible { outline: 3px solid #8bdacf; outline-offset: 2px; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid #8bdacf; outline-offset: 2px; }
 button.primary { background: #40bbad; color: #061e1f; border-color: #40bbad; }
 button.primary:hover:not(:disabled) { background: #72dacd; }
 button.danger { color: #ffd5d7; border-color: #ba6871; background: #542b35; }
@@ -19,7 +19,9 @@ button.danger:hover:not(:disabled) { background: #713441; }
 button.quiet { border-color: transparent; background: transparent; color: #bad4dc; }
 button.quiet:hover:not(:disabled) { background: #233541; }
 button.wide { width: 100%; }
-input { border: 1px solid #536c7b; border-radius: 8px; color: #fff; background: #132432; padding: 11px 12px; width: 100%; }
+input, select { border: 1px solid #536c7b; border-radius: 8px; color: #fff; background: #132432; padding: 11px 12px; width: 100%; }
+select { cursor: pointer; }
+#assignmentForm button { margin-top: 12px; }
 input[type="checkbox"] { width: 18px; height: 18px; accent-color: #40bbad; }
 label { display: block; margin: 14px 0 6px; font-weight: 600; }
 h1,h2,h3,p { margin-top: 0; }
