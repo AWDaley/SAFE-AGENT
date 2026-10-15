@@ -146,9 +146,11 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
     def __init__(
         self, host: str, *, ip: str, family: int, timeout: float,
     ) -> None:
+        verified_context = ssl.create_default_context()
         super().__init__(
-            host, port=443, timeout=timeout, context=ssl.create_default_context(),
+            host, port=443, timeout=timeout, context=verified_context,
         )
+        self._verified_context = verified_context
         self._pinned_ip = ip
         self._pinned_family = family
 
@@ -161,7 +163,9 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
                         else (self._pinned_ip, 443, 0, 0))
             raw.connect(endpoint)
             # Explicit SNI + trusted CA store + hostname verification.
-            self.sock = self._context.wrap_socket(raw, server_hostname=self.host)
+            self.sock = self._verified_context.wrap_socket(
+                raw, server_hostname=self.host,
+            )
         except BaseException:
             raw.close()
             raise
