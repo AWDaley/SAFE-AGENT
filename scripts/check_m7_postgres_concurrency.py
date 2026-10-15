@@ -43,6 +43,11 @@ def main() -> None:
     repo = LedgerRepository.production_engine(url)
     try:
         with repo.engine.connect() as connection:
+            version_columns = inspect(connection).get_columns("alembic_version")
+            if (len(version_columns) != 1
+                    or version_columns[0]["name"] != "version_num"
+                    or getattr(version_columns[0]["type"], "length", 0) < 128):
+                raise AssertionError("Alembic revision tracking column remains too short")
             heads = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalars().all()

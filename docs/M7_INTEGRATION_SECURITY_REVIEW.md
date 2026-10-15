@@ -79,6 +79,23 @@ API no longer compatible with the selected budget contract.
 - [ ] Check synthetic source verifier key separation and restrictive
       schema. Do not label test HMAC source records as vendor invoices.
 
+## PostgreSQL migration compatibility discovered in integration acceptance
+
+The real PostgreSQL CI migration surfaced a preexisting Alembic bookkeeping
+issue missed by SQLite-only tests: Alembic's default
+`alembic_version.version_num VARCHAR(32)` could not represent the existing
+`0004_tal_office_execution_authorization` revision ID. This is distinct
+from the competing M7-03 `0009` migration conflict.
+
+The migration environment now initializes/widens **only Alembic's version
+tracking column** to VARCHAR(128) on PostgreSQL before applying the
+existing unchanged historical revisions. Existing migrations and their
+revision identifiers are NOT renamed or rewritten. The PostgreSQL
+CI service proves a full `alembic upgrade head` from a clean database,
+checks the tracking-column width, immutable triggers and concurrent
+budget admission. A separate rollout must still be reviewed against
+a backup of any existing PostgreSQL deployment.
+
 ## Mandatory evidence before any merge
 
 - [ ] Independent, **non-author** security review approved for each PR;
