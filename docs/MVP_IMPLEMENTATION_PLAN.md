@@ -330,11 +330,15 @@ restricted trusted-sidecar HTTPS egress adapter with DNS address checks,
 numeric IP pinning, TLS hostname verification and strict response limits,
 tested against synthetic wire/DNS mocks only. M7-03 introduces durable
 micro-USD inference cost reservations, conservative billing-uncertain
-holds, task/tenant/global limits and signed issuer assertions. A
-separately reviewed external billing verifier is still missing. The model is not a
+holds, task/tenant/global limits and signed issuer assertions. M7-04
+adds an isolated offline-only Unix-socket inference sidecar with
+workload authentication, bounded ingress/rate/concurrency and safe
+operational counters, alongside a separate synthetic billing-source
+verifier. A real external invoice verifier is still missing. The model is not a
 trusted actor and never receives credentials or software execution access.
 See M7_INFERENCE_CONTRACTS.md, M7_RESTRICTED_EGRESS.md and
-M7_INFERENCE_BUDGETS.md. Later gated increments will need externally
+M7_INFERENCE_BUDGETS.md and M7_INFERENCE_SERVICE.md.
+Later gated increments will need externally
 verified token/invoice evidence, held-out evaluation and production
 runtime isolation review. No hosted model or live Google provider write
 is enabled by this prototype.

@@ -134,6 +134,16 @@ Do not
 deploy the module inside the web process, agent Docker container or
 provider dispatch process. Never expose it to operator JSON or a model tool.
 
+## M7-04 isolated offline inference-only service
+
+M7-04 adds an independently launchable ASGI sidecar listening only on
+an owner-restricted Unix socket. An external, independently reviewed
+TLS/mTLS proxy would forward the fixed inference route to the socket.
+The sidecar verifies an inference workload token, bounds rate and
+concurrency, and refuses replays or arbitrary provider tools; it
+runs the exact offline mock only. No live vendor inference or Google
+operations are connected. See M7_INFERENCE_SERVICE.md.
+
 ## Testing and deployment blockers
 
 tests/m7/test_restricted_https.py uses a synthetic sidecar wire responder
