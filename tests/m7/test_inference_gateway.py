@@ -268,7 +268,7 @@ def test_malicious_or_oversized_response_refused(output):
     ("template_id", "arbitrary_template"),
     ("projection_rev", "proj_replaced"),
     ("time_zone", "UTC"),
-    ("start_at", (NOW + timedelta(days=2)).isoformat()),
+    ("start_at", (NOW + timedelta(hours=1)).isoformat()),
 ])
 def test_planner_candidate_cannot_widen_existing_grant(field, value):
     context, projection, _ = fixture()
