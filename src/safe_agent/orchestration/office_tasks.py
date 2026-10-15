@@ -242,6 +242,110 @@ class TrustedOfficeTasks:
                           actor="offline_office_gate", now=now)
             return decision.model_copy(update={"state_version": tx.snapshot.state_version})
 
+    def prepare_synthetic_atomic(
+        self, principal: Principal, task_id: str,
+        projection: CalendarProjection | TaskListProjection,
+        simulation: CalendarSimulation | InternalTaskSimulation,
+        proposal: CalendarCreateEvent | InternalTaskCreateProposal,
+        *, expected_state_version: int, now: datetime,
+    ) -> ActionDecision:
+        """Atomically register one trusted synthetic preview and gated proposal.
+
+        The existing two-step M2 API remains for compatibility. This path is
+        restricted to fresh, assigned tasks so a crash cannot leave a newly
+        onboarded task with an orphaned SIMULATED preview.
+        """
+        now = require_aware(now)
+        with self._repo.write_task(task_id) as tx:
+            task, manifest, snap = tx.task, tx.manifest, tx.snapshot
+            principal.require("task:prepare", task.organization_id, now)
+            principal.require("task:propose", task.organization_id, now)
+            if principal.actor_id != task.initiator_id:
+                raise AccessDenied("only the task initiator may prepare a proposal")
+            if (snap.phase is not OfficePhase.ASSIGNED
+                    or snap.state_version != expected_state_version
+                    or snap.cycles_used != 0 or snap.external_effects != 0
+                    or snap.simulation_ref is not None or snap.proposal_hash is not None
+                    or task.manifest_hash != sha256(manifest)
+                    or now >= task.deadline):
+                raise StateConflict("task is not an untouched, authorized assignment")
+            checked: CalendarSimulation | InternalTaskSimulation
+            if isinstance(proposal, CalendarCreateEvent):
+                if (not isinstance(task, Task)
+                        or not isinstance(manifest, TaskManifest)
+                        or not isinstance(projection, CalendarProjection)
+                        or not isinstance(simulation, CalendarSimulation)):
+                    raise StateConflict("calendar preparation domain mismatch")
+                diff = simulation.change_diff.after
+                if (projection.organization_id != task.organization_id
+                        or projection.task_id != task_id
+                        or projection.calendar_ref != manifest.calendar_ref
+                        or not projection.fetched_at <= now < projection.expires_at
+                        or simulation.conflicts or not simulation.advisory_only
+                        or simulation.projection_rev != projection.revision
+                        or proposal.projection_rev != projection.revision
+                        or proposal.simulation_ref != simulation.simulation_ref
+                        or proposal.calendar_ref != diff.calendar_ref
+                        or proposal.customer_ref != diff.customer_ref
+                        or proposal.start_at != diff.start_at
+                        or proposal.end_at != diff.end_at
+                        or proposal.template_id != diff.template_id):
+                    raise StateConflict("synthetic calendar proposal/preview mismatch")
+                checked = self._office.simulate(
+                    projection, diff, actor=task.initiator_id,
+                    customer_ref=manifest.customer_ref, now=now,
+                )
+            else:
+                if (not isinstance(task, InternalTaskRecord)
+                        or not isinstance(manifest, InternalTaskManifest)
+                        or not isinstance(projection, TaskListProjection)
+                        or not isinstance(simulation, InternalTaskSimulation)):
+                    raise StateConflict("internal task preparation domain mismatch")
+                diff_task = simulation.change_diff.after
+                if (projection.organization_id != task.organization_id
+                        or projection.task_id != task_id
+                        or projection.customer_ref != manifest.customer_ref
+                        or not projection.fetched_at <= now < projection.expires_at
+                        or simulation.conflicts or not simulation.advisory_only
+                        or simulation.projection_rev != projection.revision
+                        or proposal.projection_rev != projection.revision
+                        or proposal.simulation_ref != simulation.simulation_ref
+                        or proposal.customer_ref != diff_task.customer_ref
+                        or proposal.task_code != diff_task.task_code
+                        or proposal.due_at != diff_task.due_at):
+                    raise StateConflict("synthetic internal task proposal/preview mismatch")
+                checked = self._office.simulate_task(
+                    projection, diff_task, actor=task.initiator_id, now=now,
+                )
+            if checked != simulation or checked.conflicts:
+                raise StateConflict("trusted synthetic simulation changed")
+            # All following writes and ledger transitions share this SQL transaction.
+            tx.write_preview(projection, simulation, now=now)
+            tx.append(EventKind.PREVIEW_REGISTERED, actor=principal.actor_id, now=now,
+                      payload={"simulation_ref": simulation.simulation_ref,
+                               "simulation_hash": simulation.simulation_hash,
+                               "projection_rev": projection.revision})
+            decision = self._gate.evaluate(
+                task=task, manifest=manifest, snapshot=tx.snapshot,
+                proposal=proposal, projection=projection,
+                simulation=simulation, now=now,
+            )
+            if decision.decision is DecisionStatus.DENIED:
+                raise StateConflict("synthetic proposal denied by trusted gate")
+            tx.write_proposal(tx.snapshot.cycles_used + 1, proposal,
+                              proposal.simulation_ref, now=now)
+            digest = sha256(proposal)
+            tx.append(EventKind.PROPOSAL_ACCEPTED, actor=principal.actor_id, now=now,
+                      payload={"proposal_hash": digest,
+                               "simulation_ref": proposal.simulation_ref})
+            if decision.decision is DecisionStatus.APPROVAL_REQUIRED:
+                tx.append(EventKind.APPROVAL_REQUIRED, actor=principal.actor_id, now=now,
+                          payload={"proposal_hash": digest})
+            else:
+                tx.append(EventKind.ACTION_ELIGIBLE, actor="offline_office_gate", now=now,
+                          payload={"proposal_hash": digest})
+            return decision.model_copy(update={"state_version": tx.snapshot.state_version})
+
     def approve(self, principal: Principal, task_id: str, request: ApprovalInput,
                 *, now: datetime) -> ActionDecision:
         now = require_aware(now)

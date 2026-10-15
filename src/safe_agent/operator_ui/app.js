@@ -42,6 +42,7 @@
     node("eventsPanel").hidden = true;
     node("taskFacts").hidden = true;
     node("assignmentPanel").hidden = true;
+    node("workflowPanel").hidden = true;
     node("taskOption").replaceChildren();
     status("Session cleared from page memory.");
   };
@@ -165,6 +166,54 @@
     } finally { node("assignBtn").disabled = false; }
   }
 
+  function showWorkflowControls(snapshot) {
+    const canPrepare = taskOptions.length > 0 && snapshot &&
+      snapshot.phase === "ASSIGNED";
+    const canQueue = taskOptions.length > 0 && snapshot &&
+      snapshot.phase === "READY_TO_COMMIT";
+    node("workflowPanel").hidden = !(canPrepare || canQueue);
+    node("prepareTaskBtn").hidden = !canPrepare;
+    node("queueTaskBtn").hidden = !canQueue;
+  }
+
+  async function runWorkflow(action) {
+    const snap = activeSnapshot;
+    const task = activeTask;
+    if (!snap || !task) return;
+    const preparation = action === "prepare";
+    if (!preparation &&
+        !window.confirm("Queue this approved synthetic action? The trusted worker " +
+                        "may perform one fake effect. No Google writes are available.")) return;
+    node("prepareTaskBtn").disabled = true;
+    node("queueTaskBtn").disabled = true;
+    try {
+      const path = "/v1/tasks/" + encodeURIComponent(task) +
+        (preparation ? "/prepare" : "/queue-synthetic");
+      const result = await request(path, "POST", {
+        schema_version: "safe_agent.synthetic_workflow_command.v1",
+        expected_state_version: snap.state_version
+      });
+      if (preparation && (result.schema_version !== "safe_agent.synthetic_preparation.v1" ||
+                          result.provider_effect_performed !== false)) {
+        throw new Error("Unexpected preparation receipt.");
+      }
+      if (!preparation && (result.schema_version !== "safe_agent.synthetic_queue.v1" ||
+                           result.queued_only !== true ||
+                           result.provider_effect_performed !== false)) {
+        throw new Error("Unexpected queue receipt.");
+      }
+      await loadInbox(true);
+      await selectTask(task);
+      status(preparation ? "Trusted synthetic proposal prepared; no effect performed." :
+        "Synthetic intent queued. A separate trusted worker must verify completion.");
+    } catch (error) {
+      status(error.message + " Refresh the task before continuing.");
+    } finally {
+      node("prepareTaskBtn").disabled = false;
+      node("queueTaskBtn").disabled = false;
+    }
+  }
+
   function drawFacts(container, entries) {
     container.replaceChildren();
     for (const [label, value] of entries) {
@@ -203,6 +252,7 @@
     node("eventsPanel").hidden = true;
     node("taskFacts").hidden = true;
     node("decisionPanel").hidden = true;
+    node("workflowPanel").hidden = true;
     node("reviewedCheck").checked = false;
     node("expiresInput").value = "";
     setText("detailTitle", taskId);
@@ -213,6 +263,7 @@
       const snap = await request("/v1/tasks/" + encodeURIComponent(taskId));
       if (generation !== requestGeneration) return;
       activeSnapshot = snap;
+      showWorkflowControls(snap);
       node("taskFacts").hidden = false;
       setText("taskPhase", snap.phase);
       setText("taskVersion", snap.state_version);
@@ -276,7 +327,7 @@
           setText("auditNotice", "Audit permission unavailable.");
         }
       }
-      if (generation === requestGeneration) status("Task loaded. No provider writes are available.");
+      if (generation === requestGeneration) status("Task loaded. No live Google writes are available.");
     } catch (error) {
       if (generation === requestGeneration) status(error.message);
     }
@@ -339,6 +390,8 @@
       updateTaskPolicy();
     });
   }
+  node("prepareTaskBtn").addEventListener("click", () => { void runWorkflow("prepare"); });
+  node("queueTaskBtn").addEventListener("click", () => { void runWorkflow("queue"); });
   node("disconnectBtn").addEventListener("click", disconnect);
   node("refreshBtn").addEventListener("click", async () => {
     try { await loadInbox(true); status("Inbox refreshed."); } catch (error) { status(error.message); }

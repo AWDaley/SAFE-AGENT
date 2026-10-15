@@ -198,7 +198,7 @@ A passing offline gate never marks live Google writes or production authorized.
 Read the [M5 release decision and merge order](docs/M5_RELEASE_GATE.md) and
 [operator acceptance requirements](docs/M5_ACCEPTANCE_READINESS.md).
 
-## M6 operator workspace and trusted synthetic assignment
+## M6 operator workspace, task intake and offline preparation
 
 The optional local operator interface at /operator exposes task inbox, stored
 simulation preview, exact-proposal approval or denial, and safe audit evidence.
@@ -209,9 +209,17 @@ grant, raw provider identifier, or external connection. The new Alembic
 revision 0007 persists initial task and private reference bindings atomically,
 with SQL idempotency for response-loss retries.
 
-Task assignment does not run a planner or dispatch an action. Operators continue
-to use trusted test tokens only; a deployment with no provisioner stays
-review-only. See docs/M6_OPERATOR_INBOX.md and docs/M6_TASK_INTAKE.md.
+Task assignment alone neither plans nor performs an action. M6-01c adds an
+opt-in deterministic synthetic preparer that atomically records a Virtual Office
+simulation and TAL-style locally gated proposal, plus a strictly queue-only
+synthetic outbox route. A separately hosted trusted SyntheticRecoveryWorker
+must claim and independently verify the fake effect. The browser cannot
+dispatch provider actions; Google live writes are still prohibited.
+
+Operators continue to use trusted local test tokens only. Deployment without
+the optional provisioner/workflow components remains review-only. See
+docs/M6_OPERATOR_INBOX.md, docs/M6_TASK_INTAKE.md and
+docs/M6_SYNTHETIC_WORKFLOW.md.
 
 **M5 LIVE ACCEPTANCE: BLOCKED.** Passing offline tests and creating a synthetic
 task never authorize real provider execution or production deployment.

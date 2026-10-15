@@ -36,6 +36,21 @@ A repeated idempotency key can return only the original exact task.
 
 See M6_TASK_INTAKE.md for protected persistence, setup, tests and limitations.
 
+## Deterministic synthetic preparation (M6-01c)
+
+When a trusted operator additionally configures TrustedSyntheticWorkflow,
+a task initiator with task:prepare and task:propose may prepare one assigned
+synthetic task. A fresh Virtual Office observation and simulation are checked,
+then preview, proposal and local policy decision are persisted together.
+If approval is required, the independent reviewer uses the existing approval
+pane. The initiating actor with task:execute may **queue** the permitted
+action; only an independently hosted trusted synthetic recovery worker performs
+the fake effect and verifies read-back. No browser route performs provider
+dispatch or allows Google writes.
+
+See M6_SYNTHETIC_WORKFLOW.md for bootstrap, role checks, recovery, safety and
+acceptance coverage.
+
 ## Setup
 
 Install API dependencies and create the service from trusted harness objects:
@@ -67,6 +82,8 @@ The UI does not call GoogleTestOutboxStager, GoogleTestCalendarHTTP,
 OfflineGoogleTestRecoveryWorker, or any provider write endpoint.
 
 M6-01 remains **partial**: the inbox, stored previews, explicit decisions,
-safe timeline and opt-in task assignment are implemented. A complete automated
-planning/simulation lifecycle, connection UI, evaluation, packaging and
-production identity remain future work. M5 independently remains blocked.
+safe timeline, opt-in task assignment, and deterministic synthetic
+preparation/outbox queue are implemented. The trusted worker remains an
+independent process responsibility. Natural-language model planning,
+connection UI, evaluation, packaging and production identity remain future
+work. M5 independently remains blocked.
