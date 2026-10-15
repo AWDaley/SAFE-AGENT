@@ -229,13 +229,22 @@ clarification/replan outcomes. An optional ClosedJsonPlanner callback
 receives only sanitized task context and availability, never tools, private
 source IDs, credentials, or authority to execute. A proposal and its
 planning success outcome commit atomically under the trusted policy gate.
-Run the isolated model-stub demo with: python -m safe_agent m6-planning-demo.
+Run the in-process protocol-stub demo with: python -m safe_agent
+m6-planning-demo. This synthetic test stub is NOT an isolation boundary.
+
+M6-01f adds an explicit Docker-only isolated text-model transport: a locally
+pinned image ID, network=none, read-only filesystem, no host mounts or
+inherited credentials, dropped capabilities, strict time/byte/token-proxy and
+estimated cost ceilings. The model result still passes the same trusted
+proposal/approval/worker gates. Run the no-network Docker demo with:
+python -m safe_agent m6-isolated-model-demo (requires an audited local image
+and SAFE_AGENT_ISOLATION_IMAGE_ID). This does not connect a hosted LLM.
 
 Operators continue to use trusted local test tokens only. Deployment without
 the optional provisioner/workflow components remains review-only. See
 docs/M6_OPERATOR_INBOX.md, docs/M6_TASK_INTAKE.md and
 docs/M6_SYNTHETIC_WORKFLOW.md, docs/M6_SUPERVISED_SYNTHETIC_WORKER.md
-and docs/M6_PERSISTENT_PLANNING.md.
+docs/M6_PERSISTENT_PLANNING.md and docs/M6_ISOLATED_MODEL_RUNTIME.md.
 
 **M5 LIVE ACCEPTANCE: BLOCKED.** Passing offline tests and creating a synthetic
 task never authorize real provider execution or production deployment.
