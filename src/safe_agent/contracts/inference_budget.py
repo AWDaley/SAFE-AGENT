@@ -72,7 +72,9 @@ class InferenceBudgetView(StrictModel):
     task_id: Identifier
     tenant: InferenceAccountBalance
     task: InferenceAccountBalance
-    global_remaining_microusd: int = Field(ge=0)
+    # The global quota is enforced in SQL; disclosing the global remaining
+    # balance to one tenant would leak aggregate spending by other tenants.
+    global_budget_enforced: Literal[True] = True
     billing_charge_verified: Literal[False] = False
     live_provider_effect_performed: Literal[False] = False
 

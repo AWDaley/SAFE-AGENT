@@ -33,6 +33,9 @@ Alembic revision 0009_inference_cost_accounts introduces:
 
 The SQL account update is conditional and atomic:
 charged + held + new reservation may NEVER exceed the configured ceiling.
+A tenant-authorized balance view shows only its own task and tenant
+capacity; the global remaining counter stays private to trusted SQL
+operations, preventing cross-tenant spending inference.
 All three scope counters update in one task-scoped SQL transaction or
 rollback together. Reservations use a new request ID; replaying a request
 is NOT permission to call a model twice. Uncertain charges always keep

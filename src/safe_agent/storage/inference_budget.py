@@ -480,5 +480,5 @@ class InferenceBudgetLedger:
             return InferenceBudgetView(
                 task_id=task_id, tenant=balances["TENANT"],
                 task=balances["TASK"],
-                global_remaining_microusd=balances["GLOBAL"].available_microusd,
+                global_budget_enforced=True,
             )

@@ -31,6 +31,7 @@ from safe_agent.inference import InferenceDenied, InferenceGateway, OfflineMockI
 from safe_agent.storage.inference_budget import InferenceBudgetDenied, InferenceBudgetLedger
 from safe_agent.storage.models import (
     InferenceBillingAttestationRow,
+    InferenceBudgetAccountRow,
     InferenceBudgetEventRow,
     InferenceBudgetReservationRow,
 )
@@ -42,6 +43,13 @@ from tests.m6.test_task_intake import auth
 from tests.m7.test_inference_gateway import fixture
 
 BILLING_KEY = b"M7_separate_trusted_billing_verifier_secret_not_for_live_00000001"
+
+
+def global_remaining(kit):
+    with kit["repo"]._sessions() as db:
+        row = db.get(InferenceBudgetAccountRow, "global")
+        assert row is not None
+        return row.limit_microusd - row.held_microusd - row.charged_microusd
 
 
 def limits(*, global_limit=2000, tenant_limit=1500,
@@ -157,7 +165,9 @@ def test_reservation_holds_all_three_accounts_and_is_not_replayed(kit):
     view = ledger.view(employee, task_id, now=NOW)
     assert view.task.held_microusd == 600 and view.task.available_microusd == 600
     assert view.tenant.held_microusd == 600
-    assert view.global_remaining_microusd == 1400
+    assert view.global_budget_enforced is True
+    assert "global_remaining" not in view.model_dump_json()
+    assert global_remaining(kit) == 1400
 
     with pytest.raises(InferenceBudgetDenied):
         ledger.reserve(req, max_microusd=600, synthetic_mock=False, now=NOW)
@@ -211,7 +221,7 @@ def test_global_limit_is_shared_between_registered_tasks(kit):
     ledger.reserve(first, max_microusd=500, synthetic_mock=False, now=NOW)
     with pytest.raises(InferenceBudgetDenied):
         ledger.reserve(second, max_microusd=400, synthetic_mock=False, now=NOW)
-    assert ledger.view(employee, b, now=NOW).global_remaining_microusd == 300
+    assert global_remaining(kit) == 300
 
 
 def test_uncertain_and_expired_claims_keep_full_capacity_on_restart(kit):
@@ -282,7 +292,7 @@ def test_hmac_attested_charge_settles_and_releases_only_unused_hold(kit):
     assert balances.task.charged_microusd == 125
     assert balances.task.available_microusd == 1075
     assert balances.tenant.charged_microusd == 125
-    assert balances.global_remaining_microusd == 1875
+    assert global_remaining(kit) == 1875
     with pytest.raises(InferenceBudgetDenied):
         ledger.reconcile_attested(
             evidence, verifier_secret=BILLING_KEY,
@@ -327,7 +337,7 @@ def test_invalid_or_over_budget_attestations_cannot_release_funds(kit):
             verifier_secret=BILLING_KEY, now=NOW + timedelta(minutes=2),
         )
     assert ledger.receipt(employee, req.request_id, now=NOW).held_microusd == 500
-    assert ledger.view(employee, task_id, now=NOW).global_remaining_microusd == 1500
+    assert global_remaining(kit) == 1500
 
 
 def test_tampered_hash_linked_budget_event_is_detected(kit):
@@ -388,7 +398,7 @@ def test_budgeted_gateway_mock_releases_without_network_or_provider_effect(kit):
     assert receipt.status == "SYNTHETIC_SETTLED"
     assert receipt.held_microusd == receipt.charged_microusd == 0
     assert receipt.max_estimated_microusd > 0
-    assert ledger.view(employee, task_id, now=NOW).global_remaining_microusd == 5000
+    assert global_remaining(kit) == 5000
     assert calendar.effect_count == internal.effect_count == 0
 
 
