@@ -30,7 +30,7 @@ def require_reviewed_tal_runtime() -> None:
         for name in ("core", "office", "runtime", "adapters", "storage"):
             module = import_module("tal." + name)
             actual = Path(module.__file__ or "").resolve(strict=True)
-            expected = Path(installed.locate_file("tal/" + name + ".py")).resolve(strict=True)
+            expected = Path(str(installed.locate_file("tal/" + name + ".py"))).resolve(strict=True)
             if actual != expected:
                 raise ValueError("TAL import origin mismatch")
     except Exception:
