@@ -10,13 +10,14 @@ from pathlib import Path
 from safe_agent.agent import FakePlanner, SafeTaskContext
 from safe_agent.broker import BrokerScope, ReferenceBroker, ResourceKind
 from safe_agent.contracts import CalendarCreateEvent, Projection, SimulatedChange, Task
+from safe_agent.demo import synthetic_fixture_directory
 from safe_agent.orchestration import TaskRunner
 from safe_agent.virtual_office import SyntheticOfficeState, VirtualOffice
 from safe_agent.virtual_office.models import ObserveCalendar
 
 
 def _fixtures() -> Path:
-    return Path(__file__).resolve().parents[2] / "fixtures/synthetic_office"
+    return synthetic_fixture_directory()
 
 
 def _m0_demo() -> None:

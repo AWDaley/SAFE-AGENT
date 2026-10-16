@@ -64,7 +64,13 @@ jobs:
           ruff check src tests scripts
           mypy src/safe_agent
           pytest tests/runtime --junitxml=runtime-unit.xml
-          python -c "import xml.etree.ElementTree as E; s=E.parse('runtime-unit.xml').getroot().findall('testsuite'); assert s and sum(int(x.get('tests',0)) for x in s)>=51; assert all(int(x.get(k,0))==0 for x in s for k in ('skipped','errors','failures'))"
+          python -c "import xml.etree.ElementTree as E; s=E.parse('runtime-unit.xml').getroot().findall('testsuite'); assert s and sum(int(x.get('tests',0)) for x in s)>=55; assert all(int(x.get(k,0))==0 for x in s for k in ('skipped','errors','failures'))"
+      - name: Installed synthetic demos outside the source checkout
+        run: |
+          cd /tmp
+          for command in demo virtual-office-demo m2-demo m3-demo m4-demo m5-demo m6-worker-demo m6-planning-demo; do
+            "${GITHUB_WORKSPACE}/.venv-coordinated/bin/safe-agent" "$command"
+          done
       - name: Complete suite under the locked combined profile
         run: pytest --junitxml=runtime-full.xml
       - name: Real PostgreSQL and TAL boundaries under the locked profile

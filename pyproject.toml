@@ -24,6 +24,7 @@ safe-agent-doctor = "safe_agent.runtime.preflight:main"
 [tool.setuptools.package-data]
 "safe_agent.operator_ui" = ["index.html", "app.js", "styles.css", "recovery.html", "recovery.js"]
 "safe_agent.runtime" = ["coordinated-linux-py312.json", "coordinated-linux-py312.lock"]
+"safe_agent.demo" = ["fixtures/demo.json", "fixtures/office_state.json"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

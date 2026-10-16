@@ -16,6 +16,7 @@ from safe_agent.canonical import sha256
 from safe_agent.contracts.actions import CalendarCreateEvent
 from safe_agent.contracts.control import Task, TaskBudget, TaskManifest
 from safe_agent.contracts.office import SimulatedChange
+from safe_agent.demo import synthetic_fixture_directory
 from safe_agent.execution.recovery import FaultPoint, InjectedCrash, SyntheticRecoveryWorker
 from safe_agent.execution.synthetic import SyntheticExecutionGateway
 from safe_agent.orchestration.office_tasks import TrustedOfficeTasks
@@ -33,8 +34,7 @@ def run_m4_demo() -> dict[str, object]:
     now = datetime.fromisoformat("2026-10-14T13:00:00-04:00")
     start = datetime.fromisoformat("2026-10-15T13:00:00-04:00")
     end = start + timedelta(minutes=30)
-    fixture = (Path(__file__).resolve().parents[3]
-               / "fixtures/synthetic_office/office_state.json")
+    fixture = synthetic_fixture_directory() / "office_state.json"
     source = SyntheticOfficeState.from_fixture(fixture)
     with TemporaryDirectory(prefix="safe_agent_m4_synthetic_") as temporary:
         db = f"sqlite+pysqlite:///{Path(temporary) / 'recovery.sqlite'}"
