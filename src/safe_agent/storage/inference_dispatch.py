@@ -2,6 +2,7 @@
 
 All transitions use the existing task lock and admission authority. No network
 runs inside a transaction. A claim is internal metadata, never a bearer tool.
+W3 persists a closed validated result in the SAME successful finish transaction.
 """
 from __future__ import annotations
 
@@ -43,6 +44,7 @@ from safe_agent.storage.inference_admission import (
     _task_identity,
 )
 from safe_agent.storage.inference_budget import _append_event as append_budget_event
+from safe_agent.storage.inference_results import persist_validated_result
 from safe_agent.storage.models import (
     InferenceBudgetReservationRow,
     InferenceInvocationEventRow,
@@ -238,6 +240,13 @@ class TrustedInferenceDispatchStore:
                                        proposal_digest=sha256(candidate), proposal=candidate,
                                        reported_usage=checked.reported_usage)
             view = self._transition(locked, "RESPONSE_VALIDATED", proposal_hash=outcome.proposal_digest)
+            # Result, validation event and invocation transition either ALL commit
+            # or ALL roll back. A lost response is resolved by reading, not retrying.
+            persist_validated_result(
+                locked.tx, binding=locked.receipt.binding, lease=lease,
+                policy_hash=self.admission._policy_hash, request=req, outcome=outcome,
+                view=view, now=locked.now,
+            )
             self._fresh_commit(locked)
             return view, outcome
 
