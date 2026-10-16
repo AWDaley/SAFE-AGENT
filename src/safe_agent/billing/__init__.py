@@ -1,6 +1,5 @@
 """Independent *synthetic-only* billing evidence verifier; no live invoice source."""
 
-from .uds_verifier import BillingVerifierTransportDenied, BillingVerifierUDSTransport
 from .verifier import (
     BillingSourceDenied,
     OfflineAsymmetricBillingVerifier,
@@ -13,6 +12,4 @@ __all__ = [
     "OfflineAsymmetricBillingVerifier",
     "OfflineSyntheticBillingVerifier",
     "SyntheticBillingSourceRecord",
-    "BillingVerifierTransportDenied",
-    "BillingVerifierUDSTransport",
 ]
