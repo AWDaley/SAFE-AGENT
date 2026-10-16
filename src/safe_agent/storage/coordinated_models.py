@@ -3,7 +3,17 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DDL, CheckConstraint, DateTime, ForeignKey, Integer, String, Text, event
+from sqlalchemy import (
+    DDL,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Table,
+    Text,
+    event,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from safe_agent.storage.models import Base
@@ -84,6 +94,8 @@ for table, prefix, match in (
     (CoordinatedPlanningInputRow.__table__, "coord_input", INPUT_MATCH),
     (CoordinatedPlanningConsumptionRow.__table__, "coord_consumption", CONSUMPTION_MATCH),
 ):
+    if not isinstance(table, Table):
+        raise TypeError("coordinated evidence requires a concrete SQL table")
     for operation in ("UPDATE", "DELETE"):
         event.listen(table, "after_create", DDL(
             f"CREATE TRIGGER safe_{prefix}_no_{operation.lower()} BEFORE {operation} ON {table.name} "
