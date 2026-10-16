@@ -35,6 +35,7 @@ from safe_agent.execution.recovery import SyntheticRecoveryWorker
 from safe_agent.storage.coordinated_models import CoordinatedPlanningConsumptionRow, CoordinatedPlanningInputRow
 from safe_agent.storage.models import InferenceInvocationRow, OutboxRow, PlanningAttemptRow
 from safe_agent.storage.result_models import InferenceValidatedResultRow
+from safe_agent.tal.trusted_dispatch import TrustedTALOfficeDispatchCheck
 from tests.m2.conftest import NOW, kit
 from tests.m6.test_persistent_planning import plan
 from tests.m6.test_synthetic_workflow import grant, new_task, queue
@@ -88,7 +89,8 @@ try:
     approved_version = grant(client, signer, state["manager"], task, response.json())
     assert queue(client, signer, actor, task, version=approved_version).status_code == 200
     worker = SyntheticRecoveryWorker(state["repo"], state["broker"], calendar,
-                                     task_adapter=internal, office=state["office"])
+                                     task_adapter=internal, office=state["office"],
+                                     tal_dispatch=TrustedTALOfficeDispatchCheck())
     result = worker.process_one(task_id=task, now=NOW)
     assert result is not None and result.outcome == "COMMITTED"
     assert worker.process_one(task_id=task, now=NOW) is None

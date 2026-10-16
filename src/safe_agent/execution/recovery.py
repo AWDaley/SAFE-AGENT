@@ -1,8 +1,8 @@
-"""M4 trusted synthetic outbox worker: durable dispatch, recovery and verification.
+"""Trusted synthetic outbox worker: durable dispatch, recovery and verification.
 
-Only handles a previously admitted immutable intent. A worker may neither grant
-new model authority nor operate on a real calendar/CRM. The only safe retry is
-one using this durable fake provider's atomic, provider-owned idempotency key.
+New coordinated calendar effects require the reviewed upstream TAL runtime.
+This requirement is reconstructed from durable task provenance by every worker;
+optional constructor configuration cannot downgrade a coordinated task.
 """
 
 from __future__ import annotations
@@ -25,9 +25,11 @@ from safe_agent.contracts.internal import (
     InternalTaskRecord,
 )
 from safe_agent.evidence.ledger import EventKind, OfficePhase, TaskSnapshot
+from safe_agent.storage.coordinated_execution import coordinated_execution_input
 from safe_agent.storage.models import GoogleTestOutboxBindingRow
 from safe_agent.storage.provider import ProviderIntegrityError
 from safe_agent.storage.repository import LedgerRepository, OutboxClaim, StateConflict
+from safe_agent.tal.reviewed_runtime import require_reviewed_tal_runtime
 from safe_agent.tal.trusted_dispatch import (
     TALOfficeDispatchDenied,
     TrustedTALOfficeDispatchCheck,
@@ -66,9 +68,9 @@ class DispatchContext:
 class SyntheticRecoveryWorker:
     """Trusted worker; never takes actions directly from an LLM response.
 
-    After a crashed or uncertain dispatch, always look up the provider-owned
-    action key first. If absent, redispatch *only* if provider-native durable
-    idempotency is available and all current preconditions still hold.
+    Look up an existing provider-owned action key before considering a new write.
+    Legacy fixture tasks may omit TAL. Coordinated tasks may not, even when a
+    differently configured worker or supervisor claims the same durable outbox.
     """
 
     def __init__(
@@ -96,7 +98,8 @@ class SyntheticRecoveryWorker:
 
     def reconcile_tal_audit(self, task_id: str, *, now: datetime) -> str | None:
         """Trusted, read-only catch-up. Never re-dispatches a provider effect."""
-        if self._tal_dispatch is None or not self._tal_dispatch.has_audit:
+        if (type(self._tal_dispatch) is not TrustedTALOfficeDispatchCheck
+                or not self._tal_dispatch.has_audit):
             return None
         try:
             result = self._tal_dispatch.reconcile_audit(self._repo, task_id, now=now)
@@ -118,8 +121,6 @@ class SyntheticRecoveryWorker:
         now = require_aware(now)
         claim = self._repo.claim_action(worker_id=self._id, now=now, task_id=task_id)
         if claim is None:
-            # Repair a crash after SAFE committed its receipt but before TAL's
-            # shadow journal was updated. No lease or new effect is issued.
             if task_id is not None:
                 self.reconcile_tal_audit(task_id, now=now)
             return None
@@ -134,7 +135,6 @@ class SyntheticRecoveryWorker:
         except (FakeCalendarConflict, FakeTaskConflict, ProviderIntegrityError, StateConflict):
             result = self._escalate(claim, now=now, reason="SOURCE_CONFLICT_OR_INTEGRITY")
         except Exception:
-            # A failed provider response is ambiguous. Never retry blindly.
             if claim.attempts >= self._max_attempts:
                 result = self._escalate(claim, now=now, reason="RECONCILIATION_EXHAUSTED")
             else:
@@ -146,9 +146,6 @@ class SyntheticRecoveryWorker:
                     action_hash=claim.action_hash, manifest_hash=claim.manifest_hash,
                     outcome=ExecutionOutcome.OUTCOME_UNKNOWN,
                 )
-        # SAFE's trusted receipt and state transition are committed first.
-        # TAL's independent SQLite journal is a shadow, never a second permit.
-        # Sync failure must not roll back or reclassify an already-written effect.
         if claim.operation == "calendar.create_event":
             self.reconcile_tal_audit(claim.task_id, now=now)
         return result
@@ -186,6 +183,12 @@ class SyntheticRecoveryWorker:
                         or calendar_simulation.change_diff.after.start_at != proposal.start_at
                         or calendar_simulation.change_diff.after.end_at != proposal.end_at):
                     raise StateConflict("calendar intent/preview mismatch")
+                coordinated = coordinated_execution_input(tx, proposal, calendar_projection)
+                if coordinated is not None and (
+                    outbox.source_hash != coordinated.source_fingerprint
+                    or claim.source_hash != coordinated.source_fingerprint
+                ):
+                    raise StateConflict("COORDINATED_OUTBOX_SOURCE_DENIED")
             elif claim.operation == "tasks.create":
                 if not isinstance(manifest, InternalTaskManifest) or not isinstance(
                     proposal, InternalTaskCreateProposal
@@ -201,13 +204,11 @@ class SyntheticRecoveryWorker:
                     raise StateConflict("task intent/preview mismatch")
             else:
                 raise StateConflict("unrecognized outbox operation")
-            # Reconnect the private broker by verifying its HMAC-signed records.
             protected = self._repo.load_protected_references(
                 claim.task_id, task.organization_id,
             )
             self._broker.trusted_import(protected)
-            # Trusted reference resolution using recorded action time is for
-            # EXISTING-EFFECT READBACK ONLY; it does not authorize a new write.
+            # Recorded action time is for EXISTING-EFFECT READBACK ONLY.
             context = DispatchContext(
                 task=task, manifest=manifest, proposal=proposal,
                 projection=projection, snap=snap, recorded_at=outbox.created_at,
@@ -225,7 +226,6 @@ class SyntheticRecoveryWorker:
         task = context.task
         scope_time = context.recorded_at if committed else now
         if scope_time.utcoffset() is None:
-            # SQLite stores UTC without tzinfo; PostgreSQL returns aware UTC.
             scope_time = scope_time.replace(tzinfo=UTC)
         return BrokerScope(
             organization_id=claim.organization_id, initiator_id=task.initiator_id,
@@ -251,28 +251,44 @@ class SyntheticRecoveryWorker:
                         or approval.proposal_hash != claim.proposal_hash
                         or now >= approval.expires_at):
                     raise KnownNoEffect("approval expired or mismatched")
-        # First-class TALRuntime office admission is an additional mandatory
-        # guard *when opted in* for this synthetic worker. Existing-effect
-        # reconciliation above never needs to renew an expired authorization.
-        if claim.operation == "calendar.create_event" and self._tal_dispatch is not None:
-            assert isinstance(task, Task) and isinstance(manifest, TaskManifest)
-            assert isinstance(context.proposal, CalendarCreateEvent)
-            with self._repo.write_task(claim.task_id) as tx:
-                if tx.snapshot != snap or tx.snapshot.phase is not OfficePhase.EXECUTING:
-                    raise KnownNoEffect("TAL outbox state changed")
-                projection, simulation = tx.preview(context.proposal.simulation_ref)
-                approval = (tx.read_approval(snap.approval_id)
-                            if snap.approval_id is not None else None)
-            try:
-                self._tal_dispatch.require(
-                    action_hash=claim.action_hash,
-                    task=task, manifest=manifest,
-                    proposal=context.proposal,
-                    projection=projection, simulation=simulation,
-                    snapshot=snap, approval=approval, now=now,
-                )
-            except TALOfficeDispatchDenied as error:
-                raise KnownNoEffect("TAL_OFFICE_RUNTIME_DENIED") from error
+        if claim.operation != "calendar.create_event":
+            return
+        assert isinstance(task, Task) and isinstance(manifest, TaskManifest)
+        assert isinstance(context.proposal, CalendarCreateEvent)
+        with self._repo.write_task(claim.task_id) as tx:
+            outbox = tx.read_outbox(claim.action_hash)
+            if (tx.snapshot != snap or tx.snapshot.phase is not OfficePhase.EXECUTING
+                    or outbox.status != "LEASED" or outbox.lease_owner != claim.worker_id
+                    or outbox.source_hash != claim.source_hash):
+                raise KnownNoEffect("TAL outbox state changed")
+            calendar_projection, simulation = tx.preview(context.proposal.simulation_ref)
+            coordinated = coordinated_execution_input(tx, context.proposal, calendar_projection)
+            if coordinated is not None and outbox.source_hash != coordinated.source_fingerprint:
+                raise KnownNoEffect("COORDINATED_OUTBOX_SOURCE_DENIED")
+            approval = (tx.read_approval(snap.approval_id)
+                        if snap.approval_id is not None else None)
+        checker = self._tal_dispatch
+        # The requirement belongs to the durable task, not the worker bootstrap.
+        # Existing-effect readback never enters this NEW-write check.
+        if coordinated is not None and type(checker) is not TrustedTALOfficeDispatchCheck:
+            raise KnownNoEffect("COORDINATED_TAL_REQUIRED")
+        if checker is None:
+            return  # Actual legacy fixture, not a coordinated invocation.
+        if type(checker) is not TrustedTALOfficeDispatchCheck:
+            raise KnownNoEffect("TAL_CHECKER_TYPE_DENIED")
+        try:
+            if coordinated is not None:
+                require_reviewed_tal_runtime()
+            # Calling the reviewed class method prevents an instance-level no-op
+            # callback from replacing the check. Hostile trusted code is not sandboxed.
+            TrustedTALOfficeDispatchCheck.require(
+                checker, action_hash=claim.action_hash,
+                task=task, manifest=manifest, proposal=context.proposal,
+                projection=calendar_projection, simulation=simulation,
+                snapshot=snap, approval=approval, now=now,
+            )
+        except TALOfficeDispatchDenied as error:
+            raise KnownNoEffect("TAL_OFFICE_RUNTIME_DENIED") from error
 
     def _calendar_effect(self, claim: OutboxClaim, context: DispatchContext,
                          *, now: datetime, fault: FaultPoint | None) -> ExecutionReceipt:
@@ -301,7 +317,6 @@ class SyntheticRecoveryWorker:
             if not self._calendar.supports_idempotency:
                 raise KnownNoEffect("cannot redispatch without provider idempotency")
             self._allow_new_dispatch(claim, context, now=now)
-            # Current time/expiry matters for NEW writes, not readback of past effects.
             self._broker.resolve(manifest.calendar_ref,
                                  scope=self._scope(claim, context, now=now, committed=False),
                                  kind=ResourceKind.CALENDAR)

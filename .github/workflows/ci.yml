@@ -13,10 +13,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install project dependencies
+      - name: Install project dependencies and reviewed TAL runtime
         run: |
           python -m pip install -r requirements.lock
           python -m pip install -e '.[dev]'
+          TAL_SHA="$(python scripts/read_tal_pin.py)"
+          python -m pip install "git+https://github.com/AWDaley/TervoroAgenticLanguage-TAL-.git@${TAL_SHA}"
+          python -c "from safe_agent.tal.reviewed_runtime import require_reviewed_tal_runtime; require_reviewed_tal_runtime()"
       - name: Ruff + schema checks
         run: |
           ruff check --diff src tests scripts migrations/versions/0010_inference_dispatch.py migrations/versions/0011_inference_admission.py

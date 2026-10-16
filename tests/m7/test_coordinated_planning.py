@@ -39,6 +39,7 @@ from safe_agent.storage.models import (
 from safe_agent.storage.repository import LedgerRepository, StateConflict
 from safe_agent.storage.result_models import InferenceValidatedResultRow as ResultRow
 from safe_agent.tal.office_gate import OfficeGate
+from safe_agent.tal.trusted_dispatch import TrustedTALOfficeDispatchCheck
 from safe_agent.virtual_office import VirtualOffice
 from tests.m2.conftest import NOW
 from tests.m6.test_persistent_planning import COMMAND, plan, setup, view
@@ -112,7 +113,8 @@ def test_operator_prepares_exact_final_action_then_requires_separate_approval(ki
     assert queue(client, signer, actor, task, version=version).status_code == 200
     assert calendar.effect_count == 0
     worker = SyntheticRecoveryWorker(kit["repo"], kit["broker"], calendar,
-                                     task_adapter=internal, office=kit["office"])
+                                     task_adapter=internal, office=kit["office"],
+                                     tal_dispatch=TrustedTALOfficeDispatchCheck())
     outcome = worker.process_one(task_id=task, now=NOW)
     assert outcome is not None and outcome.outcome == "COMMITTED"
     assert worker.process_one(task_id=task, now=NOW) is None
