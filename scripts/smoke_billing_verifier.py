@@ -14,7 +14,8 @@ from pathlib import Path
 
 from pydantic import SecretStr
 
-from safe_agent.billing import BillingVerifierUDSTransport, SyntheticBillingSourceRecord
+from safe_agent.billing import SyntheticBillingSourceRecord
+from safe_agent.billing.uds_verifier import BillingVerifierUDSTransport
 from safe_agent.canonical import canonical_json
 from safe_agent.contracts.billing_verification import VerifiedBillingAttestation
 
