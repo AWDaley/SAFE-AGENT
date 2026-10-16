@@ -8,10 +8,70 @@ permissions:
 jobs:
   runtime-profile:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.6
+        env:
+          POSTGRES_USER: safe_runtime_ci
+          POSTGRES_PASSWORD: disposable_runtime_ci_only
+          POSTGRES_DB: safe_runtime_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U safe_runtime_ci -d safe_runtime_ci"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+    env:
+      SAFE_AGENT_DATABASE_URL: postgresql+psycopg://safe_runtime_ci:disposable_runtime_ci_only@localhost:5432/safe_runtime_ci
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
-      - name: Resolve review candidate (not installation or runtime acceptance)
-        run: python scripts/resolve_coordinated_profile.py --resolve
+      - name: Verify committed lock without re-resolving it
+        run: python scripts/resolve_coordinated_profile.py --check
+      - name: Install exact profile in a new isolated environment
+        run: |
+          python scripts/install_coordinated_runtime.py --venv .venv-coordinated
+          echo "${GITHUB_WORKSPACE}/.venv-coordinated/bin" >> "$GITHUB_PATH"
+      - name: Confirm installed metadata and packaged CLI outside the checkout
+        run: |
+          python -m pip check
+          cd /tmp
+          "${GITHUB_WORKSPACE}/.venv-coordinated/bin/safe-agent-doctor" --json
+      - name: Real preflight cannot invoke network or subprocesses
+        run: |
+          python - <<'PY'
+          import socket, subprocess
+          from safe_agent.runtime.preflight import inspect_environment
+          calls = []
+          def forbidden(*args, **kwargs):
+              calls.append('forbidden')
+              raise AssertionError('preflight attempted I/O')
+          socket.socket.connect = forbidden
+          socket.socket.connect_ex = forbidden
+          socket.create_connection = forbidden
+          socket.getaddrinfo = forbidden
+          subprocess.Popen = forbidden
+          report = inspect_environment()
+          assert report.status == 'PASS', report
+          assert calls == []
+          assert report.business_execution_authorized is False
+          assert report.production_authorized is False
+          print('PREFLIGHT_NO_NETWORK_OR_SUBPROCESS=PASS')
+          PY
+      - name: Static and runtime-profile regression checks
+        run: |
+          ruff check src tests scripts
+          mypy src/safe_agent
+          pytest tests/runtime --junitxml=runtime-unit.xml
+          python -c "import xml.etree.ElementTree as E; s=E.parse('runtime-unit.xml').getroot().findall('testsuite'); assert s and sum(int(x.get('tests',0)) for x in s)>=51; assert all(int(x.get(k,0))==0 for x in s for k in ('skipped','errors','failures'))"
+      - name: Complete suite under the locked combined profile
+        run: pytest --junitxml=runtime-full.xml
+      - name: Real PostgreSQL and TAL boundaries under the locked profile
+        env:
+          SAFE_AGENT_TEST_POSTGRES_REVIEW: '1'
+        run: |
+          pytest tests/m7/test_review_boundary_postgres.py --junitxml=runtime-postgres.xml
+          python -c "import xml.etree.ElementTree as E; s=E.parse('runtime-postgres.xml').getroot().findall('testsuite'); assert s and sum(int(x.get('tests',0)) for x in s)>=19; assert all(int(x.get(k,0))==0 for x in s for k in ('skipped','errors','failures'))"
+      - name: Offline release boundaries remain unchanged
+        run: python scripts/check_m5_release.py --mode offline
