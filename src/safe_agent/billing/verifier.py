@@ -17,7 +17,10 @@ from pydantic import Field, StringConstraints, field_validator
 
 from safe_agent.canonical import canonical_json, sha256
 from safe_agent.contracts.base import Digest, Identifier, StrictModel, require_aware
-from safe_agent.contracts.billing_verification import VerifiedBillingAttestation
+from safe_agent.contracts.billing_verification import (
+    NormalizedBillingEvidence,
+    VerifiedBillingAttestation,
+)
 from safe_agent.contracts.inference import InferenceRequestId
 from safe_agent.contracts.inference_budget import BillingChargeAttestation
 
@@ -136,38 +139,37 @@ class OfflineSyntheticBillingVerifier:
 
 
 class OfflineAsymmetricBillingVerifier:
-    """Synthetic source verifier whose attestation key never leaves this boundary."""
+    """Sign normalized evidence; source/provider verification is adapter-owned."""
 
     def __init__(
-        self, *, source_key: bytes, issuer_private_key: bytes,
+        self, *, issuer_private_key: bytes,
         issuer_id: str, verifier_key_id: str,
-        max_evidence_age_seconds: int = 3600,
     ) -> None:
-        if (type(source_key) is not bytes or len(source_key) < 32
-                or type(issuer_private_key) is not bytes or len(issuer_private_key) != 32
-                or source_key == issuer_private_key
-                or not 1 <= max_evidence_age_seconds <= 86_400):
-            raise ValueError("separate source and Ed25519 verifier keys required")
+        if type(issuer_private_key) is not bytes or len(issuer_private_key) != 32:
+            raise ValueError("valid Ed25519 verifier key required")
         try:
             from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
             self._private = Ed25519PrivateKey.from_private_bytes(issuer_private_key)
         except Exception:
             raise ValueError("valid Ed25519 verifier key required") from None
-        self._source_key = source_key
         self._issuer = IdentifierValidator.validate(issuer_id)
         self._key_id = IdentifierValidator.validate(verifier_key_id)
-        self._max_age = max_evidence_age_seconds
 
-    def attest(
-        self, record: SyntheticBillingSourceRecord, *, now: datetime,
+    def sign(
+        self, evidence: NormalizedBillingEvidence, *, now: datetime,
     ) -> VerifiedBillingAttestation:
         now = require_aware(now).astimezone(UTC)
-        checked, source_hash = _verify_source_record(
-            record, source_key=self._source_key, now=now,
-            max_evidence_age_seconds=self._max_age,
-        )
+        try:
+            checked = NormalizedBillingEvidence.model_validate_json(evidence.model_dump_json())
+            if checked.source_observed_at.astimezone(UTC) > now:
+                raise BillingSourceDenied()
+        except BillingSourceDenied:
+            raise
+        except Exception:
+            raise BillingSourceDenied() from None
         receipt_id = "bil_" + sha256({
+            "source_adapter_id": checked.source_adapter_id,
             "source_record_id": checked.source_record_id,
             "request_id": checked.request_id,
             "verifier_key_id": self._key_id,
@@ -179,7 +181,8 @@ class OfflineAsymmetricBillingVerifier:
             model_revision=checked.model_revision,
             prompt_digest=checked.prompt_digest,
             charge_microusd=checked.charge_microusd,
-            source_evidence_hash=source_hash,
+            source_evidence_hash=checked.source_evidence_hash,
+            source_adapter_id=checked.source_adapter_id,
             issuer_id=self._issuer, verifier_key_id=self._key_id,
             observed_at=now, signature="0" * 128,
         )
