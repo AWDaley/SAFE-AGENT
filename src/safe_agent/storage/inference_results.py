@@ -13,7 +13,10 @@ from safe_agent.agent.json_planner import PLANNER_INSTRUCTION
 from safe_agent.canonical import canonical_json, sha256
 from safe_agent.contracts.base import require_aware
 from safe_agent.contracts.inference import InferenceOutcome, InferenceRequest
-from safe_agent.contracts.inference_dispatch import InferenceInvocationBinding, InferenceInvocationView
+from safe_agent.contracts.inference_dispatch import (
+    InferenceInvocationBinding,
+    InferenceInvocationView,
+)
 from safe_agent.contracts.inference_results import (
     MAX_RESULT_BYTES,
     InferenceResultRecovery,
@@ -31,7 +34,11 @@ from safe_agent.storage.inference_admission import (
     _live_attempt,
     _task_identity,
 )
-from safe_agent.storage.models import InferenceAdmissionRow, InferenceInvocationRow, PlanningAttemptRow
+from safe_agent.storage.models import (
+    InferenceAdmissionRow,
+    InferenceInvocationRow,
+    PlanningAttemptRow,
+)
 from safe_agent.storage.planning import _utc
 from safe_agent.storage.repository import TaskTransaction
 from safe_agent.storage.result_models import InferenceValidatedResultRow
