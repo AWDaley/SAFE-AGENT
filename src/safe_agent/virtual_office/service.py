@@ -7,6 +7,7 @@ planner. No method here can commit an external or internal business effect.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from threading import RLock
 from zoneinfo import ZoneInfo
 
 from safe_agent.broker import BrokerScope, ReferenceBroker, ResourceKind
@@ -116,6 +117,7 @@ class VirtualOffice:
         self._source = source
         self._broker = broker
         self._freshness = freshness
+        self._observation_lock = RLock()
         self._observations: dict[str, CalendarProjection] = {}
         self._source_fingerprints: dict[str, str] = {}
         self._task_observations: dict[str, TaskListProjection] = {}
@@ -123,9 +125,10 @@ class VirtualOffice:
 
     def replace_synthetic_source(self, new_source: SyntheticOfficeState) -> None:
         """Trusted synthetic sync hook; never available to the agent/planner."""
-        if new_source.organization_id != self._source.organization_id:
-            raise ValueError("cross-organization synthetic snapshot")
-        self._source = new_source
+        with self._observation_lock:
+            if new_source.organization_id != self._source.organization_id:
+                raise ValueError("cross-organization synthetic snapshot")
+            self._source = new_source
 
     def trusted_template_duration(self, template_id: str, *, organization_id: str) -> int:
         """Resolve a fixture-only template duration for the trusted orchestrator.
@@ -151,10 +154,17 @@ class VirtualOffice:
         })
         return self._broker.resolve(handle, scope=scope, kind=kind)
 
-    def observe(self, request: ObserveCalendar, *, as_of: datetime) -> CalendarProjection:
-        """Observe sanitized free/busy only; private booking details never leave trust layer."""
+    def _calendar_observation(
+        self, request: ObserveCalendar, *, as_of: datetime,
+    ) -> tuple[CalendarProjection, str]:
+        """Build an unpublished observation from one immutable source snapshot.
+
+        Callers hold _observation_lock. Validation failures have no cache effects.
+        The private fingerprint is trusted-internal, never planner input.
+        """
         as_of = require_aware(as_of)
-        if request.organization_id != self._source.organization_id:
+        source = self._source
+        if request.organization_id != source.organization_id:
             raise ValueError("organization mismatch")
         calendar_id = self._resolve(
             request.calendar_ref, tenant=request.organization_id,
@@ -166,9 +176,8 @@ class VirtualOffice:
             actor=request.initiator_id, task=request.task_id,
             operation="calendar.create_event", kind=ResourceKind.CUSTOMER, now=as_of,
         )
-        # Fail closed if a broker was seeded with a foreign or nonexistent record.
-        calendar = self._source.calendar(calendar_id)
-        customer = self._source.customer(customer_id)
+        calendar = source.calendar(calendar_id)
+        customer = source.customer(customer_id)
         if (calendar.organization_id != request.organization_id
                 or customer.organization_id != request.organization_id):
             raise ValueError("resource organization mismatch")
@@ -199,9 +208,49 @@ class VirtualOffice:
             expires_at=expires,
             free_slots=free,
         )
+        return projection, sha256(calendar)
+
+    def _publish_calendar_observation(self, projection: CalendarProjection, fingerprint: str) -> None:
+        """Publish under the observation lock; an issued binding is write-once."""
+        revision = projection.revision
+        old = self._observations.get(revision)
+        previous = self._source_fingerprints.get(revision)
+        if old is not None or previous is not None:
+            if old != projection or previous != fingerprint:
+                raise StaleProjection("issued calendar projection cannot be rebound")
+            return
         self._observations[revision] = projection
-        self._source_fingerprints[revision] = sha256(calendar)
-        return projection
+        self._source_fingerprints[revision] = fingerprint
+
+    def observe(self, request: ObserveCalendar, *, as_of: datetime) -> CalendarProjection:
+        """Observe sanitized free/busy; never replace an already-issued binding."""
+        with self._observation_lock:
+            projection, fingerprint = self._calendar_observation(request, as_of=as_of)
+            self._publish_calendar_observation(projection, fingerprint)
+            return projection
+
+    def restore_calendar_projection(
+        self, request: ObserveCalendar, *, original: CalendarProjection,
+        source_fingerprint: str, now: datetime,
+    ) -> None:
+        """Reissue only the durable original after validation, never on failure.
+
+        The caller must first check independent provider content against the same
+        durable fingerprint. This method neither reads a provider nor extends the
+        original freshness. Source comparison and cache publication are serialized.
+        """
+        now = require_aware(now)
+        with self._observation_lock:
+            if not original.fetched_at <= now < original.expires_at:
+                raise StaleProjection("calendar projection expired")
+            for handle, kind in ((request.calendar_ref, ResourceKind.CALENDAR),
+                                 (request.customer_ref, ResourceKind.CUSTOMER)):
+                self._resolve(handle, tenant=request.organization_id, actor=request.initiator_id,
+                              task=request.task_id, operation="calendar.create_event", kind=kind, now=now)
+            candidate, fingerprint = self._calendar_observation(request, as_of=original.fetched_at)
+            if candidate != original or fingerprint != source_fingerprint:
+                raise StaleProjection("restored calendar source differs from durable input")
+            self._publish_calendar_observation(candidate, fingerprint)
 
     def _check_projection(self, projection: CalendarProjection, *, now: datetime) -> None:
         if self._observations.get(projection.revision) != projection:
@@ -261,7 +310,6 @@ class VirtualOffice:
         # When the offset is invalid, computing interval membership is still safe
         # but calling it a confirmed office-hours match would be misleading.
         if timezone_valid:
-            # Calendar-local work schedule. Candidate must fit one contiguous shift.
             work = _working_intervals(calendar, change.start_at, change.end_at)
             if not any(start <= change.start_at and change.end_at <= end
                        for start, end in work):
@@ -407,14 +455,10 @@ class VirtualOffice:
         )
 
     def trusted_projection_fingerprint(self, projection: CalendarProjection, *, now: datetime) -> str:
-        """Internal precommit evidence; never exposes the source's private record fields.
-
-        The gateway must also compare against the *current fake provider read*, not
-        merely this cache, because the authoritative fake source may have changed.
-        """
-        self._check_projection(projection, now=require_aware(now))
-        return self._source_fingerprints[projection.revision]
-
+        """Internal precommit evidence; coordinated callers also check durable input."""
+        with self._observation_lock:
+            self._check_projection(projection, now=require_aware(now))
+            return self._source_fingerprints[projection.revision]
 
     def trusted_task_projection_fingerprint(self, projection: TaskListProjection,
                                            *, now: datetime) -> str:

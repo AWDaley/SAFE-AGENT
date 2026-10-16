@@ -111,24 +111,17 @@ class TrustedCoordinatedPlanning(TrustedPersistentPlanning):
         self._workflow._broker.trusted_import(tuple(row.binding_json for row in rows))
 
     def _source(self, tx: TaskTransaction, value: CoordinatedPlanningInput, now: datetime) -> None:
-        """Reissue ONLY the identical original snapshot, never extend freshness.
+        """Validate both sources before publishing an identical restored binding.
 
-        Both the trusted synthetic cache and independent fake-provider read must
-        match the original content hash, even when a source revision is unchanged.
+        Rejected independent-provider or local-source checks cannot modify the
+        issuance caches. Publication rechecks the local source under its lock.
         """
         self._references(tx, value)
         projection, ctx = value.projection, value.context
         if not projection.fetched_at <= now < projection.expires_at:
             raise StateConflict("COORDINATED_SOURCE_STALE")
         office = self._workflow._office
-        checked = office.observe(ObserveCalendar(
-            organization_id=ctx.organization_id, initiator_id=tx.task.initiator_id,
-            task_id=ctx.task_id, calendar_ref=ctx.calendar_ref, customer_ref=ctx.customer_ref,
-            from_at=ctx.allowed_start, until_at=ctx.allowed_end,
-        ), as_of=projection.fetched_at)
-        if (checked != projection or office.trusted_projection_fingerprint(checked, now=now)
-                != value.source_fingerprint
-                or office.trusted_template_duration(ctx.template_id, organization_id=ctx.organization_id)
+        if (office.trusted_template_duration(ctx.template_id, organization_id=ctx.organization_id)
                 != ctx.duration_minutes):
             raise StateConflict("COORDINATED_SOURCE_CHANGED")
         scope = BrokerScope(organization_id=ctx.organization_id, initiator_id=tx.task.initiator_id,
@@ -144,6 +137,11 @@ class TrustedCoordinatedPlanning(TrustedPersistentPlanning):
                 or current.calendar.source_revision != projection.source_revision
                 or current.calendar.time_zone != ctx.time_zone):
             raise StateConflict("COORDINATED_PROVIDER_SOURCE_CHANGED")
+        office.restore_calendar_projection(ObserveCalendar(
+            organization_id=ctx.organization_id, initiator_id=tx.task.initiator_id,
+            task_id=ctx.task_id, calendar_ref=ctx.calendar_ref, customer_ref=ctx.customer_ref,
+            from_at=ctx.allowed_start, until_at=ctx.allowed_end,
+        ), original=projection, source_fingerprint=value.source_fingerprint, now=now)
 
     def _input(self, principal: Principal, task_id: str, body: PlanningCommand) -> CoordinatedPlanningInput:
         lease: PlanningLease | None = None
@@ -238,8 +236,6 @@ class TrustedCoordinatedPlanning(TrustedPersistentPlanning):
                 raise StateConflict("COORDINATED_INPUT_DENIED")
             consumed = read_consumption(tx, value)
             if consumed is not None:
-                # Restore the issuance cache using ORIGINAL bounds, before a
-                # later queue operation. Completed business effects are not replayed.
                 if consumed.result_kind == "PROPOSED" and now < value.projection.expires_at:
                     self._source(tx, value, now)
                 return
@@ -306,13 +302,9 @@ class TrustedCoordinatedPlanning(TrustedPersistentPlanning):
                     _live_attempt(tx, value.lease, checked_at)
                     self._source(tx, value, checked_at)
             if not complete:
-                # Source/permissions were rechecked on this retry, not just when
-                # its input was saved. No network runs inside a SQL transaction.
                 self._inference.execute(actor, value.lease, value.prompt())
             self._consume(actor, value)
         except Exception:
-            # A lost consumption-commit acknowledgment is recovered by reading.
-            # Never fail the lease or call execute a second time in this handler.
             with self._store._repo._sessions() as db:
                 committed = db.get(ConsumptionRow, value.lease.attempt_id) is not None
             if not committed:
