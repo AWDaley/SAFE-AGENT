@@ -14,7 +14,7 @@ from safe_agent.storage.models import (
 )
 from tests.m2.conftest import NOW
 from tests.m6.test_persistent_planning import COMMAND, plan
-from tests.m6.test_synthetic_workflow import new_task
+from tests.m6.test_synthetic_workflow import grant, new_task, queue
 from tests.m6.test_task_intake import auth
 from tests.m7.test_coordinated_planning import build, count
 from tests.m7.test_inference_coordinator import held
@@ -231,3 +231,25 @@ def test_retirement_reason_is_closed_schema(kit, monkeypatch, reason):
         json=body,
     ).status_code == 422
     assert kit["repo"].replay_task(task).phase is OfficePhase.ASSIGNED
+
+
+def test_queued_execution_intent_cannot_be_retired(kit, monkeypatch):
+    client, signer, actor, calendar, internal, _, calls, _ = build(kit, monkeypatch)
+    task = new_task(client, signer, actor)
+    prepared = plan(client, signer, actor, task)
+    assert prepared.status_code == 200, prepared.text
+    version = grant(client, signer, kit["manager"], task, prepared.json())
+    queued = queue(client, signer, actor, task, version=version)
+    assert queued.status_code == 200, queued.text
+    assert kit["repo"].replay_task(task).phase is OfficePhase.EXECUTING
+    assert count(kit["repo"], OutboxRow) == 1
+    assert calendar.effect_count == internal.effect_count == 0
+
+    status = read(client, signer, actor, task)
+    assert status.status_code == 200, status.text
+    assert status.json()["status"] == "TASK_ADVANCED"
+    assert status.json()["allowed_actions"] == ["refresh"]
+    assert retire(client, signer, actor, task, status.json()).status_code == 409
+    assert kit["repo"].replay_task(task).phase is OfficePhase.EXECUTING
+    assert count(kit["repo"], OutboxRow) == 1
+    assert len(calls) == 1
