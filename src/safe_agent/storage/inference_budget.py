@@ -17,6 +17,7 @@ from sqlalchemy import select, update
 
 from safe_agent.canonical import canonical_json, sha256
 from safe_agent.contracts.base import require_aware
+from safe_agent.contracts.billing_verification import VerifiedBillingAttestation
 from safe_agent.contracts.control import Task, TaskManifest
 from safe_agent.contracts.inference import InferenceReportedUsage, InferenceRequest
 from safe_agent.contracts.inference_budget import (
@@ -368,15 +369,58 @@ class InferenceBudgetLedger:
             _append_event(tx, row, kind="SYNTHETIC_SETTLED", at=now)
             return _receipt(row)
 
+    def _reconcile_authenticated(
+        self, *, receipt_id: str, request_id: str, organization_id: str,
+        task_id: str, route_id: str, model_revision: str, prompt_digest: str,
+        charge_microusd: int, source_evidence_hash: str, issuer_id: str,
+        payload_hash: str, observed_at: datetime, now: datetime,
+    ) -> InferenceReservationReceipt:
+        if now < observed_at:
+            raise InferenceBudgetDenied()
+        with self._repo._sessions() as s:
+            found = s.get(InferenceBudgetReservationRow, request_id)
+            if found is None:
+                raise InferenceBudgetDenied()
+            stored_task_id = found.task_id
+        with self._repo.write_task(stored_task_id) as tx:
+            row = tx.session.get(InferenceBudgetReservationRow, request_id)
+            if row is None or row.status not in ("IN_FLIGHT", "UNCERTAIN"):
+                raise InferenceBudgetDenied()
+            _audit_events(tx, row)
+            if (row.organization_id != organization_id
+                    or row.task_id != task_id
+                    or row.route_id != route_id
+                    or row.model_revision != model_revision
+                    or row.prompt_digest != prompt_digest
+                    or charge_microusd > row.max_microusd
+                    or tx.session.get(InferenceBillingAttestationRow, receipt_id) is not None):
+                # Over-reservation or binding disagreement requires incident
+                # review; never release capacity or invent a capped charge.
+                raise InferenceBudgetDenied()
+            hold = row.held_microusd
+            for _, key in _keys(row.organization_id, row.task_id):
+                _change_account(
+                    tx, key, hold_delta=-hold,
+                    charge_delta=charge_microusd,
+                )
+            row.held_microusd = 0
+            row.charged_microusd = charge_microusd
+            row.status = "RECONCILED"
+            row.evidence_hash = payload_hash
+            tx.session.add(InferenceBillingAttestationRow(
+                receipt_id=receipt_id, request_id=row.request_id,
+                issuer_id=issuer_id, charge_microusd=charge_microusd,
+                source_evidence_hash=source_evidence_hash,
+                attestation_digest=payload_hash, accepted_at=now,
+            ))
+            _append_event(tx, row, kind="ATTESTED", at=now)
+            return _receipt(row)
+
     def reconcile_attested(
         self, evidence: BillingChargeAttestation, *,
         verifier_secret: bytes, now: datetime,
     ) -> InferenceReservationReceipt:
-        """Only an independent billing host holding a separate key may call.
-
-        Authentication does not prove external bill existence; the host must
-        verify that evidence independently before signing. No HTTP route.
-        """
+        """Legacy HMAC fixture path retained for backward-compatible tests."""
         now = require_aware(now).astimezone(UTC)
         if type(verifier_secret) is not bytes or len(verifier_secret) < 32:
             raise InferenceBudgetDenied()
@@ -386,49 +430,54 @@ class InferenceBudgetLedger:
         ).hexdigest()
         if not hmac.compare_digest(mac, evidence.signature):
             raise InferenceBudgetDenied()
-        if now < evidence.observed_at:
+        return self._reconcile_authenticated(
+            receipt_id=evidence.receipt_id, request_id=evidence.request_id,
+            organization_id=evidence.organization_id, task_id=evidence.task_id,
+            route_id=evidence.route_id, model_revision=evidence.model_revision,
+            prompt_digest=evidence.prompt_digest,
+            charge_microusd=evidence.charge_microusd,
+            source_evidence_hash=evidence.source_evidence_hash,
+            issuer_id=evidence.issuer_id, payload_hash=sha256(payload),
+            observed_at=evidence.observed_at, now=now,
+        )
+
+    def reconcile_verified(
+        self, evidence: VerifiedBillingAttestation, *,
+        verifier_public_key: bytes, expected_issuer_id: str,
+        expected_verifier_key_id: str, now: datetime,
+    ) -> InferenceReservationReceipt:
+        """Apply evidence signed by an isolated verifier private key.
+
+        SAFE-AGENT needs only the public key. Possessing this verification
+        capability cannot mint a valid attestation.
+        """
+        now = require_aware(now).astimezone(UTC)
+        if (type(verifier_public_key) is not bytes or len(verifier_public_key) != 32
+                or evidence.issuer_id != expected_issuer_id
+                or evidence.verifier_key_id != expected_verifier_key_id):
             raise InferenceBudgetDenied()
-        with self._repo._sessions() as s:
-            found = s.get(InferenceBudgetReservationRow, evidence.request_id)
-            if found is None:
-                raise InferenceBudgetDenied()
-            task_id = found.task_id
-        with self._repo.write_task(task_id) as tx:
-            row = tx.session.get(InferenceBudgetReservationRow, evidence.request_id)
-            if row is None or row.status not in ("IN_FLIGHT", "UNCERTAIN"):
-                raise InferenceBudgetDenied()
-            _audit_events(tx, row)
-            if (row.organization_id != evidence.organization_id
-                    or row.task_id != evidence.task_id
-                    or row.route_id != evidence.route_id
-                    or row.model_revision != evidence.model_revision
-                    or row.prompt_digest != evidence.prompt_digest
-                    or evidence.charge_microusd > row.max_microusd
-                    or tx.session.get(
-                        InferenceBillingAttestationRow, evidence.receipt_id,
-                    ) is not None):
-                # Over-reservation invoices require incident review; NEVER
-                # release capacity or claim a capped smaller invoice.
-                raise InferenceBudgetDenied()
-            hold = row.held_microusd
-            for _, key in _keys(row.organization_id, row.task_id):
-                _change_account(
-                    tx, key, hold_delta=-hold,
-                    charge_delta=evidence.charge_microusd,
-                )
-            row.held_microusd = 0
-            row.charged_microusd = evidence.charge_microusd
-            row.status = "RECONCILED"
-            row.evidence_hash = sha256(payload)
-            tx.session.add(InferenceBillingAttestationRow(
-                receipt_id=evidence.receipt_id, request_id=row.request_id,
-                issuer_id=evidence.issuer_id,
-                charge_microusd=evidence.charge_microusd,
-                source_evidence_hash=evidence.source_evidence_hash,
-                attestation_digest=sha256(payload), accepted_at=now,
-            ))
-            _append_event(tx, row, kind="ATTESTED", at=now)
-            return _receipt(row)
+        try:
+            checked = VerifiedBillingAttestation.model_validate_json(
+                evidence.model_dump_json(),
+            )
+            payload = checked.model_dump(mode="json", exclude={"signature"})
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+            Ed25519PublicKey.from_public_bytes(verifier_public_key).verify(
+                bytes.fromhex(checked.signature), canonical_json(payload),
+            )
+        except Exception:
+            raise InferenceBudgetDenied() from None
+        return self._reconcile_authenticated(
+            receipt_id=checked.receipt_id, request_id=checked.request_id,
+            organization_id=checked.organization_id, task_id=checked.task_id,
+            route_id=checked.route_id, model_revision=checked.model_revision,
+            prompt_digest=checked.prompt_digest,
+            charge_microusd=checked.charge_microusd,
+            source_evidence_hash=checked.source_evidence_hash,
+            issuer_id=checked.issuer_id, payload_hash=sha256(payload),
+            observed_at=checked.observed_at, now=now,
+        )
 
     def mark_expired_uncertain(
         self, *, now: datetime, max_scan: int = 100,
