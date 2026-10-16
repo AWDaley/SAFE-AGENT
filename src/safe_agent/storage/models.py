@@ -198,10 +198,27 @@ class InferenceBillingAttestationRow(Base):
         nullable=False, unique=True,
     )
     issuer_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    verification_scheme: Mapped[str] = mapped_column(
+        String(24), nullable=False, server_default="legacy_hmac",
+    )
+    verifier_key_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    verifier_public_key_hash: Mapped[str | None] = mapped_column(String(72), nullable=True)
+    source_adapter_id: Mapped[str] = mapped_column(
+        String(128), nullable=False, server_default="legacy_hmac_v1",
+    )
     charge_microusd: Mapped[int] = mapped_column(BigInteger, nullable=False)
     source_evidence_hash: Mapped[str] = mapped_column(String(72), nullable=False)
     attestation_digest: Mapped[str] = mapped_column(String(72), nullable=False)
     accepted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    __table_args__ = (
+        CheckConstraint(
+            "(verification_scheme = 'legacy_hmac' AND verifier_key_id IS NULL "
+            "AND verifier_public_key_hash IS NULL) OR "
+            "(verification_scheme = 'ed25519' AND verifier_key_id IS NOT NULL "
+            "AND verifier_public_key_hash IS NOT NULL)",
+            name="ck_infer_billing_verification_identity",
+        ),
+    )
 
 
 class InferenceInvocationRow(Base):
