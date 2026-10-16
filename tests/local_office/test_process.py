@@ -1,6 +1,7 @@
 """Installed CLI + real loopback API/UDS/worker acceptance, not mock HTTP tests."""
 from __future__ import annotations
 
+import json
 import os
 import socket
 import sqlite3
@@ -147,3 +148,48 @@ def test_installed_launcher_survives_api_restart_and_separate_worker():
         finally:
             stop(api)
             stop(sidecar)
+
+
+
+def test_installed_cli_requires_explicit_upgrade_and_can_rollback():
+    from tests.local_office.test_maintenance import legacy_workspace
+
+    cli = os.environ["SAFE_AGENT_LOCAL_CLI"]
+    environment = {
+        k: v for k, v in os.environ.items()
+        if not k.startswith(("SAFE_INFER_", "SAFE_AGENT_DATABASE"))
+        and k not in {"PYTHONPATH", "PYTHONHOME"}
+    }
+    with tempfile.TemporaryDirectory(prefix="slo_upgrade_", dir="/tmp") as temporary:
+        parent = Path(temporary)
+        root = legacy_workspace(parent)
+        backup = parent / "pre-0014-backup"
+
+        def command(*args, success=True):
+            result = subprocess.run(
+                [cli, "--workspace", str(root), *args],
+                cwd="/tmp", env=environment, capture_output=True,
+                text=True, timeout=45, check=False,
+            )
+            assert (result.returncode == 0) == success, result.stderr
+            return result
+
+        blocked = command("status", success=False)
+        assert "BLOCKED" in blocked.stderr
+
+        upgraded = command(
+            "upgrade", "--migrations", str(MIGRATIONS),
+            "--backup", str(backup),
+        )
+        report = json.loads(upgraded.stdout)
+        assert report["status"] == "UPGRADED"
+        assert report["source_head"] == "0013_coordinated_planning"
+        assert report["target_head"] == "0014_billing_verifier_identity"
+        assert json.loads(command("status").stdout)["status"] == "PERSISTED_STATE_AVAILABLE"
+
+        rolled_back = command("rollback", "--backup", str(backup))
+        report = json.loads(rolled_back.stdout)
+        assert report["status"] == "ROLLED_BACK"
+        assert report["migration_head"] == "0013_coordinated_planning"
+        assert report["requires_reviewed_upgrade_before_current_runtime"] is True
+        assert "BLOCKED" in command("status", success=False).stderr

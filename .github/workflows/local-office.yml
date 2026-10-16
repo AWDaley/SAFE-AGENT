@@ -35,7 +35,7 @@ jobs:
           SAFE_AGENT_LOCAL_CLI: ${{ github.workspace }}/.venv-local-office/bin/safe-agent-local
         run: |
           pytest tests/local_office/test_process.py --tb=short --junitxml=local-process.xml
-          python -c "import xml.etree.ElementTree as E; s=E.parse('local-process.xml').getroot().findall('testsuite'); assert s and sum(int(x.get('tests',0)) for x in s)>=1; assert all(int(x.get(k,0))==0 for x in s for k in ('skipped','errors','failures'))"
+          python -c "import xml.etree.ElementTree as E; s=E.parse('local-process.xml').getroot().findall('testsuite'); assert s and sum(int(x.get('tests',0)) for x in s)>=2; assert all(int(x.get(k,0))==0 for x in s for k in ('skipped','errors','failures'))"
       - name: Keep real provider release blocks in place
         run: |
           python scripts/check_m5_release.py --mode offline
