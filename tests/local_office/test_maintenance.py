@@ -43,7 +43,6 @@ from safe_agent.local_office.workspace import (
     create_layout,
     load_manifest,
     read_private,
-    secret,
     workspace_lock,
     write_new,
 )
