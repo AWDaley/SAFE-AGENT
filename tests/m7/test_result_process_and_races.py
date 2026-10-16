@@ -27,9 +27,10 @@ from safe_agent.inference.mock import OfflineMockInferenceTransport
 from safe_agent.storage.inference_dispatch import InferenceDispatchDenied
 from safe_agent.storage.inference_results import recover_validated_result
 from safe_agent.storage.result_models import InferenceValidatedResultRow as ResultRow
+from tests.m7 import test_inference_results as result_cases
 from tests.m7.test_inference_coordinator import configured, held, transport
-from tests.m7.test_inference_results import repo  # noqa: F401
 
+repo = result_cases.repo
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -116,7 +117,6 @@ import json
 import os
 import sys
 from pathlib import Path
-from safe_agent.canonical import canonical_json
 from safe_agent.contracts.planning import PlanningLease
 from safe_agent.inference.coordinator import TrustedInferenceCoordinator
 from safe_agent.inference.mock import OfflineMockInferenceTransport
@@ -156,7 +156,7 @@ else:
     wire.send = forbidden
     result = runtime.resume(principal, lease)  # No original prompt supplied.
     assert result.status == 'AVAILABLE' and result.source_snapshot is not None
-    assert canonical_json(result.outcome) == canonical_json(evidence['outcome'])
+    assert result.outcome.model_dump(mode='json') == evidence['outcome']
     assert result.dispatched_this_call is False
     assert held(repo) == evidence['held']
     repo.close()
