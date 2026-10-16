@@ -37,7 +37,10 @@ from safe_agent.local_office.workspace import (
 )
 from safe_agent.orchestration.coordinated_planning import create_coordinated_planning
 from safe_agent.orchestration.synthetic_workflow import TrustedSyntheticWorkflow
-from safe_agent.orchestration.task_provisioning import TrustedSyntheticOption, TrustedTaskProvisioner
+from safe_agent.orchestration.task_provisioning import (
+    TrustedSyntheticOption,
+    TrustedTaskProvisioner,
+)
 from safe_agent.runtime.preflight import inspect_environment
 from safe_agent.security.principal import AccessDenied, Principal, SignedOperatorTokens
 from safe_agent.storage.inference_admission import TrustedInferenceAdmission
