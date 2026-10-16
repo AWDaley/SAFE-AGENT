@@ -15,6 +15,7 @@ from typing import Literal
 
 from sqlalchemy import select, update
 
+from safe_agent.billing.keyring import BillingVerifierKeyDenied, TrustedBillingVerifierKeyring
 from safe_agent.canonical import canonical_json, sha256
 from safe_agent.contracts.base import require_aware
 from safe_agent.contracts.billing_verification import VerifiedBillingAttestation
@@ -373,6 +374,8 @@ class InferenceBudgetLedger:
         self, *, receipt_id: str, request_id: str, organization_id: str,
         task_id: str, route_id: str, model_revision: str, prompt_digest: str,
         charge_microusd: int, source_evidence_hash: str, issuer_id: str,
+        verification_scheme: str, verifier_key_id: str | None,
+        verifier_public_key_hash: str | None, source_adapter_id: str,
         payload_hash: str, observed_at: datetime, now: datetime,
     ) -> InferenceReservationReceipt:
         if now < observed_at:
@@ -409,7 +412,11 @@ class InferenceBudgetLedger:
             row.evidence_hash = payload_hash
             tx.session.add(InferenceBillingAttestationRow(
                 receipt_id=receipt_id, request_id=row.request_id,
-                issuer_id=issuer_id, charge_microusd=charge_microusd,
+                issuer_id=issuer_id, verification_scheme=verification_scheme,
+                verifier_key_id=verifier_key_id,
+                verifier_public_key_hash=verifier_public_key_hash,
+                source_adapter_id=source_adapter_id,
+                charge_microusd=charge_microusd,
                 source_evidence_hash=source_evidence_hash,
                 attestation_digest=payload_hash, accepted_at=now,
             ))
@@ -437,36 +444,32 @@ class InferenceBudgetLedger:
             prompt_digest=evidence.prompt_digest,
             charge_microusd=evidence.charge_microusd,
             source_evidence_hash=evidence.source_evidence_hash,
-            issuer_id=evidence.issuer_id, payload_hash=sha256(payload),
+            issuer_id=evidence.issuer_id, verification_scheme="legacy_hmac",
+            verifier_key_id=None, verifier_public_key_hash=None,
+            source_adapter_id="legacy_hmac_v1", payload_hash=sha256(payload),
             observed_at=evidence.observed_at, now=now,
         )
 
     def reconcile_verified(
         self, evidence: VerifiedBillingAttestation, *,
-        verifier_public_key: bytes, expected_issuer_id: str,
-        expected_verifier_key_id: str, now: datetime,
+        keyring: TrustedBillingVerifierKeyring, now: datetime,
     ) -> InferenceReservationReceipt:
-        """Apply evidence signed by an isolated verifier private key.
-
-        SAFE-AGENT needs only the public key. Possessing this verification
-        capability cannot mint a valid attestation.
-        """
+        """Apply an asymmetric attestation through the configured rotation keyring."""
         now = require_aware(now).astimezone(UTC)
-        if (type(verifier_public_key) is not bytes or len(verifier_public_key) != 32
-                or evidence.issuer_id != expected_issuer_id
-                or evidence.verifier_key_id != expected_verifier_key_id):
+        if type(keyring) is not TrustedBillingVerifierKeyring:
             raise InferenceBudgetDenied()
         try:
             checked = VerifiedBillingAttestation.model_validate_json(
                 evidence.model_dump_json(),
             )
+            public_key, public_key_hash = keyring.resolve(checked, now=now)
             payload = checked.model_dump(mode="json", exclude={"signature"})
             from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-            Ed25519PublicKey.from_public_bytes(verifier_public_key).verify(
+            Ed25519PublicKey.from_public_bytes(public_key).verify(
                 bytes.fromhex(checked.signature), canonical_json(payload),
             )
-        except Exception:
+        except (BillingVerifierKeyDenied, Exception):
             raise InferenceBudgetDenied() from None
         return self._reconcile_authenticated(
             receipt_id=checked.receipt_id, request_id=checked.request_id,
@@ -475,7 +478,11 @@ class InferenceBudgetLedger:
             prompt_digest=checked.prompt_digest,
             charge_microusd=checked.charge_microusd,
             source_evidence_hash=checked.source_evidence_hash,
-            issuer_id=checked.issuer_id, payload_hash=sha256(payload),
+            issuer_id=checked.issuer_id, verification_scheme="ed25519",
+            verifier_key_id=checked.verifier_key_id,
+            verifier_public_key_hash=public_key_hash,
+            source_adapter_id=checked.source_adapter_id,
+            payload_hash=sha256(payload),
             observed_at=checked.observed_at, now=now,
         )
 
