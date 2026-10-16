@@ -12,7 +12,7 @@ from sqlalchemy import select
 
 from safe_agent.agent.json_planner import PLANNER_INSTRUCTION
 from safe_agent.broker.references import ReferenceDenied
-from safe_agent.canonical import canonical_json, sha256
+from safe_agent.canonical import sha256
 from safe_agent.contracts.control import Task, TaskManifest
 from safe_agent.contracts.coordinated_planning import CoordinatedPlanningInput
 from safe_agent.contracts.inference_dispatch import InferenceInvocationView
@@ -254,11 +254,7 @@ class PlanningRecoveryService:
     @staticmethod
     def _saved_prompt(value: CoordinatedPlanningInput) -> str:
         """Rebuild only the exact minimized prompt already bound to admission."""
-        return canonical_json({
-            "instruction": PLANNER_INSTRUCTION,
-            "task": value.context,
-            "availability": value.projection.to_planner_projection(),
-        }).decode("utf-8")
+        return value.prompt()
 
     def retire(
         self, principal: Principal, task_id: str, command: RetireTaskCommand,
