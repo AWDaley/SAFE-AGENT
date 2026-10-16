@@ -65,7 +65,7 @@ def test_status_does_not_create_attempt_or_admission(kit, monkeypatch):
     response = read(client, signer, actor, task)
     assert response.status_code == 200, response.text
     assert response.json()["status"] == "NOT_STARTED"
-    assert response.json()["allowed_actions"] == ["refresh"]
+    assert response.json()["allowed_actions"] == ["refresh", "retire_task"]
     assert resume(client, signer, actor, task, command(response.json())).status_code == 409
     assert count(kit["repo"], PlanningAttemptRow) == count(kit["repo"], InferenceInvocationRow) == 0
     assert calls == []
@@ -88,7 +88,9 @@ def test_recoverable_reads_have_no_sql_mutations_or_private_payload(kit, monkeyp
         assert first.status_code == second.status_code == 200
         assert first.json() == second.json()
         assert first.json()["status"] == "RESULT_RECOVERABLE"
-        assert first.json()["allowed_actions"] == ["refresh", "resume_saved_result"]
+        assert first.json()["allowed_actions"] == [
+            "refresh", "resume_saved_result", "retire_task",
+        ]
     finally:
         event.remove(kit["repo"].engine, "before_cursor_execute", observe)
     assert writes == []
@@ -106,7 +108,7 @@ def test_resume_uses_saved_result_without_inference_approval_or_outbox(kit, monk
     result = resume(client, signer, actor, task, command(state))
     assert result.status_code == 200, result.text
     assert result.json()["status"] == "PREPARED"
-    assert result.json()["allowed_actions"] == ["refresh"]
+    assert result.json()["allowed_actions"] == ["refresh", "retire_task"]
     assert kit["repo"].replay_task(task).phase is OfficePhase.AWAITING_APPROVAL
     assert count(kit["repo"], CoordinatedPlanningConsumptionRow) == 1
     assert count(kit["repo"], PlanningAttemptRow) == 1
@@ -163,7 +165,8 @@ def test_expired_result_is_not_resumable(kit, monkeypatch):
     ticks[0] += timedelta(seconds=11)
     forbid_inference(monkeypatch, service)
     data = read(client, signer, actor, task).json()
-    assert data["status"] == "RESULT_EXPIRED" and data["allowed_actions"] == ["refresh"]
+    assert data["status"] == "RESULT_EXPIRED"
+    assert data["allowed_actions"] == ["refresh", "retire_task"]
     assert resume(client, signer, actor, task, command(original)).status_code == 409
     assert count(kit["repo"], CoordinatedPlanningConsumptionRow) == 0 and len(calls) == 1
 

@@ -7,6 +7,7 @@ from safe_agent.orchestration.office_tasks import TrustedOfficeTasks
 from safe_agent.tal.office_gate import OfficeGate
 from tests.m7 import test_inference_admission_postgres as admission_cases
 from tests.m7 import test_planning_recovery as cases
+from tests.m7 import test_task_retirement as retirement_cases
 
 pg_repo = admission_cases.pg_repo
 pytestmark = pytest.mark.skipif(
@@ -29,6 +30,12 @@ pytestmark = pytest.mark.skipif(
     cases.test_simultaneous_resume_commands_consume_once,
     cases.test_recovery_responses_have_no_store_headers,
     cases.test_input_saved_without_admission_cannot_be_dispatched_by_resume,
+    retirement_cases.test_not_started_task_retires_terminally_and_new_task_is_separate,
+    retirement_cases.test_reserved_invocation_is_cancelled_before_dispatch_but_hold_is_preserved,
+    retirement_cases.test_started_inference_cannot_retire_before_deadline,
+    retirement_cases.test_expired_started_inference_becomes_unknown_then_task_retires_without_refund,
+    retirement_cases.test_saved_result_can_be_retired_instead_of_consumed,
+    retirement_cases.test_prepared_task_can_retire_before_approval_or_queue,
 ])
 def test_postgres_recovery(pg_repo, kit, monkeypatch, case):
     scoped = {**kit, "repo": pg_repo,
