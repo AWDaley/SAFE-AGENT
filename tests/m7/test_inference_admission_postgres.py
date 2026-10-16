@@ -28,8 +28,8 @@ from safe_agent.storage.models import (
     InferenceInvocationEventRow,
 )
 from safe_agent.storage.repository import LedgerRepository
-from tests.m7.admission_fixtures import NOW, assigned, policy
 from tests.m7 import test_inference_accounting_reconciliation as accounting_cases
+from tests.m7.admission_fixtures import NOW, assigned, policy
 from tests.m7.test_inference_admission import sizes
 
 pytestmark = pytest.mark.skipif(
