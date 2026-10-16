@@ -86,6 +86,7 @@ def finish_planning_attempt(
     reason_code: PlanningReason | None,
     proposal_hash: str | None,
     now: datetime,
+    coordinated_result_hash: str | None = None,
 ) -> None:
     """Complete under the SAME SQL task lock as any admitted proposal.
 
@@ -141,6 +142,10 @@ def finish_planning_attempt(
     row.proposal_hash = proposal_hash
     row.updated_at = now
     tx.session.flush()
+    from safe_agent.storage.coordinated_planning import record_consumption
+
+    record_consumption(tx, lease, result_hash=coordinated_result_hash,
+                       result_kind=result_kind, proposal_hash=proposal_hash, now=now)
 
 
 class PlanningWorkspaceStore:
@@ -224,7 +229,7 @@ class PlanningWorkspaceStore:
         mode: PlanningMode, now: datetime,
     ) -> PlanningLease | None:
         now = require_aware(now).astimezone(UTC)
-        with self._repo.write_task(task_id) as tx:
+        with self._repo.write_task(task_id, serialize_sqlite=True) as tx:
             task, snap = tx.task, tx.snapshot
             principal.require("task:prepare", task.organization_id, now)
             principal.require("task:propose", task.organization_id, now)
@@ -235,6 +240,9 @@ class PlanningWorkspaceStore:
                     or now >= task.deadline or snap.external_effects != 0
                     or snap.simulation_ref is not None or snap.proposal_hash is not None):
                 raise StateConflict("task is not an eligible synthetic planning assignment")
+            from safe_agent.storage.coordinated_planning import deny_coordinated_restart
+
+            deny_coordinated_restart(tx)
             row = tx.session.get(PlanningWorkspaceRow, task_id)
             if row is None:
                 if expected_workspace_version != 0:

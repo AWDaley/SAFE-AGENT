@@ -1,8 +1,9 @@
-"""Inference-only gateway: model output never becomes execution authority.
+"""Offline fixture gateway: model output never becomes execution authority.
 
-Trusted bootstrap selects the transport and optional M7-03 SQL cost ledger.
-Models and operator requests see neither the SQL budget store nor provider
-credentials, business-system adapters, or an executable tool registry.
+Application inference must use TrustedInferenceCoordinator with an authenticated
+principal, actual planning lease, durable admission and coordinated transport.
+This legacy stateless gateway now accepts ONLY the exact offline mock, even
+when a budget ledger is supplied. It is not a fallback application dispatcher.
 """
 
 from __future__ import annotations
@@ -152,22 +153,24 @@ def _check_candidate(
 
 
 class InferenceGateway:
-    """Typed inference admission and optional durable spending reservation.
+    """Stateless offline fixture compatibility, NOT application admission.
 
-    The M7-02 restricted network transport must run on a separately secured
-    inference-only host. A Python callback can still block indefinitely;
-    OS hard deadlines and verified external billing are release blockers.
+    A budget ledger does not supply a durable planning-attempt identity. Use
+    TrustedInferenceCoordinator for the coordinated application API. Arbitrary
+    Python callbacks and hosted/network transports are not accepted here.
     """
 
     def __init__(
         self, policy: InferenceRoutePolicy, transport: InferenceTransport, *,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         budget_ledger: InferenceBudgetLedger | None = None,
+        mode: Literal["offline_fixture"] = "offline_fixture",
     ) -> None:
-        if transport is None or not callable(getattr(transport, "infer", None)):
-            raise TypeError("trusted inference transport is required")
+        if mode != "offline_fixture" or type(transport) is not OfflineMockInferenceTransport:
+            raise TypeError("offline fixture only; use coordinated inference admission")
         self._policy = policy
         self._transport = transport
+        self._fixture_transport = transport
         self._clock = clock
         self._budget_ledger = budget_ledger
 
@@ -177,6 +180,10 @@ class InferenceGateway:
         return self._policy
 
     def infer(self, prompt: str) -> InferenceOutcome:
+        # Fail before parsing, reservations or any backend call if replaced.
+        if (self._transport is not self._fixture_transport
+                or type(self._transport) is not OfflineMockInferenceTransport):
+            raise InferenceDenied("INFERENCE_SCOPE_DENIED")
         policy = self._policy
         context, projection, data = _prompt_models(
             prompt, max_bytes=min(policy.max_prompt_bytes, policy.max_prompt_token_proxy),
@@ -214,8 +221,7 @@ class InferenceGateway:
             issued_at=now, deadline_at=deadline,
             task=context, availability=projection,
         )
-        # Reserve estimated maximum cost atomically BEFORE the backend call.
-        # A valid remote response is still unverified for billing purposes.
+        # Retain the existing optional accounting tests for the offline mock.
         budget = self._budget_ledger
         if budget is not None:
             try:
@@ -233,12 +239,16 @@ class InferenceGateway:
         reported = None
         try:
             try:
+                # Recheck after trusted callbacks/storage; never fall back.
+                if (self._transport is not self._fixture_transport
+                        or type(self._transport) is not OfflineMockInferenceTransport):
+                    raise InferenceDenied("INFERENCE_SCOPE_DENIED")
                 raw = self._transport.infer(request)
             except Exception:
                 # Neither the backend exception nor a raw model response is trusted
                 # to be shown to the operator or recorded as a task event.
                 raise InferenceDenied("INFERENCE_BACKEND_UNAVAILABLE") from None
-    
+
             if require_aware(self._clock()) >= deadline:
                 raise InferenceDenied("INFERENCE_DEADLINE_EXCEEDED")
             if type(raw) is not InferenceTransportReply:
@@ -283,25 +293,23 @@ class InferenceGateway:
             if budget is not None:
                 try:
                     at = require_aware(self._clock())
-                    if validated and type(self._transport) is OfflineMockInferenceTransport:
+                    if (validated and self._transport is self._fixture_transport
+                            and type(self._transport) is OfflineMockInferenceTransport):
                         budget.close_synthetic(
                             request.request_id, now=at, exact_offline_mock=True,
                         )
                     else:
-                        # All uncertain, failed or remote-inference requests
-                        # retain their reservation until verified reconciliation.
+                        # Failed/uncertain fixture calls keep their reservation.
+                        # Coordinated remote-bound accounting is unchanged.
                         budget.mark_uncertain(
                             request.request_id, now=at,
                             reason="UNVERIFIED_RESULT" if validated else "UNKNOWN_EFFECT",
                             reported_usage=reported,
                         )
                 except Exception:
-                    # Never claim a free call if ledger reconciliation fails.
-                    # Its durable reservation continues to consume capacity.
                     raise InferenceDenied("INFERENCE_BACKEND_UNAVAILABLE") from None
 
     def generate(self, prompt: str) -> str:
-        """Drop-in text-only callback for ClosedJsonPlanner at trusted startup."""
+        """Offline fixture callback only; not a coordinated application interface."""
         result = self.infer(prompt)
-        # Never return the raw backend answer, including unsafe questions.
         return result.proposal.model_dump_json()

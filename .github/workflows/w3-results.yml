@@ -1,0 +1,51 @@
+name: W3 durable result acceptance
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  result-acceptance:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.6
+        env:
+          POSTGRES_USER: safe_result_ci
+          POSTGRES_PASSWORD: disposable_result_ci_only
+          POSTGRES_DB: safe_result_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U safe_result_ci -d safe_result_ci"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      SAFE_AGENT_DATABASE_URL: postgresql+psycopg://safe_result_ci:disposable_result_ci_only@localhost:5432/safe_result_ci
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Install pinned direct inputs and PostgreSQL driver
+        run: |
+          python -m pip install -r requirements.lock
+          python -m pip install -e '.[dev,postgres]'
+      - name: W3 schema digest report
+        run: python scripts/export_inference_result_schemas.py --hashes
+      - name: Lint including the new forward migration
+        run: ruff check src tests scripts migrations/versions/0012_inference_results.py
+      - name: SQLite result and migration acceptance
+        run: pytest tests/m7/test_result_recovery_regressions.py tests/m7/test_inference_results.py tests/m7/test_result_schema.py
+      - name: Abrupt caller restart and competing result writers
+        run: pytest tests/m7/test_result_process_and_races.py
+      - name: Mandatory real PostgreSQL result invariants
+        env:
+          SAFE_AGENT_TEST_POSTGRES_RESULTS: '1'
+        run: |
+          pytest tests/m7/test_results_postgres.py --junitxml=w3-postgres.xml
+          python -c "import xml.etree.ElementTree as E; s=E.parse('w3-postgres.xml').getroot().findall('testsuite'); assert s and sum(int(x.get('tests',0)) for x in s)>=17; assert all(int(x.get(k,0))==0 for x in s for k in ('skipped','errors','failures'))"
+      - name: Pinned W3 contract shapes
+        run: python scripts/export_inference_result_schemas.py --check

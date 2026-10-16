@@ -1,8 +1,9 @@
 """PR3 privileged Google test execution and reconciliation, OFFLINE MOCKS ONLY.
 
-Only a trusted operator test harness may instantiate this worker. It accepts
-exact httpx.MockTransport clients, never a real network transport, and is not
-registered with any agent, FastAPI route, or general-purpose dispatcher.
+Only a trusted operator test harness may instantiate this worker. Both HTTP
+clients are validated and pinned with no mounts, hooks, proxy environment,
+client authentication or substituted routing. Trusted fixture callbacks are
+not an OS sandbox. This worker is not a live provider or model-facing tool.
 
 New writes require the bound SQL outbox, current TAL authorization, private
 calendar mapping, broker scope, fresh free/busy and a first-ever claim.
@@ -17,8 +18,6 @@ from enum import StrEnum
 from importlib import import_module
 from secrets import token_hex
 from typing import Any, cast
-
-import httpx
 
 from safe_agent.broker import BrokerScope, ReferenceBroker, ResourceKind
 from safe_agent.canonical import sha256
@@ -43,6 +42,7 @@ from .errors import (
     GoogleStateConflict,
     GoogleUnknownOutcome,
 )
+from .offline_transport import OfflineGoogleClientBinding, OfflineGoogleTransportDenied
 from .outbox import _trusted_tal_office_command
 from .service import GoogleTestCalendarService
 
@@ -73,12 +73,12 @@ class _Dispatch:
 
 
 class OfflineGoogleTestRecoveryWorker:
-    """One narrowly scoped TEST WORKER; no external Google connectivity allowed.
+    """One narrowly scoped TEST WORKER; no external Google transport allowed.
 
     The authorized calendar mapping is trusted deployment/test configuration,
     NEVER model input. It maps task-scoped opaque handles to exact allowlisted
-    provider calendar IDs. Both HTTP clients must use MockTransport: the worker
-    cannot issue live OAuth or Calendar requests, including through refresh.
+    provider calendar IDs. Both clients must retain their validated offline
+    configuration, including during OAuth refresh and independent readback.
     """
 
     def __init__(
@@ -89,9 +89,11 @@ class OfflineGoogleTestRecoveryWorker:
     ) -> None:
         if type(service) is not GoogleTestCalendarService:
             raise TypeError("only the concrete test Google service is supported")
-        if (type(service._api._http._transport) is not httpx.MockTransport
-                or type(service._oauth._http._transport) is not httpx.MockTransport):
-            raise TypeError("PR3 worker is OFFLINE ONLY: HTTP MockTransport is mandatory")
+        try:
+            self._calendar_http = OfflineGoogleClientBinding.bind(service._api._http)
+            self._oauth_http = OfflineGoogleClientBinding.bind(service._oauth._http)
+        except OfflineGoogleTransportDenied:
+            raise TypeError("PR3 worker is OFFLINE ONLY: fixed mock clients required") from None
         if not 1 <= max_attempts <= 10:
             raise ValueError("invalid reconciliation limit")
         if not trusted_calendar_mapping:
@@ -109,11 +111,13 @@ class OfflineGoogleTestRecoveryWorker:
         self._max_attempts = max_attempts
 
     def _assert_offline_clients(self) -> None:
-        # Check at use time as well as constructor time. A backend swapping the
-        # client after construction must not accidentally create live egress.
-        if (type(self._service._api._http._transport) is not httpx.MockTransport
-                or type(self._service._oauth._http._transport) is not httpx.MockTransport):
-            raise GoogleDispatchDenied("GOOGLE_OFFLINE_TRANSPORT_CHANGED")
+        # Pin the selected routing and handler, not merely the default transport.
+        # Reject substitution BEFORE acquiring a claim or making any request.
+        try:
+            self._calendar_http.require_unchanged(self._service._api._http)
+            self._oauth_http.require_unchanged(self._service._oauth._http)
+        except OfflineGoogleTransportDenied:
+            raise GoogleDispatchDenied("GOOGLE_OFFLINE_TRANSPORT_CHANGED") from None
 
     def process_one(
         self, *, now: datetime, task_id: str | None = None,
@@ -309,7 +313,9 @@ class OfflineGoogleTestRecoveryWorker:
             return self._verified(claim, context, found, now=now)
         if fault is GoogleWorkerFault.AFTER_INSERT:
             raise InjectedGoogleWorkerCrash("injected exit after provider insert")
-        # Never mark complete based on HTTP 200 alone.
+        # Never mark complete based on HTTP 200 alone. Recheck the boundary
+        # after the insert callback as well, before independent readback.
+        self._assert_offline_clients()
         found = self._service._api.find_effect(
             calendar_id=calendar_id, token=token, intent=context.intent,
         )
