@@ -181,10 +181,11 @@ def test_postgres_reconciled_live_dispatch_still_consumes_outstanding_capacity(p
 
 
 def test_postgres_ed25519_reconciliation_releases_only_unknown_capacity(pg_repo):
+    from safe_agent.billing.adapters import SyntheticHMACBillingAdapter
     from safe_agent.billing.verifier import OfflineAsymmetricBillingVerifier
     from safe_agent.storage.inference_budget import InferenceBudgetLedger
     from safe_agent.storage.inference_dispatch import TrustedInferenceDispatchStore
-    from tests.m7.test_asymmetric_billing_verifier import ISSUER, KEY_ID, PRIVATE, public_key
+    from tests.m7.test_asymmetric_billing_verifier import ISSUER, KEY_ID, PRIVATE, keyring
     from tests.m7.test_offline_billing_verifier import SOURCE_KEY, source_record
 
     ticks = [NOW]
@@ -199,15 +200,15 @@ def test_postgres_ed25519_reconciliation_releases_only_unknown_capacity(pg_repo)
     ticks[0] += timedelta(minutes=2)
     assert store.recover(*args).state == "UNKNOWN"
 
-    verifier = OfflineAsymmetricBillingVerifier(
-        source_key=SOURCE_KEY, issuer_private_key=PRIVATE,
-        issuer_id=ISSUER, verifier_key_id=KEY_ID,
+    normalized = SyntheticHMACBillingAdapter(source_key=SOURCE_KEY).normalize(
+        source_record(request, amount=80).model_dump_json(), now=ticks[0],
     )
-    evidence = verifier.attest(source_record(request, amount=80), now=ticks[0])
+    verifier = OfflineAsymmetricBillingVerifier(
+        issuer_private_key=PRIVATE, issuer_id=ISSUER, verifier_key_id=KEY_ID,
+    )
+    evidence = verifier.sign(normalized, now=ticks[0])
     settled = InferenceBudgetLedger(pg_repo, pol.budget).reconcile_verified(
-        evidence, verifier_public_key=public_key(),
-        expected_issuer_id=ISSUER, expected_verifier_key_id=KEY_ID,
-        now=ticks[0] + timedelta(seconds=1),
+        evidence, keyring=keyring(), now=ticks[0] + timedelta(seconds=1),
     )
     assert settled.status == "RECONCILED"
     assert settled.held_microusd == 0 and settled.charged_microusd == 80

@@ -15,7 +15,7 @@ from typing import Literal
 
 from sqlalchemy import select, update
 
-from safe_agent.billing.keyring import BillingVerifierKeyDenied, TrustedBillingVerifierKeyring
+from safe_agent.billing.keyring import TrustedBillingVerifierKeyring
 from safe_agent.canonical import canonical_json, sha256
 from safe_agent.contracts.base import require_aware
 from safe_agent.contracts.billing_verification import VerifiedBillingAttestation
@@ -469,7 +469,7 @@ class InferenceBudgetLedger:
             Ed25519PublicKey.from_public_bytes(public_key).verify(
                 bytes.fromhex(checked.signature), canonical_json(payload),
             )
-        except (BillingVerifierKeyDenied, Exception):
+        except Exception:
             raise InferenceBudgetDenied() from None
         return self._reconcile_authenticated(
             receipt_id=checked.receipt_id, request_id=checked.request_id,
