@@ -15,7 +15,7 @@ import sqlite3
 from contextlib import ExitStack
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Final, Literal
 
 from alembic import command
 from alembic.config import Config
@@ -49,7 +49,7 @@ from safe_agent.local_office.workspace import (
     write_new,
 )
 
-LEGACY_HEAD = "0013_coordinated_planning"
+LEGACY_HEAD: Final[Literal["0013_coordinated_planning"]] = "0013_coordinated_planning"
 _STAGE_DB = ".office.sqlite.upgrade"
 _ROLLBACK_DB = ".office.sqlite.rollback"
 _JOURNAL = ".upgrade-journal.json"
