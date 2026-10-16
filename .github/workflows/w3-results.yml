@@ -39,9 +39,13 @@ jobs:
         run: ruff check src tests scripts migrations/versions/0012_inference_results.py
       - name: SQLite result and migration acceptance
         run: pytest tests/m7/test_result_recovery_regressions.py tests/m7/test_inference_results.py tests/m7/test_result_schema.py
+      - name: Abrupt caller restart and competing result writers
+        run: pytest tests/m7/test_result_process_and_races.py
       - name: Mandatory real PostgreSQL result invariants
         env:
           SAFE_AGENT_TEST_POSTGRES_RESULTS: '1'
-        run: pytest tests/m7/test_results_postgres.py
+        run: |
+          pytest tests/m7/test_results_postgres.py --junitxml=w3-postgres.xml
+          python -c "import xml.etree.ElementTree as E; s=E.parse('w3-postgres.xml').getroot().findall('testsuite'); assert s and sum(int(x.get('tests',0)) for x in s)>=17; assert all(int(x.get(k,0))==0 for x in s for k in ('skipped','errors','failures'))"
       - name: Pinned W3 contract shapes
         run: python scripts/export_inference_result_schemas.py --check
