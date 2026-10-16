@@ -262,6 +262,24 @@ class TrustedInferenceDispatchStore:
                 "RESPONSE_REJECTED" if rejected else "DISPATCH_OUTCOME_UNKNOWN"
             ))
 
+    def cancel_before_dispatch(
+        self, principal: Principal, lease: PlanningLease, prompt: str,
+    ) -> InferenceInvocationView:
+        """Close an admitted request only while no dispatch marker exists.
+
+        The remote-bound budget hold remains conservative. This changes
+        admission liveness, not billing evidence, and never calls a transport.
+        """
+        with self._locked(principal, lease, prompt) as locked:
+            if locked.row.state == "FAILED_BEFORE_DISPATCH":
+                return locked.receipt.invocation
+            if locked.row.state != "RESERVED":
+                raise InferenceDispatchDenied()
+            reason = ("AUTHORITY_EXPIRED"
+                      if locked.now >= locked.receipt.binding.deadline_at
+                      else "CANCELLED_BEFORE_DISPATCH")
+            return self._transition(locked, "FAILED_BEFORE_DISPATCH", reason=reason)
+
     def recover(self, principal: Principal, lease: PlanningLease, prompt: str) -> InferenceInvocationView:
         """Trusted, request-scoped recovery. Never reclaims a started call or refunds."""
         with self._locked(principal, lease, prompt) as locked:

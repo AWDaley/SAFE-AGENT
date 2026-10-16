@@ -26,6 +26,7 @@ class TaskState(StrEnum):
     OUTCOME_UNKNOWN = "OUTCOME_UNKNOWN"
     NEEDS_REVIEW = "NEEDS_REVIEW"
     COMPLETED = "COMPLETED"
+    RETIRED = "RETIRED"
 
 
 class TaskBudget(StrictModel):

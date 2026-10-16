@@ -42,7 +42,16 @@
         </dl>
         <p class="warning">Status is advisory. Every recovery request rechecks the original permissions and deadlines. An expired or uncertain call is not proof that no charge occurred.</p>
         <button id="resumeSavedResultBtn" type="button" class="primary" hidden disabled>Prepare saved result for review</button>
-        <p class="muted smaller">Human approval and execution remain separate in the task-review workspace. Cancellation, task retirement and replacement planning are not available here.</p>
+        <div id="retireTaskPanel" hidden>
+          <label for="retireReason">Retirement reason</label>
+          <select id="retireReason">
+            <option value="NO_LONGER_NEEDED">No longer needed</option>
+            <option value="REPLACE_WITH_NEW_TASK">Replace with a newly authorized task</option>
+            <option value="STALE_OR_BLOCKED">Stale or blocked work</option>
+          </select>
+          <button id="retireTaskBtn" type="button" class="danger" disabled>Retire this task</button>
+        </div>
+        <p class="muted smaller">Retirement is terminal for this task. It never refunds or reconciles an inference hold, and replacement planning requires a separately assigned new task.</p>
       </section>
       <div id="recoveryStatus" role="status" aria-live="polite"></div>
     </main>

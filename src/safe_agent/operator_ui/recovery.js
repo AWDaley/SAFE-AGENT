@@ -26,6 +26,7 @@
     PREPARED: "The final proposal is already prepared. Review its exact contents and approval status in the task-review workspace. No new inference or execution is needed here.",
     NEEDS_CLARIFICATION: "The saved result requested clarification. This task is not automatically replanned; a reviewed retirement and replanning process is still required.",
     TASK_ADVANCED: "The task has moved beyond planning preparation. Inspect its approval and execution evidence in the task-review workspace. Recovery cannot repeat it.",
+    TASK_RETIRED: "This task is terminally retired. Its evidence and any unresolved inference accounting remain preserved. Create a separately authorized new task if more work is needed.",
     BLOCKED: "This task is not eligible for the configured coordinated recovery workflow. No recovery action is enabled."
   });
 
@@ -38,6 +39,8 @@
     node("recoveryResult").hidden = true;
     node("resumeSavedResultBtn").hidden = true;
     node("resumeSavedResultBtn").disabled = true;
+    node("retireTaskPanel").hidden = true;
+    node("retireTaskBtn").disabled = true;
     node("inspectRecoveryBtn").disabled = false;
   }
 
@@ -63,8 +66,9 @@
       data.workspace_version >= 0 && Number.isSafeInteger(data.attempts_used) &&
       data.attempts_used >= 0 && data.attempts_used <= 10 &&
       (JSON.stringify(actions) === '["refresh"]' ||
+       JSON.stringify(actions) === '["refresh","retire_task"]' ||
        (data.status === "RESULT_RECOVERABLE" &&
-        JSON.stringify(actions) === '["refresh","resume_saved_result"]'));
+        JSON.stringify(actions) === '["refresh","resume_saved_result","retire_task"]'));
   }
 
   function show(data, task) {
@@ -78,8 +82,11 @@
     text("recoveryAttempts", data.attempts_used);
     node("recoveryResult").hidden = false;
     const canResume = data.allowed_actions.includes("resume_saved_result");
+    const canRetire = data.allowed_actions.includes("retire_task");
     node("resumeSavedResultBtn").hidden = !canResume;
     node("resumeSavedResultBtn").disabled = !canResume;
+    node("retireTaskPanel").hidden = !canRetire;
+    node("retireTaskBtn").disabled = !canRetire;
   }
 
   async function request(task, action, payload, signal, currentGeneration) {
@@ -156,6 +163,41 @@
         inspected = null;
         node("resumeSavedResultBtn").hidden = true;
         text("recoveryStatus", error.message + " A preparation request may already be recorded; inspect it before continuing.");
+      }
+    } finally {
+      if (generation === currentGeneration) { busy = false; node("inspectRecoveryBtn").disabled = false; }
+    }
+  });
+
+  node("retireTaskBtn").addEventListener("click", async () => {
+    if (busy || !inspected || !inspected.allowed_actions.includes("retire_task")) return;
+    const task = node("recoveryTask").value.trim();
+    if (task !== inspected.task_id) { resetResults(); return; }
+    if (!window.confirm("Retire this task permanently? Evidence and unresolved inference holds are preserved. Any replacement requires a separately assigned new task.")) return;
+    const reason = node("retireReason").value;
+    if (!["NO_LONGER_NEEDED", "REPLACE_WITH_NEW_TASK", "STALE_OR_BLOCKED"].includes(reason)) return;
+    const payload = { schema_version: "safe_agent.retire_task.v1",
+      expected_state_version: inspected.task_state_version,
+      expected_workspace_version: inspected.workspace_version,
+      expected_recovery_revision: inspected.recovery_revision,
+      reason_code: reason };
+    const currentGeneration = generation;
+    controller = new AbortController();
+    busy = true;
+    node("retireTaskBtn").disabled = true;
+    node("resumeSavedResultBtn").disabled = true;
+    node("inspectRecoveryBtn").disabled = true;
+    try {
+      const data = await request(task, "retire", payload, controller.signal, currentGeneration);
+      if (generation !== currentGeneration) return;
+      show(data, task);
+      text("recoveryStatus", "Task retired. Existing evidence and accounting were preserved; no replacement work was started.");
+    } catch (error) {
+      if (generation === currentGeneration) {
+        inspected = null;
+        node("retireTaskPanel").hidden = true;
+        node("resumeSavedResultBtn").hidden = true;
+        text("recoveryStatus", error.message + " Inspect the task again before taking any other action.");
       }
     } finally {
       if (generation === currentGeneration) { busy = false; node("inspectRecoveryBtn").disabled = false; }

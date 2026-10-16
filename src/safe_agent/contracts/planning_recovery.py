@@ -15,7 +15,11 @@ RecoveryStatus = Literal[
     "INFERENCE_PENDING", "INFERENCE_UNCERTAIN", "INFERENCE_STOPPED",
     "RESULT_RECOVERABLE", "RESULT_EXPIRED", "RESULT_MISSING", "SOURCE_CHANGED",
     "AUTHORITY_CHANGED", "POLICY_CHANGED", "PREPARED", "NEEDS_CLARIFICATION",
-    "TASK_ADVANCED", "BLOCKED",
+    "TASK_ADVANCED", "TASK_RETIRED", "BLOCKED",
+]
+
+RetirementReason = Literal[
+    "NO_LONGER_NEEDED", "REPLACE_WITH_NEW_TASK", "STALE_OR_BLOCKED",
 ]
 
 
@@ -36,7 +40,7 @@ class PlanningRecoveryView(StrictModel):
     inference_state: InvocationState | None = None
     inference_deadline: datetime | None = None
     recovery_revision: Digest
-    allowed_actions: tuple[Literal["refresh", "resume_saved_result"], ...] = ("refresh",)
+    allowed_actions: tuple[Literal["refresh", "resume_saved_result", "retire_task"], ...] = ("refresh",)
     advisory_only: Literal[True] = True
     automatic_retry_allowed: Literal[False] = False
     new_inference_requested: Literal[False] = False
@@ -50,9 +54,18 @@ class PlanningRecoveryView(StrictModel):
 
     @model_validator(mode="after")
     def actions_are_bounded(self) -> PlanningRecoveryView:
-        if self.allowed_actions not in (("refresh",), ("refresh", "resume_saved_result")):
+        allowed = {
+            ("refresh",),
+            ("refresh", "retire_task"),
+            ("refresh", "resume_saved_result", "retire_task"),
+        }
+        if self.allowed_actions not in allowed:
             raise ValueError("RECOVERY_ACTION_DENIED")
         if "resume_saved_result" in self.allowed_actions and self.status != "RESULT_RECOVERABLE":
+            raise ValueError("RECOVERY_ACTION_DENIED")
+        if "retire_task" in self.allowed_actions and self.status in {
+            "INFERENCE_PENDING", "TASK_RETIRED", "BLOCKED",
+        }:
             raise ValueError("RECOVERY_ACTION_DENIED")
         return self
 
@@ -62,3 +75,13 @@ class ResumeSavedResultCommand(StrictModel):
     expected_state_version: int = Field(ge=0)
     expected_workspace_version: int = Field(ge=0)
     expected_recovery_revision: Digest
+
+
+class RetireTaskCommand(StrictModel):
+    """Compare-and-set terminal task retirement; never a billing reconciliation."""
+
+    schema_version: Literal["safe_agent.retire_task.v1"] = "safe_agent.retire_task.v1"
+    expected_state_version: int = Field(ge=0)
+    expected_workspace_version: int = Field(ge=0)
+    expected_recovery_revision: Digest
+    reason_code: RetirementReason

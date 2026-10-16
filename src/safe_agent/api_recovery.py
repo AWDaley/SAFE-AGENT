@@ -6,7 +6,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse, Response
 from sqlalchemy.exc import SQLAlchemyError
 
-from safe_agent.contracts.planning_recovery import PlanningRecoveryView, ResumeSavedResultCommand
+from safe_agent.contracts.planning_recovery import (
+    PlanningRecoveryView,
+    RetireTaskCommand,
+    ResumeSavedResultCommand,
+)
 from safe_agent.operator_ui.http import ASSET_DIR, SECURE_HEADERS
 from safe_agent.orchestration.coordinated_planning import TrustedCoordinatedPlanning
 from safe_agent.orchestration.planning_recovery import PlanningRecoveryService
@@ -44,6 +48,22 @@ def create_planning_recovery_router(
     ) -> PlanningRecoveryView:
         try:
             return recovery.resume(principal, task_id, body)
+        except (AccessDenied, MissingTask):
+            raise HTTPException(status_code=404, detail="task unavailable") from None
+        except SQLAlchemyError:
+            raise HTTPException(status_code=503, detail="recovery service unavailable") from None
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=409, detail="refresh recovery state before continuing") from None
+        except Exception:
+            raise HTTPException(status_code=503, detail="recovery service unavailable") from None
+
+    @router.post("/v1/tasks/{task_id}/planning/retire")
+    def retire_task(
+        task_id: str, body: RetireTaskCommand,
+        principal: Annotated[Principal, Depends(operator_dependency)],
+    ) -> PlanningRecoveryView:
+        try:
+            return recovery.retire(principal, task_id, body)
         except (AccessDenied, MissingTask):
             raise HTTPException(status_code=404, detail="task unavailable") from None
         except SQLAlchemyError:

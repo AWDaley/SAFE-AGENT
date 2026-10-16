@@ -29,6 +29,7 @@ class EventKind(StrEnum):
     ACTION_INTENT_RECORDED = "ACTION_INTENT_RECORDED"
     ACTION_VERIFIED = "ACTION_VERIFIED"
     ACTION_UNVERIFIED = "ACTION_UNVERIFIED"
+    TASK_RETIRED = "TASK_RETIRED"
 
 
 class OfficePhase(StrEnum):
@@ -41,6 +42,7 @@ class OfficePhase(StrEnum):
     EXECUTING = "EXECUTING"
     COMPLETED = "COMPLETED"
     NEEDS_REVIEW = "NEEDS_REVIEW"
+    RETIRED = "RETIRED"
 
 
 class TaskSnapshot(StrictModel):
@@ -91,7 +93,8 @@ def seal_event(*, task_id: str, organization_id: str, actor_id: str,
                payload: dict[str, str], previous_hash: str | None) -> LedgerEvent:
     """Compute a deterministic event digest from explicit trusted inputs."""
     m3_kinds = {EventKind.ACTION_INTENT_RECORDED,
-                EventKind.ACTION_VERIFIED, EventKind.ACTION_UNVERIFIED}
+                EventKind.ACTION_VERIFIED, EventKind.ACTION_UNVERIFIED,
+                EventKind.TASK_RETIRED}
     event_schema_version: Literal[
         "safe_agent.ledger_event.v1", "safe_agent.ledger_event.v2"
     ] = "safe_agent.ledger_event.v2" if kind in m3_kinds else "safe_agent.ledger_event.v1"
@@ -219,6 +222,18 @@ def reduce_event(previous: TaskSnapshot | None, event: LedgerEvent) -> TaskSnaps
                     or previous.proposal_hash != data["proposal_hash"]):
                 raise ValueError("uncertain result requires pending intent")
             updates["phase"] = OfficePhase.NEEDS_REVIEW
+        elif kind is EventKind.TASK_RETIRED:
+            _required(data, "reason_code")
+            if (data["reason_code"] not in {
+                    "NO_LONGER_NEEDED", "REPLACE_WITH_NEW_TASK", "STALE_OR_BLOCKED"
+                } or previous.phase not in {
+                    OfficePhase.ASSIGNED, OfficePhase.SIMULATED,
+                    OfficePhase.PROPOSED_UNVERIFIED, OfficePhase.AWAITING_APPROVAL,
+                    OfficePhase.READY_TO_COMMIT, OfficePhase.REJECTED,
+                }):
+                raise ValueError("task retirement not permitted in current phase")
+            updates.update(phase=OfficePhase.RETIRED,
+                           schema_version="safe_agent.task_snapshot.v2")
         else:
             raise ValueError("unknown or duplicate task genesis event")
         mutates = kind is not EventKind.PROPOSAL_DENIED
