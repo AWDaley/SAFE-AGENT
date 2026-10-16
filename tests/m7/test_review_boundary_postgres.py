@@ -5,6 +5,7 @@ import pytest
 
 from safe_agent.orchestration.office_tasks import TrustedOfficeTasks
 from safe_agent.tal.office_gate import OfficeGate
+from tests.m7 import test_coordinated_queue_mode as routing
 from tests.m7 import test_inference_admission_postgres as admission_cases
 from tests.m7 import test_review_boundary_acceptance as acceptance
 from tests.m7 import test_review_boundary_regressions as regressions
@@ -52,6 +53,10 @@ pytestmark = pytest.mark.skipif(
                  {}, id="existing_effect_readback"),
     pytest.param(acceptance.test_legacy_inline_gateway_cannot_bypass_coordinated_worker,
                  {}, id="inline_dispatch_denied"),
+    pytest.param(routing.test_coordinated_api_disables_legacy_prepare,
+                 {}, id="legacy_prepare_api_denied"),
+    pytest.param(routing.test_coordinated_api_does_not_adopt_legacy_prepared_task,
+                 {}, id="legacy_queue_adoption_denied"),
 ])
 def test_postgres_review_boundaries(pg_repo, kit, monkeypatch, case, options):
     assert_planning_schema(pg_repo.engine)

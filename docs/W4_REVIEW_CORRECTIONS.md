@@ -48,6 +48,13 @@ result prevents the new effect. Instance-level replacement of the checker method
 is not used as authority. Queue-only coordinated execution is required; the old
 synchronous/inline fixture entrypoint cannot avoid the enforcing worker.
 
+The coordinated operator deployment also rejects the legacy `/prepare` route.
+Its queue endpoint requires a valid durable coordinated input/consumption, so a
+previously prepared legacy task cannot silently enter the coordinated execution
+path. The normal queue gateway rechecks provenance, current state, approval and
+source in its atomic intent transaction. Legacy deployments without coordinated
+planning retain their own fixture routes; no browser-selectable fallback is added.
+
 Legacy synthetic tasks without coordinated provenance retain their existing
 fixture semantics. Provider-key lookup and independent readback of an effect that
 already occurred do not renew TAL authority and continue when the original
@@ -62,12 +69,12 @@ forged installation metadata or malicious code in the trusted process.
 
 ## Tests and deployment conditions
 
-The dedicated review-boundary workflow requires at least 21 non-skipped SQLite
-cases and 17 non-skipped real PostgreSQL cases. Positive tests execute the pinned
+The dedicated review-boundary workflow requires at least 23 non-skipped SQLite
+cases and 19 non-skipped real PostgreSQL cases. Positive tests execute the pinned
 TAL runtime. Negative tests inject failures only in test code and assert zero
 new effects. Coverage includes separate local/provider source changes, restarted
 services, cache corruption, missing/incompatible checkers, runtime refusal,
-incorrect installation provenance, legacy-inline denial and committed-effect
+incorrect installation provenance, legacy-inline/API denial and committed-effect
 readback after expiry. Existing W4 success and abrupt-process tests now explicitly
 supply the real checker; their effect, approval and single-inference assertions
 are retained.

@@ -17,6 +17,8 @@ from safe_agent.contracts.intake import TaskIntakeReceipt, TaskIntakeRequest, Ta
 from safe_agent.contracts.operator import OperatorInboxPage, OperatorProposalPreview
 from safe_agent.contracts.planning import PlanningCommand, PlanningReceipt, PlanningWorkspaceView
 from safe_agent.evidence.ledger import LedgerEvent, TaskSnapshot
+from safe_agent.orchestration.coordinated_planning import TrustedCoordinatedPlanning
+from safe_agent.orchestration.coordinated_queue import queue_coordinated_task
 from safe_agent.orchestration.office_tasks import ApprovalInput, TrustedOfficeTasks
 from safe_agent.orchestration.persistent_planning import TrustedPersistentPlanning
 from safe_agent.orchestration.synthetic_workflow import (
@@ -126,8 +128,10 @@ def create_app(coordinator: TrustedOfficeTasks, authenticator: SignedOperatorTok
             task_id: str, body: WorkflowVersionCommand,
             principal: Annotated[Principal, Depends(operator)],
         ) -> SyntheticPreparationReceipt:
-            """Only assigned synthetic tasks; no provider dispatch from HTTP."""
+            """Legacy fixture preparation is unavailable in coordinated deployments."""
             try:
+                if isinstance(persistent_planning, TrustedCoordinatedPlanning):
+                    raise StateConflict("COORDINATED_PLANNING_REQUIRED")
                 return synthetic_workflow.prepare(
                     principal, task_id,
                     expected_state_version=body.expected_state_version, now=clock(),
@@ -151,6 +155,11 @@ def create_app(coordinator: TrustedOfficeTasks, authenticator: SignedOperatorTok
         ) -> SyntheticQueueReceipt:
             """Stage only; a separate privileged recovery worker performs effects."""
             try:
+                if isinstance(persistent_planning, TrustedCoordinatedPlanning):
+                    return queue_coordinated_task(
+                        persistent_planning, principal, task_id,
+                        expected_state_version=body.expected_state_version, now=clock(),
+                    )
                 return synthetic_workflow.queue(
                     principal, task_id,
                     expected_state_version=body.expected_state_version, now=clock(),
@@ -245,8 +254,6 @@ def create_app(coordinator: TrustedOfficeTasks, authenticator: SignedOperatorTok
             raise HTTPException(status_code=404, detail="task unavailable") from error
         except StateConflict as error:
             raise HTTPException(status_code=409, detail="approval state mismatch") from error
-
-    from safe_agent.orchestration.coordinated_planning import TrustedCoordinatedPlanning
 
     if isinstance(persistent_planning, TrustedCoordinatedPlanning):
         from safe_agent.api_recovery import create_planning_recovery_router

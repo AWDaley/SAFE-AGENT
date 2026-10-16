@@ -43,11 +43,11 @@ jobs:
           mypy src/safe_agent
       - name: SQLite source-cache and mandatory TAL boundaries
         run: |
-          pytest --tb=short tests/m7/test_review_boundary_regressions.py tests/m7/test_review_boundary_acceptance.py --junitxml=review-sqlite.xml
-          python -c "import xml.etree.ElementTree as E; s=E.parse('review-sqlite.xml').getroot().findall('testsuite'); assert s and sum(int(x.get('tests',0)) for x in s)>=21; assert all(int(x.get(k,0))==0 for x in s for k in ('skipped','errors','failures'))"
+          pytest --tb=short tests/m7/test_review_boundary_regressions.py tests/m7/test_review_boundary_acceptance.py tests/m7/test_coordinated_queue_mode.py --junitxml=review-sqlite.xml
+          python -c "import xml.etree.ElementTree as E; s=E.parse('review-sqlite.xml').getroot().findall('testsuite'); assert s and sum(int(x.get('tests',0)) for x in s)>=23; assert all(int(x.get(k,0))==0 for x in s for k in ('skipped','errors','failures'))"
       - name: Mandatory real PostgreSQL source-cache and TAL boundaries
         env:
           SAFE_AGENT_TEST_POSTGRES_REVIEW: '1'
         run: |
           pytest --tb=short tests/m7/test_review_boundary_postgres.py --junitxml=review-postgres.xml
-          python -c "import xml.etree.ElementTree as E; s=E.parse('review-postgres.xml').getroot().findall('testsuite'); assert s and sum(int(x.get('tests',0)) for x in s)>=17; assert all(int(x.get(k,0))==0 for x in s for k in ('skipped','errors','failures'))"
+          python -c "import xml.etree.ElementTree as E; s=E.parse('review-postgres.xml').getroot().findall('testsuite'); assert s and sum(int(x.get('tests',0)) for x in s)>=19; assert all(int(x.get(k,0))==0 for x in s for k in ('skipped','errors','failures'))"
