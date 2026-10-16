@@ -184,7 +184,7 @@ def test_postgres_ed25519_reconciliation_releases_only_unknown_capacity(pg_repo)
     from safe_agent.billing.verifier import OfflineAsymmetricBillingVerifier
     from safe_agent.storage.inference_budget import InferenceBudgetLedger
     from safe_agent.storage.inference_dispatch import TrustedInferenceDispatchStore
-    from tests.m7.test_asymmetric_billing_verifier import KEY_ID, ISSUER, PRIVATE, public_key
+    from tests.m7.test_asymmetric_billing_verifier import ISSUER, KEY_ID, PRIVATE, public_key
     from tests.m7.test_offline_billing_verifier import SOURCE_KEY, source_record
 
     ticks = [NOW]
