@@ -246,6 +246,15 @@ def create_app(coordinator: TrustedOfficeTasks, authenticator: SignedOperatorTok
         except StateConflict as error:
             raise HTTPException(status_code=409, detail="approval state mismatch") from error
 
+    from safe_agent.orchestration.coordinated_planning import TrustedCoordinatedPlanning
+
+    if isinstance(persistent_planning, TrustedCoordinatedPlanning):
+        from safe_agent.api_recovery import create_planning_recovery_router
+
+        app.include_router(create_planning_recovery_router(
+            persistent_planning, operator, enable_ui=enable_operator_ui,
+        ))
+
     if enable_operator_ui:
         from safe_agent.operator_ui.http import create_operator_ui_router
 
