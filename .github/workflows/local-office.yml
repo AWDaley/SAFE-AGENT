@@ -1,0 +1,42 @@
+name: Persistent offline launcher acceptance
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  local-office:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Install the committed runtime profile in a clean environment
+        run: |
+          python scripts/resolve_coordinated_profile.py --check
+          python scripts/install_coordinated_runtime.py --venv .venv-local-office
+          echo "${GITHUB_WORKSPACE}/.venv-local-office/bin" >> "$GITHUB_PATH"
+      - name: Check installed dependencies, source and static typing
+        run: |
+          python -m pip check
+          safe-agent-doctor --json
+          ruff check --diff src tests scripts
+          ruff check src tests scripts
+          mypy src/safe_agent
+      - name: Workspace, principal and restarted application acceptance
+        run: |
+          pytest tests/local_office/test_workspace.py tests/local_office/test_application.py --tb=short --junitxml=local-unit.xml
+          python -c "import xml.etree.ElementTree as E; s=E.parse('local-unit.xml').getroot().findall('testsuite'); assert s and sum(int(x.get('tests',0)) for x in s)>=44; assert all(int(x.get(k,0))==0 for x in s for k in ('skipped','errors','failures'))"
+      - name: Installed CLI, real API restart, UDS and independent worker
+        env:
+          SAFE_AGENT_TEST_LOCAL_PROCESS: '1'
+          SAFE_AGENT_LOCAL_CLI: ${{ github.workspace }}/.venv-local-office/bin/safe-agent-local
+        run: |
+          pytest tests/local_office/test_process.py --tb=short --junitxml=local-process.xml
+          python -c "import xml.etree.ElementTree as E; s=E.parse('local-process.xml').getroot().findall('testsuite'); assert s and sum(int(x.get('tests',0)) for x in s)>=1; assert all(int(x.get(k,0))==0 for x in s for k in ('skipped','errors','failures'))"
+      - name: Keep real provider release blocks in place
+        run: |
+          python scripts/check_m5_release.py --mode offline
+          python scripts/check_m7_budget_lineage.py
