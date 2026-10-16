@@ -4,6 +4,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from threading import Barrier
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,7 +21,10 @@ from safe_agent.execution.recovery import SyntheticRecoveryWorker
 from safe_agent.inference.mock import OfflineMockInferenceTransport
 from safe_agent.orchestration.coordinated_planning import create_coordinated_planning
 from safe_agent.orchestration.office_tasks import TrustedOfficeTasks
-from safe_agent.storage.coordinated_models import CoordinatedPlanningConsumptionRow as ConsumptionRow
+from safe_agent.security.principal import AccessDenied
+from safe_agent.storage.coordinated_models import (
+    CoordinatedPlanningConsumptionRow as ConsumptionRow,
+)
 from safe_agent.storage.coordinated_models import CoordinatedPlanningInputRow as InputRow
 from safe_agent.storage.coordinated_planning import read_input
 from safe_agent.storage.inference_admission import TrustedInferenceAdmission
@@ -258,14 +262,19 @@ def test_same_revision_changed_source_content_is_rejected(kit, monkeypatch):
     client, signer, actor, _, _, service, calls, _ = build(kit, monkeypatch)
     task = new_task(client, signer, actor)
     original = service._consume
+    observed = []
     def changed(*args):
         reader = service._workflow._gateway._reader
         snapshot = reader.snapshot
-        monkeypatch.setattr(reader, "snapshot", lambda **kw: snapshot(**kw).model_copy(
-            update={"source_hash": "sha256:" + "0" * 64}))
+        def altered(**kw):
+            actual = snapshot(**kw)
+            observed.append(actual.calendar.source_revision)
+            return SimpleNamespace(calendar=actual.calendar, source_hash="sha256:" + "0" * 64)
+        monkeypatch.setattr(reader, "snapshot", altered)
         return original(*args)
     monkeypatch.setattr(service, "_consume", changed)
     assert plan(client, signer, actor, task).status_code == 409
+    assert observed, "the changed source hash was actually returned to the checker"
     assert len(calls) == 1 and count(kit["repo"], ConsumptionRow) == 0
     assert kit["repo"].replay_task(task).phase is OfficePhase.ASSIGNED
 
@@ -324,7 +333,7 @@ def test_clarification_is_fixed_and_repeat_does_not_start_another_attempt(kit, m
 
 @pytest.mark.parametrize("change", ["tenant", "actor", "scope", "expired", "version", "extra"])
 def test_bad_operator_scope_or_command_never_reaches_inference(kit, monkeypatch, change):
-    client, signer, actor, _, _, _, calls, _ = build(kit, monkeypatch)
+    client, signer, actor, _, _, service, calls, _ = build(kit, monkeypatch)
     task = new_task(client, signer, actor)
     changed = actor
     if change == "tenant":
@@ -336,9 +345,7 @@ def test_bad_operator_scope_or_command_never_reaches_inference(kit, monkeypatch,
     elif change == "expired":
         changed = actor.model_copy(update={"authenticated_until": NOW - timedelta(seconds=1)})
     if change == "expired":
-        with pytest.raises(ValueError):
-            # Exercise the host boundary independently of token issuance rules.
-            service = build(kit, monkeypatch, calls=calls)[5]
+        with pytest.raises(AccessDenied):
             service.plan(changed, task, PlanningCommand.model_validate(COMMAND), now=NOW)
     else:
         response = plan(client, signer, changed, task, ws=99 if change == "version" else 0,

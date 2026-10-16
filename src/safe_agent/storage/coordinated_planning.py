@@ -13,7 +13,9 @@ from safe_agent.contracts.coordinated_planning import (
 )
 from safe_agent.contracts.inference_results import ValidatedInferenceResult
 from safe_agent.contracts.planning import PlanningLease, PlanningResultKind
-from safe_agent.storage.coordinated_models import CoordinatedPlanningConsumptionRow as ConsumptionRow
+from safe_agent.storage.coordinated_models import (
+    CoordinatedPlanningConsumptionRow as ConsumptionRow,
+)
 from safe_agent.storage.coordinated_models import CoordinatedPlanningInputRow as InputRow
 from safe_agent.storage.inference_results import _read_record
 from safe_agent.storage.models import InferenceInvocationRow, PlanningOutcomeRow

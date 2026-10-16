@@ -26,12 +26,28 @@ from safe_agent.inference.gateway import _check_candidate
 from safe_agent.orchestration.persistent_planning import TrustedPersistentPlanning
 from safe_agent.orchestration.synthetic_workflow import TrustedSyntheticWorkflow
 from safe_agent.security.principal import AccessDenied, Principal
-from safe_agent.storage.coordinated_models import CoordinatedPlanningConsumptionRow as ConsumptionRow
+from safe_agent.storage.coordinated_models import (
+    CoordinatedPlanningConsumptionRow as ConsumptionRow,
+)
 from safe_agent.storage.coordinated_models import CoordinatedPlanningInputRow as InputRow
 from safe_agent.storage.coordinated_planning import bound_result, read_consumption, read_input
-from safe_agent.storage.inference_admission import TrustedInferenceAdmission, _live_attempt, _task_identity
-from safe_agent.storage.models import InferenceInvocationRow, PlanningAttemptRow, PlanningWorkspaceRow, ReferenceRow
-from safe_agent.storage.planning import PlanningWorkspaceStore, _assert_workspace, _utc, finish_planning_attempt
+from safe_agent.storage.inference_admission import (
+    TrustedInferenceAdmission,
+    _live_attempt,
+    _task_identity,
+)
+from safe_agent.storage.models import (
+    InferenceInvocationRow,
+    PlanningAttemptRow,
+    PlanningWorkspaceRow,
+    ReferenceRow,
+)
+from safe_agent.storage.planning import (
+    PlanningWorkspaceStore,
+    _assert_workspace,
+    _utc,
+    finish_planning_attempt,
+)
 from safe_agent.storage.repository import StateConflict, TaskTransaction
 from safe_agent.virtual_office.models import ObserveCalendar
 
@@ -217,14 +233,13 @@ class TrustedCoordinatedPlanning(TrustedPersistentPlanning):
         store = self._inference.store
         with store._locked(principal, value.lease, value.prompt()) as locked:
             tx, now = locked.tx, locked.now
-            # Re-read the exact input under the same lock as result consumption.
             raw = tx.session.get(InputRow, value.lease.attempt_id)
             if raw is None or read_input(raw) != value:
                 raise StateConflict("COORDINATED_INPUT_DENIED")
             consumed = read_consumption(tx, value)
             if consumed is not None:
-                # Restore the issuance cache after an application restart only
-                # while the ORIGINAL snapshot is still fresh; no renewal.
+                # Restore the issuance cache using ORIGINAL bounds, before a
+                # later queue operation. Completed business effects are not replayed.
                 if consumed.result_kind == "PROPOSED" and now < value.projection.expires_at:
                     self._source(tx, value, now)
                 return
@@ -271,8 +286,6 @@ class TrustedCoordinatedPlanning(TrustedPersistentPlanning):
                           payload={"proposal_hash": digest})
                 finish_planning_attempt(tx, value.lease, result_kind="PROPOSED", reason_code=None,
                                         proposal_hash=digest, now=now, coordinated_result_hash=record.result_hash)
-            # Slow SQL, clock changes, revocations and source changes cannot turn
-            # an expired result into a newly prepared proposal.
             end = self._now()
             principal.require("task:prepare", principal.organization_id, end)
             principal.require("task:propose", principal.organization_id, end)
@@ -285,11 +298,16 @@ class TrustedCoordinatedPlanning(TrustedPersistentPlanning):
         command = PlanningCommand.model_validate(body.model_dump())
         value = self._input(actor, task_id, command)
         try:
-            with self._store._repo._sessions() as db:
-                complete = db.get(ConsumptionRow, value.lease.attempt_id) is not None
+            with self._store._repo.write_task(task_id, serialize_sqlite=True) as tx:
+                checked_at = self._now()
+                _task_identity(tx, actor, value.lease, value.context, checked_at)
+                complete = read_consumption(tx, value) is not None
+                if not complete:
+                    _live_attempt(tx, value.lease, checked_at)
+                    self._source(tx, value, checked_at)
             if not complete:
-                # The coordinator owns admission, cost holds and the dispatch
-                # fence. A persisted input makes retry use the same request.
+                # Source/permissions were rechecked on this retry, not just when
+                # its input was saved. No network runs inside a SQL transaction.
                 self._inference.execute(actor, value.lease, value.prompt())
             self._consume(actor, value)
         except Exception:
