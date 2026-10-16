@@ -125,12 +125,15 @@ def create_local_api(root: Path, *, port: int = 8765) -> FastAPI:
             PlanningWorkspaceStore(local.repo, max_attempts=1), workflow,
             admission=TrustedInferenceAdmission(local.repo, policy=local_policy()), transport=wire,
         )
+        # One proposal consumes a policy cycle. The pinned TAL dispatcher needs
+        # remaining cycle capacity to check its execution. This is NOT a second
+        # inference attempt: max_attempts stays one and max_external_effects one.
         option = TrustedSyntheticOption(
             option_id="local_follow_up", organization_id=ORGANIZATION,
             initiator_id="local_requester", workflow="schedule_follow_up",
             customer_resource_id="cust_c1", calendar_resource_id="cal_main_private",
             appointment_template_id="follow_up_v1", time_zone="America/New_York",
-            requires_approval=True, max_cycles=1,
+            requires_approval=True, max_cycles=2,
         )
         provisioner = TrustedTaskProvisioner(local.coordinator, local.repo, local.broker,
                                              local.provider.snapshot(ORGANIZATION), (option,))
