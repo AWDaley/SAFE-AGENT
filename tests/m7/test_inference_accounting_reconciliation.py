@@ -2,7 +2,7 @@
 from datetime import timedelta
 
 import pytest
-from sqlalchemy import select, update
+from sqlalchemy import update
 
 from safe_agent.storage.inference_admission import (
     InferenceAdmissionDenied,
