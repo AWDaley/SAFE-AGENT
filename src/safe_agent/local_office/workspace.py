@@ -16,14 +16,14 @@ import stat
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterator, Literal
+from typing import Final, Iterator, Literal
 
 from pydantic import Field
 
 from safe_agent.canonical import canonical_json, sha256
 from safe_agent.contracts.base import StrictModel
 
-HEAD = "0013_coordinated_planning"
+HEAD: Final = "0013_coordinated_planning"
 KEYS = ("broker.key", "operator.key", "workload.token", "dispatch.key")
 LOCKS = ("operation.lock", "api.lock", "worker.lock")
 
