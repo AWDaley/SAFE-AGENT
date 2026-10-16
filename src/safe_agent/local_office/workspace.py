@@ -23,7 +23,7 @@ from pydantic import Field
 from safe_agent.canonical import canonical_json, sha256
 from safe_agent.contracts.base import StrictModel
 
-HEAD: Final = "0013_coordinated_planning"
+HEAD: Final = "0014_billing_verifier_identity"
 KEYS = ("broker.key", "operator.key", "workload.token", "dispatch.key")
 LOCKS = ("operation.lock", "api.lock", "worker.lock")
 
@@ -36,7 +36,7 @@ class WorkspaceManifest(StrictModel):
     schema_version: Literal["safe_agent.local_workspace.v1"] = "safe_agent.local_workspace.v1"
     mode: Literal["PERSISTENT_SYNTHETIC_ONLY"] = "PERSISTENT_SYNTHETIC_ONLY"
     workspace_id: str = Field(pattern=r"^local_[0-9a-f]{32}$")
-    migration_head: Literal["0013_coordinated_planning"] = HEAD
+    migration_head: Literal["0014_billing_verifier_identity"] = HEAD
     created_at: datetime
     policy_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     seed_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
