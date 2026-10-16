@@ -59,7 +59,7 @@ def test_competing_finishers_record_only_one_result(repo):
 
 
 def test_sql_result_metadata_must_match_validation_event(repo):
-    args, ticks, admission, store = configured(repo)
+    args, _, admission, store = configured(repo)
     claim = store.claim(*args)
     request, _ = store.start(*args, claim)
     proposal = parse_proposal_json(OfflineMockInferenceTransport().infer(request).output_json)
@@ -68,21 +68,24 @@ def test_sql_result_metadata_must_match_validation_event(repo):
                                proposal=proposal, proposal_digest=sha256(proposal))
     with store._locked(*args) as locked:
         view = store._transition(locked, "RESPONSE_VALIDATED", proposal_hash=outcome.proposal_digest)
+        # SQLite DateTime discards offsets: use the same UTC value as the event,
+        # exactly as the production finish transaction does.
+        validated_at = locked.now
     record = seal_result(binding=claim.binding, lease=args[1], policy_hash=admission._policy_hash,
                          request=request, outcome=outcome, validation_event_hash=view.latest_event_hash,
-                         validated_at=ticks[0])
+                         validated_at=validated_at)
     valid = dict(request_id=request.request_id, binding_hash=claim.binding.binding_hash,
                  organization_id=request.task.organization_id, task_id=request.task.task_id,
                  attempt_id=args[1].attempt_id, policy_hash=admission._policy_hash,
                  candidate_hash=outcome.proposal_digest, validation_sequence=view.event_sequence,
-                 validation_event_hash=view.latest_event_hash, validated_at=ticks[0],
+                 validation_event_hash=view.latest_event_hash, validated_at=validated_at,
                  result_hash=record.result_hash, record_json=canonical_json(record).decode())
     for field, wrong in (
         ("organization_id", "org_forged"), ("task_id", "task_forged"),
         ("attempt_id", "attempt_forged"), ("policy_hash", "sha256:" + "0" * 64),
         ("candidate_hash", "sha256:" + "0" * 64),
         ("validation_event_hash", "sha256:" + "0" * 64),
-        ("validated_at", ticks[0] + timedelta(seconds=1)),
+        ("validated_at", validated_at + timedelta(seconds=1)),
     ):
         with pytest.raises(DBAPIError):
             with repo.engine.begin() as db:
