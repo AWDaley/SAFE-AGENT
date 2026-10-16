@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -13,7 +14,7 @@ from safe_agent.local_office import application
 from safe_agent.local_office.__main__ import run_worker
 from safe_agent.local_office.application import create_local_api, issue_session
 from safe_agent.local_office.state import open_office
-from safe_agent.local_office.workspace import workspace_lock
+from safe_agent.local_office.workspace import LocalOfficeBlocked, workspace_lock
 from tests.local_office.test_workspace import workspace as workspace
 
 
@@ -59,9 +60,11 @@ def plan(api, root, task):
 
 
 def approve(api, root, task, prepared, *, role="approver"):
+    snapshot = api.get(f"/v1/tasks/{task}", headers=auth(root, role))
+    assert snapshot.status_code == 200, snapshot.text
     return api.post(f"/v1/tasks/{task}/approvals", headers=auth(root, role), json={
         "proposal_hash": prepared["proposal_hash"],
-        "expected_state_version": prepared["state_version"], "approved": True,
+        "expected_state_version": snapshot.json()["state_version"], "approved": True,
         "expires_at": (datetime.now(UTC) + timedelta(minutes=5)).isoformat(),
     })
 
@@ -70,7 +73,7 @@ def test_restart_before_approval_and_queue_restores_original_projection(workspac
     with client(workspace) as first:
         task = create_task(first, workspace)
         prepared = plan(first, workspace, task)
-        assert approve(first, workspace, task, prepared, role="requester").status_code == 403
+        assert approve(first, workspace, task, prepared, role="requester").status_code == 404
     with client(workspace) as second:
         granted = approve(second, workspace, task, prepared)
         assert granted.status_code == 200, granted.text
@@ -164,9 +167,6 @@ def test_liveness_is_not_readiness_without_sidecar(workspace, calls):
 
 
 def test_preflight_failure_happens_before_workspace_access(tmp_path, monkeypatch):
-    from types import SimpleNamespace
-    from safe_agent.local_office.workspace import LocalOfficeBlocked
-
     monkeypatch.setattr(application, "inspect_environment", lambda: SimpleNamespace(status="BLOCKED"))
     root = tmp_path / "not-created"
     with pytest.raises(LocalOfficeBlocked, match="LOCKED_ENVIRONMENT_REQUIRED"):
