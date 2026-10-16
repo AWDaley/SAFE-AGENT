@@ -6,7 +6,9 @@ import pytest
 from safe_agent.orchestration.office_tasks import TrustedOfficeTasks
 from safe_agent.tal.office_gate import OfficeGate
 from tests.m7 import test_coordinated_planning as cases
+from tests.m7 import test_coordinated_planning_process as recovery_cases
 from tests.m7 import test_inference_admission_postgres as admission_cases
+from tests.m7.test_coordinated_planning_schema import assert_planning_schema
 
 pg_repo = admission_cases.pg_repo
 pytestmark = pytest.mark.skipif(
@@ -28,10 +30,12 @@ pytestmark = pytest.mark.skipif(
     cases.test_parallel_operator_requests_have_one_inference_and_consumption,
     cases.test_input_and_consumption_are_database_immutable,
     cases.test_clarification_is_fixed_and_repeat_does_not_start_another_attempt,
+    recovery_cases.test_saved_input_revoked_before_admission_never_calls_inference,
+    recovery_cases.test_slow_consumption_transaction_rolls_back_when_deadline_passes,
 ])
 def test_postgres_coordinated_planning(pg_repo, kit, monkeypatch, case):
-    # Each pg_repo uses an isolated schema created by the actual forward migrations.
-    # Keep the same synthetic broker/office, but bind all services to PostgreSQL.
+    # The real forward migrations create a fresh schema for each case.
+    assert_planning_schema(pg_repo.engine)
     scoped = {**kit, "repo": pg_repo,
               "coordinator": TrustedOfficeTasks(pg_repo, kit["office"], OfficeGate(kit["broker"]))}
     case(scoped, monkeypatch)

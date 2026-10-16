@@ -39,9 +39,11 @@ jobs:
           ruff check src tests scripts migrations/versions/0013_coordinated_planning.py
       - name: Operator planning and forward-migration integration
         run: pytest --tb=short tests/m7/test_coordinated_planning.py tests/m7/test_coordinated_planning_schema.py
+      - name: Abrupt application restart and late revocation or expiry
+        run: pytest --tb=short tests/m7/test_coordinated_planning_process.py
       - name: Mandatory real PostgreSQL planning integration
         env:
           SAFE_AGENT_TEST_POSTGRES_PLANNING: '1'
         run: |
           pytest --tb=short tests/m7/test_planning_postgres.py --junitxml=w4-postgres.xml
-          python -c "import xml.etree.ElementTree as E; s=E.parse('w4-postgres.xml').getroot().findall('testsuite'); assert s and sum(int(x.get('tests',0)) for x in s)>=12; assert all(int(x.get(k,0))==0 for x in s for k in ('skipped','errors','failures'))"
+          python -c "import xml.etree.ElementTree as E; s=E.parse('w4-postgres.xml').getroot().findall('testsuite'); assert s and sum(int(x.get('tests',0)) for x in s)>=14; assert all(int(x.get(k,0))==0 for x in s for k in ('skipped','errors','failures'))"
