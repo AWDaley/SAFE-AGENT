@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -13,9 +14,15 @@ from safe_agent.inference.mock import OfflineMockInferenceTransport
 from safe_agent.local_office import application
 from safe_agent.local_office.__main__ import run_worker
 from safe_agent.local_office.application import create_local_api, issue_session
-from safe_agent.local_office.state import open_office
+from safe_agent.local_office.state import initialize, open_office
 from safe_agent.local_office.workspace import LocalOfficeBlocked, workspace_lock
-from tests.local_office.test_workspace import workspace as workspace
+
+
+@pytest.fixture
+def workspace(tmp_path):
+    root = tmp_path / "office"
+    initialize(root, Path(__file__).resolve().parents[2] / "migrations")
+    return root
 
 
 @pytest.fixture
