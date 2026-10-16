@@ -28,11 +28,12 @@ class _Connection(http.client.HTTPConnection):
     def __init__(self, host: str, path: Path, timeout: float) -> None:
         super().__init__(host, timeout=timeout)
         self.path = path
+        self.billing_timeout = timeout
 
     def connect(self) -> None:
         channel = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
-            channel.settimeout(self.timeout)
+            channel.settimeout(self.billing_timeout)
             channel.connect(str(self.path))
             peer = channel.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
             _, uid, _ = struct.unpack("3i", peer)
