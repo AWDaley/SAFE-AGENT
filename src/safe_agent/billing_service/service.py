@@ -11,7 +11,7 @@ import hmac
 import json
 import re
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from fastapi import FastAPI, Request
@@ -151,6 +151,10 @@ def create_billing_verifier_service(
                 raise ValueError("not one billing source record")
             current = clock()
             normalized = adapter.normalize(text, now=current)
+            if (normalized.source_observed_at > current
+                    or current - normalized.source_observed_at
+                       > timedelta(seconds=policy.max_evidence_age_seconds)):
+                raise BillingSourceDenied()
             attestation = verifier.sign(normalized, now=current)
             checked = VerifiedBillingAttestation.model_validate_json(
                 attestation.model_dump_json(),
