@@ -275,9 +275,11 @@ class TrustedInferenceDispatchStore:
                 return locked.receipt.invocation
             if locked.row.state != "RESERVED":
                 raise InferenceDispatchDenied()
-            reason = ("AUTHORITY_EXPIRED"
-                      if locked.now >= locked.receipt.binding.deadline_at
-                      else "CANCELLED_BEFORE_DISPATCH")
+            reason: InvocationReason = (
+                "AUTHORITY_EXPIRED"
+                if locked.now >= locked.receipt.binding.deadline_at
+                else "CANCELLED_BEFORE_DISPATCH"
+            )
             return self._transition(locked, "FAILED_BEFORE_DISPATCH", reason=reason)
 
     def recover(self, principal: Principal, lease: PlanningLease, prompt: str) -> InferenceInvocationView:
