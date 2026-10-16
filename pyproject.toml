@@ -21,6 +21,7 @@ coordinated-offline = ["httpx==0.28.1", "cryptography==45.0.7", "fastapi==0.128.
 safe-agent = "safe_agent.__main__:main"
 safe-agent-doctor = "safe_agent.runtime.preflight:main"
 safe-agent-local = "safe_agent.local_office.__main__:main"
+safe-agent-billing-verifier = "safe_agent.billing_service.__main__:main"
 
 [tool.setuptools.package-data]
 "safe_agent.operator_ui" = ["index.html", "app.js", "styles.css", "recovery.html", "recovery.js"]
