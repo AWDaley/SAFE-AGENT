@@ -450,10 +450,11 @@ def upgrade_workspace(
             raise LocalOfficeBlocked("UPGRADE_VERIFICATION_FAILED")
         _database_head(root / "office.sqlite", HEAD)
 
-        if (root / _LAST_UPGRADE).exists() or (root / _LAST_UPGRADE_MAC).exists():
-            raise LocalOfficeBlocked("MAINTENANCE_RECOVERY_REQUIRED")
-        os.replace(root / _JOURNAL, root / _LAST_UPGRADE)
-        os.replace(root / _JOURNAL_MAC, root / _LAST_UPGRADE_MAC)
+        journal_mac = read_private(root / _JOURNAL_MAC, maximum=64)
+        _atomic_private(root / _LAST_UPGRADE, journal_data)
+        _atomic_private(root / _LAST_UPGRADE_MAC, journal_mac)
+        (root / _JOURNAL).unlink()
+        (root / _JOURNAL_MAC).unlink()
         _fsync_dir(root)
         return {
             "status": "UPGRADED",
