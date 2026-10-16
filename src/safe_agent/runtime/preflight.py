@@ -56,7 +56,7 @@ def current_target() -> dict[str, str]:
 
 
 def collect_inventory() -> tuple[InstalledPackage, ...]:
-    result = []
+    result: list[InstalledPackage] = []
     for installed in metadata.distributions():
         if len(result) >= 500:
             raise ValueError("too many distributions")
@@ -84,10 +84,10 @@ def check_metadata(profile: RuntimeProfile, inventory: tuple[InstalledPackage, .
             problems.add(Diagnostic("DUPLICATE_DISTRIBUTION", name))
         installed[name] = package
     for name, version in expected.items():
-        package = installed.get(name)
-        if package is None:
+        found = installed.get(name)
+        if found is None:
             problems.add(Diagnostic("PACKAGE_MISSING", name))
-        elif package.version != version:
+        elif found.version != version:
             problems.add(Diagnostic("PACKAGE_VERSION_MISMATCH", name))
     if problems:
         return problems
