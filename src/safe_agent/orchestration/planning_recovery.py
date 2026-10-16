@@ -1,8 +1,8 @@
 """Operator diagnostics and saved-result preparation, with no inference dispatch.
 
 GET does not mutate durable state. Trusted source checks may rebuild in-memory
-projection/reference caches. POST uses the existing W4 consumption transaction;
-it does not start inference, renew leases, approve, enqueue, or reconcile costs.
+projection/reference caches. POST recovery may consume a saved result or terminally
+retire pre-effect work; it never renews authority, enqueues effects, or refunds holds.
 """
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ from datetime import datetime
 
 from sqlalchemy import select
 
-from safe_agent.agent.json_planner import PLANNER_INSTRUCTION
 from safe_agent.broker.references import ReferenceDenied
 from safe_agent.canonical import sha256
 from safe_agent.contracts.control import Task, TaskManifest
@@ -19,8 +18,8 @@ from safe_agent.contracts.inference_dispatch import InferenceInvocationView
 from safe_agent.contracts.planning_recovery import (
     PlanningRecoveryView,
     RecoveryStatus,
-    RetireTaskCommand,
     ResumeSavedResultCommand,
+    RetireTaskCommand,
 )
 from safe_agent.evidence.ledger import EventKind, OfficePhase
 from safe_agent.inference.gateway import _check_candidate
@@ -41,10 +40,10 @@ from safe_agent.storage.result_models import InferenceValidatedResultRow
 
 
 class PlanningRecoveryService:
-    """Same-tenant readers inspect; only the authorized initiator may resume.
+    """Same-tenant readers inspect; only the authorized initiator may resume or retire.
 
-    Diagnostics are observational, not permission to execute. Every resume uses
-    the original input and W4's current source, policy, lease and authority checks.
+    Diagnostics are observational, not permission to execute. Resume and retirement
+    are compare-and-set operations over the original durable task evidence.
     """
 
     def __init__(self, planning: TrustedCoordinatedPlanning) -> None:
