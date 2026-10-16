@@ -18,7 +18,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import Response
 from pydantic import Field, SecretStr, field_validator
 
-from safe_agent.billing.adapters import SyntheticHMACBillingAdapter
+from safe_agent.billing.adapters import BillingEvidenceAdapter
 from safe_agent.billing.verifier import BillingSourceDenied, OfflineAsymmetricBillingVerifier
 from safe_agent.contracts.base import Identifier, StrictModel
 from safe_agent.contracts.billing_verification import VerifiedBillingAttestation
@@ -97,7 +97,7 @@ def create_billing_verifier_service(
     policy: TrustedBillingVerifierPolicy,
     authenticator: TrustedBillingWorkloadAuthenticator,
     *,
-    source_key: bytes,
+    adapter: BillingEvidenceAdapter,
     issuer_private_key: bytes,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> FastAPI:
@@ -105,10 +105,8 @@ def create_billing_verifier_service(
         raise TypeError("trusted billing verifier policy required")
     if type(authenticator) is not TrustedBillingWorkloadAuthenticator:
         raise TypeError("trusted billing workload authenticator required")
-    adapter = SyntheticHMACBillingAdapter(
-        source_key=source_key,
-        max_evidence_age_seconds=policy.max_evidence_age_seconds,
-    )
+    if not isinstance(adapter, BillingEvidenceAdapter):
+        raise TypeError("trusted billing evidence adapter required")
     verifier = OfflineAsymmetricBillingVerifier(
         issuer_private_key=issuer_private_key,
         issuer_id=policy.issuer_id,
