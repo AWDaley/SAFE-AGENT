@@ -16,7 +16,6 @@ from pathlib import Path
 from pydantic import SecretStr
 
 from safe_agent.billing.verifier import SyntheticBillingSourceRecord
-from safe_agent.billing_service.service import TrustedBillingWorkloadAuthenticator
 from safe_agent.contracts.billing_verification import VerifiedBillingAttestation
 
 
@@ -71,7 +70,12 @@ class BillingVerifierUDSTransport:
                 or type(timeout_seconds) is not float
                 or not 0.1 <= timeout_seconds <= 30.0):
             raise ValueError("trusted local billing route required")
-        TrustedBillingWorkloadAuthenticator(workload_token)
+        if type(workload_token) is not SecretStr:
+            raise TypeError("trusted billing workload secret required")
+        value = workload_token.get_secret_value()
+        if (not 32 <= len(value) <= 512 or not value.isascii()
+                or any(ord(c) < 33 or ord(c) > 126 for c in value)):
+            raise ValueError("invalid billing workload secret format")
         self._socket = socket_path
         self._host = expected_host
         self._token = workload_token
