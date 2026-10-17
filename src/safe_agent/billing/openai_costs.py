@@ -104,7 +104,7 @@ class OpenAICostsCapture(StrictModel):
     end_time: int = Field(gt=0)
     bucket_width: Literal["1d"] = "1d"
     group_by: list[Literal["project_id", "line_item"]] = Field(
-        default_factory=lambda: ["project_id", "line_item"], min_length=2, max_length=2,
+        min_length=2, max_length=2,
     )
     fetched_at: datetime
     pages: list[_PageCapture] = Field(min_length=1, max_length=180)
