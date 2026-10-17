@@ -834,7 +834,8 @@
             "EXECUTING",
             "OUTCOME_UNKNOWN",
             "NEEDS_REVIEW",
-            "COMPLETED"
+            "COMPLETED",
+            "RETIRED"
           ],
           "title": "TaskState",
           "type": "string"

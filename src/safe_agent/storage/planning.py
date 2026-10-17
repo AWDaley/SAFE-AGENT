@@ -170,11 +170,15 @@ class PlanningWorkspaceStore:
             principal.require("task:read", tx.task.organization_id, now)
             row = tx.session.get(PlanningWorkspaceRow, task_id)
             if row is None:
-                status = "READY" if tx.snapshot.phase is OfficePhase.ASSIGNED else "PREPARED"
+                if tx.snapshot.phase is OfficePhase.RETIRED:
+                    status, reason = "RETIRED", "TASK_RETIRED"
+                else:
+                    status = "READY" if tx.snapshot.phase is OfficePhase.ASSIGNED else "PREPARED"
+                    reason = None
                 return PlanningWorkspaceView.model_validate({
                     "task_id": task_id, "workspace_version": 0,
                     "attempts_used": 0, "max_attempts": self.max_attempts,
-                    "status": status, "mode": mode,
+                    "status": status, "mode": mode, "last_reason": reason,
                 })
             _assert_workspace(tx, row)
             if row.mode != mode:
@@ -216,11 +220,13 @@ class PlanningWorkspaceStore:
                     or (row.status == "PREPARED"
                         and row.proposal_hash != tx.snapshot.proposal_hash)):
                 raise StateConflict("planning workspace state integrity failure")
+            retired = tx.snapshot.phase is OfficePhase.RETIRED
             return PlanningWorkspaceView.model_validate({
                 "task_id": task_id, "workspace_version": row.workspace_version,
                 "attempts_used": row.attempts_used, "max_attempts": row.max_attempts,
-                "status": row.status, "mode": mode,
-                "last_reason": row.last_reason, "proposal_hash": row.proposal_hash,
+                "status": "RETIRED" if retired else row.status, "mode": mode,
+                "last_reason": "TASK_RETIRED" if retired else row.last_reason,
+                "proposal_hash": row.proposal_hash,
             })
 
     def begin(

@@ -27,7 +27,18 @@ def view(task="task_browser", status="RESULT_RECOVERABLE"):
         "attempts_used": 1, "status": status,
         "inference_state": "RESPONSE_VALIDATED", "inference_deadline": "2099-01-01T00:00:00Z",
         "recovery_revision": "sha256:" + "a" * 64,
-        "allowed_actions": ["refresh", "resume_saved_result"] if status == "RESULT_RECOVERABLE" else ["refresh"],
+        "allowed_actions": (
+            ["refresh", "resume_saved_result", "retire_task"]
+            if status == "RESULT_RECOVERABLE"
+            else ["refresh", "retire_task"]
+            if status in {
+                "NOT_STARTED", "INPUT_MISSING", "INPUT_SAVED", "WAITING_TO_DISPATCH",
+                "INFERENCE_UNCERTAIN", "INFERENCE_STOPPED", "RESULT_EXPIRED",
+                "RESULT_MISSING", "SOURCE_CHANGED", "AUTHORITY_CHANGED",
+                "POLICY_CHANGED", "PREPARED", "NEEDS_CLARIFICATION",
+            }
+            else ["refresh"]
+        ),
         "advisory_only": True, "automatic_retry_allowed": False,
         "new_inference_requested": False, "provider_effect_performed": False, "billing_changed": False,
     }
@@ -72,21 +83,36 @@ def browser_rig(browser_engine):
         const method = options.method;
         const body = options.body ? JSON.parse(options.body) : null;
         state.requests.push([method, url, body]);
-        if (!/^\/v1\/tasks\/[A-Za-z][A-Za-z0-9._:-]*\/planning\/(recovery|resume-saved)$/.test(url)) {
+        if (!/^\/v1\/tasks\/[A-Za-z][A-Za-z0-9._:-]*\/planning\/(recovery|resume-saved|retire)$/.test(url)) {
           throw new Error('Unexpected fixture request');
         }
         const task = url.split('/')[3];
         if (options.headers.Authorization !== 'Bearer local-browser-fixture-only') {
           return {status: 401, ok: false, json: async () => ({})};
         }
+        const retirable = new Set([
+          'NOT_STARTED','INPUT_MISSING','INPUT_SAVED','WAITING_TO_DISPATCH',
+          'INFERENCE_UNCERTAIN','INFERENCE_STOPPED','RESULT_EXPIRED','RESULT_MISSING',
+          'SOURCE_CHANGED','AUTHORITY_CHANGED','POLICY_CHANGED','PREPARED','NEEDS_CLARIFICATION'
+        ]);
+        const actions = state.status === 'RESULT_RECOVERABLE'
+          ? ['refresh','resume_saved_result','retire_task']
+          : retirable.has(state.status) ? ['refresh','retire_task'] : ['refresh'];
         let data = {...initial, task_id: task, status: state.status,
-          allowed_actions: state.status === 'RESULT_RECOVERABLE' ? ['refresh','resume_saved_result'] : ['refresh'],
-          ...state.patch};
+          allowed_actions: actions, ...state.patch};
         let code = method === 'POST' ? state.post_code : state.code;
         if (method === 'POST' && code === 200) {
-          state.status = 'PREPARED';
-          data = {...data, status: 'PREPARED', task_phase: 'AWAITING_APPROVAL',
-            task_state_version: 3, workspace_version: 2, allowed_actions: ['refresh']};
+          if (url.endsWith('/retire')) {
+            state.status = 'TASK_RETIRED';
+            data = {...data, status: 'TASK_RETIRED', task_phase: 'RETIRED',
+              task_state_version: data.task_state_version + 1,
+              allowed_actions: ['refresh']};
+          } else {
+            state.status = 'PREPARED';
+            data = {...data, status: 'PREPARED', task_phase: 'AWAITING_APPROVAL',
+              task_state_version: 3, workspace_version: 2,
+              allowed_actions: ['refresh','retire_task']};
+          }
         }
         state.started = true;
         if (state.hold) {
@@ -137,6 +163,32 @@ def test_resume_is_explicit_and_does_not_send_model_or_execution_requests(browse
     assert posts[0][2] == {"schema_version": "safe_agent.resume_saved_result.v1",
                          "expected_state_version": 0, "expected_workspace_version": 1,
                          "expected_recovery_revision": "sha256:" + "a" * 64}
+
+
+def test_retirement_is_explicit_terminal_and_does_not_claim_a_refund(browser_rig):
+    from playwright.sync_api import expect
+
+    rig = browser_rig
+    rig.state["status"] = "INFERENCE_UNCERTAIN"
+    inspect(rig)
+    expect(rig.page.locator("#retireTaskPanel")).to_be_visible()
+    expect(rig.page.locator("#resumeSavedResultBtn")).to_be_hidden()
+    rig.page.locator("#retireReason").select_option("STALE_OR_BLOCKED")
+    rig.page.on("dialog", lambda dialog: dialog.accept())
+    rig.page.locator("#retireTaskBtn").click()
+    expect(rig.page.locator("#recoveryState")).to_have_text("TASK RETIRED")
+    expect(rig.page.locator("#retireTaskPanel")).to_be_hidden()
+    posts = [entry for entry in rig.state["requests"] if entry[0] == "POST"]
+    assert len(posts) == 1
+    assert posts[0][1] == "/v1/tasks/task_browser/planning/retire"
+    assert posts[0][2] == {
+        "schema_version": "safe_agent.retire_task.v1",
+        "expected_state_version": 0,
+        "expected_workspace_version": 1,
+        "expected_recovery_revision": "sha256:" + "a" * 64,
+        "reason_code": "STALE_OR_BLOCKED",
+    }
+    expect(rig.page.locator("#recoveryStatus")).to_contain_text("accounting were preserved")
 
 
 @pytest.mark.parametrize("state", ["INFERENCE_UNCERTAIN", "INFERENCE_PENDING", "RESULT_EXPIRED",

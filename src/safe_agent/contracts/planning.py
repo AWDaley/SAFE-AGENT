@@ -14,7 +14,7 @@ from safe_agent.contracts.base import Digest, Identifier, StrictModel, require_a
 
 PlanningMode = Literal["deterministic", "text_only"]
 PlanningStatus = Literal[
-    "READY", "RUNNING", "NEEDS_CLARIFICATION", "PREPARED", "EXHAUSTED",
+    "READY", "RUNNING", "NEEDS_CLARIFICATION", "PREPARED", "EXHAUSTED", "RETIRED",
 ]
 PlanningResultKind = Literal[
     "PROPOSED", "NEEDS_CLARIFICATION", "RETRYABLE_FAILURE", "LEASE_EXPIRED",
@@ -22,7 +22,7 @@ PlanningResultKind = Literal[
 PlanningReason = Literal[
     "NO_AVAILABLE_SLOT", "INSUFFICIENT_CONTEXT", "MODEL_RESPONSE_REJECTED",
     "SIMULATION_CONFLICT", "STALE_OR_DENIED", "LEASE_EXPIRED",
-    "ATTEMPT_EXHAUSTED",
+    "ATTEMPT_EXHAUSTED", "TASK_RETIRED",
 ]
 
 
