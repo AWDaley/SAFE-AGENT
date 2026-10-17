@@ -1,8 +1,8 @@
-"""Isolated synthetic billing verifier with asymmetric attestation signing.
+"""Isolated billing verifier and aggregate provider-cost audit signer.
 
 The service has no SQL, broker, operator-token, inference-dispatch or business
-provider interfaces. It accepts only a closed source-signed synthetic billing
-record and returns a verifier-signed attestation.
+provider interfaces. Request-level reconciliation remains synthetic-only; optional
+provider adapters can sign aggregate audit evidence that cannot settle a request.
 """
 from __future__ import annotations
 
