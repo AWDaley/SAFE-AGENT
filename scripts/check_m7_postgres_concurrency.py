@@ -18,7 +18,7 @@ from safe_agent.storage.inference_budget import InferenceBudgetDenied, _change_a
 from safe_agent.storage.models import InferenceBudgetAccountRow
 from safe_agent.storage.repository import LedgerRepository
 
-EXPECTED_HEAD = "0012_inference_results"
+EXPECTED_HEAD = "0013_coordinated_planning"
 EXPECTED_TRIGGERS = {
     "safe_inference_budget_events_immutable",
     "safe_inference_billing_attestations_immutable",
@@ -52,7 +52,7 @@ def main() -> None:
                 text("SELECT version_num FROM alembic_version")
             ).scalars().all()
             if heads != [EXPECTED_HEAD]:
-                raise AssertionError("PostgreSQL is not at reviewed 0012 with canonical PR #27 ancestry")
+                raise AssertionError("PostgreSQL is not at reviewed 0013 with canonical PR #27 ancestry")
             triggers = set(connection.execute(
                 text(
                     "SELECT tgname FROM pg_trigger "
@@ -70,6 +70,8 @@ def main() -> None:
             "safe_inference_budget_events",
             "safe_inference_billing_attestations",
             "safe_inference_validated_results",
+            "safe_coordinated_planning_inputs",
+            "safe_coordinated_planning_consumptions",
         ):
             if not inspector.has_table(name):
                 raise AssertionError("canonical inference accounting or result table missing")

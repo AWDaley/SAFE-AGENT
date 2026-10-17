@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>SAFE-AGENT · Planning recovery</title>
+  <link rel="stylesheet" href="/operator/assets/styles.css">
+  <script src="/operator/assets/recovery.js" defer></script>
+</head>
+<body>
+  <div class="site-shell">
+    <header class="topbar">
+      <div class="brand"><strong>TERVORO · SAFE-AGENT</strong></div>
+      <a href="/operator">Return to task review</a>
+    </header>
+    <main>
+      <section class="panel" aria-labelledby="recoveryTitle">
+        <p class="eyebrow">Coordinated offline workflow</p>
+        <h1 id="recoveryTitle">Planning recovery</h1>
+        <p>Inspect an existing task or prepare its saved result for review. This page never starts a model call, approves a proposal, queues an effect, or releases a budget hold.</p>
+        <p class="muted smaller">This page has a separate in-memory session. Enter a local test token; never use production credentials. No token or task is accepted from the URL.</p>
+        <form id="recoveryForm" autocomplete="off">
+          <label for="recoveryToken">Local operator token</label>
+          <input id="recoveryToken" type="password" autocomplete="off" spellcheck="false">
+          <label for="recoveryTask">Existing task ID</label>
+          <input id="recoveryTask" type="text" maxlength="128" required autocomplete="off" spellcheck="false">
+          <div class="actions">
+            <button id="inspectRecoveryBtn" type="submit" class="primary">Inspect / refresh status</button>
+            <button id="clearRecoveryBtn" type="button">Clear session</button>
+          </div>
+        </form>
+      </section>
+      <section id="recoveryResult" class="panel" aria-labelledby="recoveryState" hidden>
+        <h2 id="recoveryState"></h2>
+        <p id="recoveryGuidance"></p>
+        <dl class="fact-grid">
+          <div><dt>Task phase</dt><dd id="recoveryPhase"></dd></div>
+          <div><dt>Inference state</dt><dd id="recoveryInference"></dd></div>
+          <div><dt>Original inference deadline</dt><dd id="recoveryDeadline"></dd></div>
+          <div><dt>Planning attempts already used</dt><dd id="recoveryAttempts"></dd></div>
+        </dl>
+        <p class="warning">Status is advisory. Every recovery request rechecks the original permissions and deadlines. An expired or uncertain call is not proof that no charge occurred.</p>
+        <button id="resumeSavedResultBtn" type="button" class="primary" hidden disabled>Prepare saved result for review</button>
+        <p class="muted smaller">Human approval and execution remain separate in the task-review workspace. Cancellation, task retirement and replacement planning are not available here.</p>
+      </section>
+      <div id="recoveryStatus" role="status" aria-live="polite"></div>
+    </main>
+    <footer>Offline prototype · Live Google access and hosted inference remain disabled</footer>
+  </div>
+</body>
+</html>
