@@ -22,11 +22,11 @@ from safe_agent.contracts.billing_verification import (
     VerifiedBillingAttestation,
 )
 from safe_agent.contracts.inference import InferenceRequestId
+from safe_agent.contracts.inference_budget import BillingChargeAttestation
 from safe_agent.contracts.provider_billing_audit import (
     NormalizedProviderCostAudit,
     VerifiedProviderCostAudit,
 )
-from safe_agent.contracts.inference_budget import BillingChargeAttestation
 
 SourceRecordId = Annotated[str, StringConstraints(pattern=r"^src_[0-9a-f]{32}$")]
 HmacDigest = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
