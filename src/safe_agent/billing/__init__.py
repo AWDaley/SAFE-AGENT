@@ -2,12 +2,14 @@
 
 from .verifier import (
     BillingSourceDenied,
+    OfflineAsymmetricBillingVerifier,
     OfflineSyntheticBillingVerifier,
     SyntheticBillingSourceRecord,
 )
 
 __all__ = [
     "BillingSourceDenied",
+    "OfflineAsymmetricBillingVerifier",
     "OfflineSyntheticBillingVerifier",
     "SyntheticBillingSourceRecord",
 ]

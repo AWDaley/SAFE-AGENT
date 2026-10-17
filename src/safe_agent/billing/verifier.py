@@ -17,6 +17,7 @@ from pydantic import Field, StringConstraints, field_validator
 
 from safe_agent.canonical import canonical_json, sha256
 from safe_agent.contracts.base import Digest, Identifier, StrictModel, require_aware
+from safe_agent.contracts.billing_verification import VerifiedBillingAttestation
 from safe_agent.contracts.inference import InferenceRequestId
 from safe_agent.contracts.inference_budget import BillingChargeAttestation
 
@@ -55,8 +56,33 @@ class BillingSourceDenied(ValueError):
         super().__init__("SYNTHETIC_BILLING_SOURCE_DENIED")
 
 
+def _verify_source_record(
+    record: SyntheticBillingSourceRecord, *, source_key: bytes,
+    now: datetime, max_evidence_age_seconds: int,
+) -> tuple[SyntheticBillingSourceRecord, str]:
+    """Authenticate one source record and return its canonical evidence hash."""
+    now = require_aware(now).astimezone(UTC)
+    try:
+        checked = SyntheticBillingSourceRecord.model_validate_json(record.model_dump_json())
+        source_payload = checked.model_dump(mode="json", exclude={"source_signature"})
+        expected = hmac.new(
+            source_key, canonical_json(source_payload), hashlib.sha256,
+        ).hexdigest()
+        if not hmac.compare_digest(expected, checked.source_signature):
+            raise BillingSourceDenied()
+        if (checked.issued_at > now
+                or now - checked.issued_at
+                   > timedelta(seconds=max_evidence_age_seconds)):
+            raise BillingSourceDenied()
+        return checked, sha256(source_payload)
+    except BillingSourceDenied:
+        raise
+    except (ValueError, TypeError, AttributeError):
+        raise BillingSourceDenied() from None
+
+
 class OfflineSyntheticBillingVerifier:
-    """Separate source key and ledger attestation key; no remote/provider access."""
+    """Legacy HMAC attestation fixture; retained for compatibility tests."""
 
     def __init__(
         self, *, source_key: bytes, issuer_key: bytes, issuer_id: str,
@@ -76,53 +102,91 @@ class OfflineSyntheticBillingVerifier:
         self, record: SyntheticBillingSourceRecord, *, now: datetime,
     ) -> BillingChargeAttestation:
         now = require_aware(now).astimezone(UTC)
+        checked, source_hash = _verify_source_record(
+            record, source_key=self._source_key, now=now,
+            max_evidence_age_seconds=self._max_age,
+        )
+        receipt_id = "bil_" + hmac.new(
+            self._issuer_key,
+            canonical_json({
+                "source_record_id": checked.source_record_id,
+                "request_id": checked.request_id,
+            }),
+            hashlib.sha256,
+        ).hexdigest()[:32]
+        unsigned = BillingChargeAttestation(
+            receipt_id=receipt_id, request_id=checked.request_id,
+            organization_id=checked.organization_id,
+            task_id=checked.task_id, route_id=checked.route_id,
+            model_revision=checked.model_revision,
+            prompt_digest=checked.prompt_digest,
+            charge_microusd=checked.charge_microusd,
+            source_evidence_hash=source_hash,
+            issuer_id=self._issuer, observed_at=now,
+            signature="0" * 64,
+        )
+        digest = hmac.new(
+            self._issuer_key,
+            canonical_json(unsigned.model_dump(
+                mode="json", exclude={"signature"},
+            )),
+            hashlib.sha256,
+        ).hexdigest()
+        return unsigned.model_copy(update={"signature": digest})
+
+
+class OfflineAsymmetricBillingVerifier:
+    """Synthetic source verifier whose attestation key never leaves this boundary."""
+
+    def __init__(
+        self, *, source_key: bytes, issuer_private_key: bytes,
+        issuer_id: str, verifier_key_id: str,
+        max_evidence_age_seconds: int = 3600,
+    ) -> None:
+        if (type(source_key) is not bytes or len(source_key) < 32
+                or type(issuer_private_key) is not bytes or len(issuer_private_key) != 32
+                or source_key == issuer_private_key
+                or not 1 <= max_evidence_age_seconds <= 86_400):
+            raise ValueError("separate source and Ed25519 verifier keys required")
         try:
-            checked = SyntheticBillingSourceRecord.model_validate_json(
-                record.model_dump_json(),
-            )
-            source_payload = checked.model_dump(
-                mode="json", exclude={"source_signature"},
-            )
-            expected = hmac.new(
-                self._source_key, canonical_json(source_payload), hashlib.sha256,
-            ).hexdigest()
-            if not hmac.compare_digest(expected, checked.source_signature):
-                raise BillingSourceDenied()
-            if (checked.issued_at > now
-                    or now - checked.issued_at
-                       > timedelta(seconds=self._max_age)):
-                raise BillingSourceDenied()
-            receipt_id = "bil_" + hmac.new(
-                self._issuer_key,
-                canonical_json({
-                    "source_record_id": checked.source_record_id,
-                    "request_id": checked.request_id,
-                }),
-                hashlib.sha256,
-            ).hexdigest()[:32]
-            unsigned = BillingChargeAttestation(
-                receipt_id=receipt_id, request_id=checked.request_id,
-                organization_id=checked.organization_id,
-                task_id=checked.task_id, route_id=checked.route_id,
-                model_revision=checked.model_revision,
-                prompt_digest=checked.prompt_digest,
-                charge_microusd=checked.charge_microusd,
-                source_evidence_hash=sha256(source_payload),
-                issuer_id=self._issuer, observed_at=now,
-                signature="0" * 64,
-            )
-            digest = hmac.new(
-                self._issuer_key,
-                canonical_json(unsigned.model_dump(
-                    mode="json", exclude={"signature"},
-                )),
-                hashlib.sha256,
-            ).hexdigest()
-            return unsigned.model_copy(update={"signature": digest})
-        except BillingSourceDenied:
-            raise
-        except (ValueError, TypeError, AttributeError):
-            raise BillingSourceDenied() from None
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+            self._private = Ed25519PrivateKey.from_private_bytes(issuer_private_key)
+        except Exception:
+            raise ValueError("valid Ed25519 verifier key required") from None
+        self._source_key = source_key
+        self._issuer = IdentifierValidator.validate(issuer_id)
+        self._key_id = IdentifierValidator.validate(verifier_key_id)
+        self._max_age = max_evidence_age_seconds
+
+    def attest(
+        self, record: SyntheticBillingSourceRecord, *, now: datetime,
+    ) -> VerifiedBillingAttestation:
+        now = require_aware(now).astimezone(UTC)
+        checked, source_hash = _verify_source_record(
+            record, source_key=self._source_key, now=now,
+            max_evidence_age_seconds=self._max_age,
+        )
+        receipt_id = "bil_" + sha256({
+            "source_record_id": checked.source_record_id,
+            "request_id": checked.request_id,
+            "verifier_key_id": self._key_id,
+        })[7:39]
+        unsigned = VerifiedBillingAttestation(
+            receipt_id=receipt_id, request_id=checked.request_id,
+            organization_id=checked.organization_id,
+            task_id=checked.task_id, route_id=checked.route_id,
+            model_revision=checked.model_revision,
+            prompt_digest=checked.prompt_digest,
+            charge_microusd=checked.charge_microusd,
+            source_evidence_hash=source_hash,
+            issuer_id=self._issuer, verifier_key_id=self._key_id,
+            observed_at=now, signature="0" * 128,
+        )
+        signature = self._private.sign(canonical_json(
+            unsigned.model_dump(mode="json", exclude={"signature"}),
+        )).hex()
+        return unsigned.model_copy(update={"signature": signature})
 
 
 class IdentifierValidator:

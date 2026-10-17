@@ -178,3 +178,43 @@ def test_postgres_reconciled_live_dispatch_still_consumes_outstanding_capacity(p
     accounting_cases.test_financial_reconciliation_does_not_release_live_dispatch_slot(
         pg_repo,
     )
+
+
+def test_postgres_ed25519_reconciliation_releases_only_unknown_capacity(pg_repo):
+    from safe_agent.billing.verifier import OfflineAsymmetricBillingVerifier
+    from safe_agent.storage.inference_budget import InferenceBudgetLedger
+    from safe_agent.storage.inference_dispatch import TrustedInferenceDispatchStore
+    from tests.m7.test_asymmetric_billing_verifier import ISSUER, KEY_ID, PRIVATE, public_key
+    from tests.m7.test_offline_billing_verifier import SOURCE_KEY, source_record
+
+    ticks = [NOW]
+    pol = policy(global_outstanding=1, tenant_outstanding=1, task_outstanding=1)
+    admission = TrustedInferenceAdmission(pg_repo, policy=pol, clock=lambda: ticks[0])
+    args = assigned(pg_repo)
+    first = admission.admit(*args)
+    store = TrustedInferenceDispatchStore(admission)
+    claim = store.claim(*args)
+    assert claim is not None
+    request, _ = store.start(*args, claim)
+    ticks[0] += timedelta(minutes=2)
+    assert store.recover(*args).state == "UNKNOWN"
+
+    verifier = OfflineAsymmetricBillingVerifier(
+        source_key=SOURCE_KEY, issuer_private_key=PRIVATE,
+        issuer_id=ISSUER, verifier_key_id=KEY_ID,
+    )
+    evidence = verifier.attest(source_record(request, amount=80), now=ticks[0])
+    settled = InferenceBudgetLedger(pg_repo, pol.budget).reconcile_verified(
+        evidence, verifier_public_key=public_key(),
+        expected_issuer_id=ISSUER, expected_verifier_key_id=KEY_ID,
+        now=ticks[0] + timedelta(seconds=1),
+    )
+    assert settled.status == "RECONCILED"
+    assert settled.held_microusd == 0 and settled.charged_microusd == 80
+
+    other = assigned(pg_repo, org=args[0].organization_id, now=ticks[0])
+    second = TrustedInferenceAdmission(
+        pg_repo, policy=pol, clock=lambda: ticks[0],
+    ).admit(*other)
+    assert second.disposition == "CREATED"
+    assert second.binding.request_id != first.binding.request_id
