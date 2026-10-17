@@ -16,10 +16,11 @@ def queue_coordinated_task(
     planning: TrustedCoordinatedPlanning, principal: Principal, task_id: str, *,
     expected_state_version: int, now: datetime,
 ) -> SyntheticQueueReceipt:
-    """Require durable coordinated provenance before using the existing queue.
+    """Require durable provenance and restore the exact original source binding.
 
     The gateway repeats provenance, current state, approval, and source checks in
     its own atomic intent transaction. This preliminary read grants no authority.
+    Restoration uses original timestamps and cannot refresh inference or approval.
     """
     if type(planning) is not TrustedCoordinatedPlanning:
         raise TypeError("exact coordinated planning required")
@@ -34,8 +35,13 @@ def queue_coordinated_task(
         if not isinstance(proposal, CalendarCreateEvent):
             raise StateConflict("COORDINATED_CALENDAR_REQUIRED")
         projection, _ = tx.preview(proposal.simulation_ref)
-        if coordinated_execution_input(tx, proposal, projection) is None:
+        original = coordinated_execution_input(tx, proposal, projection)
+        if original is None:
             raise StateConflict("COORDINATED_PLANNING_REQUIRED")
+        # A separately restarted API has no issuance cache. Validate current
+        # references and BOTH sources against durable W4 input before publishing
+        # an identical binding. A mismatch leaves caches unchanged (R1).
+        planning._source(tx, original, now)
     return planning._workflow.queue(
         principal, task_id, expected_state_version=expected_state_version, now=now,
     )
