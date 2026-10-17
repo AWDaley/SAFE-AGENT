@@ -16,6 +16,7 @@ from safe_agent.broker import ReferenceBroker
 from safe_agent.contracts.actions import CalendarCreateEvent
 from safe_agent.contracts.intake import TaskIntakeRequest
 from safe_agent.contracts.planning import PlanningCommand
+from safe_agent.demo import synthetic_fixture_directory
 from safe_agent.evidence.ledger import OfficePhase
 from safe_agent.model_runtime import ModelIsolationDenied
 from safe_agent.orchestration.office_tasks import TrustedOfficeTasks
@@ -37,8 +38,7 @@ def run_m6_planning_demo(
 ) -> dict[str, object]:
     """Create a synthetic task and plan with either stub or isolated generator."""
     now = datetime.fromisoformat("2026-10-14T13:00:00-04:00")
-    fixture = (Path(__file__).resolve().parents[3]
-               / "fixtures/synthetic_office/office_state.json")
+    fixture = synthetic_fixture_directory() / "office_state.json"
     source = SyntheticOfficeState.from_fixture(fixture)
     messages: list[str] = []
     safe_isolation_errors: list[str] = []

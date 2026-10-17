@@ -1,0 +1,69 @@
+{
+  "manifest": {
+    "schema_version": "safe_agent.manifest.v1",
+    "manifest_id": "manifest_demo_v1",
+    "manifest_version": 1,
+    "organization_id": "org_demo",
+    "initiator_id": "employee_demo",
+    "task_id": "task_demo",
+    "calendar_ref": "calendar_scope_01",
+    "customer_ref": "customer_ref_a9",
+    "permitted_operations": [
+      "calendar.create_event"
+    ],
+    "allowed_start": "2026-10-15T13:00:00-04:00",
+    "allowed_end": "2026-10-15T17:00:00-04:00",
+    "max_duration_minutes": 60,
+    "time_zone": "America/New_York",
+    "template_id": "follow_up_v1",
+    "requires_approval": false,
+    "budget": {
+      "schema_version": "safe_agent.budget.v1",
+      "max_cycles": 4,
+      "max_external_effects": 1,
+      "max_effects_per_cycle": 1
+    }
+  },
+  "task": {
+    "task_id": "task_demo",
+    "organization_id": "org_demo",
+    "initiator_id": "employee_demo",
+    "manifest_id": "manifest_demo_v1",
+    "manifest_hash": "sha256:daf7bb2081b260b0676281fa7023105f237fcc40fe9c0cea01432cc911333bca",
+    "objective_code": "schedule_follow_up",
+    "state": "ASSIGNED",
+    "created_at": "2026-10-13T18:00:00-04:00",
+    "deadline": "2026-10-16T17:00:00-04:00"
+  },
+  "context": {
+    "task_id": "task_demo",
+    "organization_id": "org_demo",
+    "calendar_ref": "calendar_scope_01",
+    "customer_ref": "customer_ref_a9",
+    "allowed_start": "2026-10-15T13:00:00-04:00",
+    "allowed_end": "2026-10-15T17:00:00-04:00",
+    "duration_minutes": 30,
+    "time_zone": "America/New_York",
+    "template_id": "follow_up_v1",
+    "simulation_ref": "simulation_demo_01"
+  },
+  "projection": {
+    "task_id": "task_demo",
+    "organization_id": "org_demo",
+    "calendar_ref": "calendar_scope_01",
+    "revision": "projection_42",
+    "source": "synthetic_calendar",
+    "fetched_at": "2026-10-13T18:00:00-04:00",
+    "expires_at": "2026-10-15T12:00:00-04:00",
+    "free_slots": [
+      {
+        "start_at": "2026-10-15T14:00:00-04:00",
+        "end_at": "2026-10-15T14:30:00-04:00"
+      },
+      {
+        "start_at": "2026-10-15T15:00:00-04:00",
+        "end_at": "2026-10-15T16:00:00-04:00"
+      }
+    ]
+  }
+}

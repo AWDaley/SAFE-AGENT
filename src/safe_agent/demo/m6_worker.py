@@ -12,6 +12,7 @@ from safe_agent.adapters.fake_calendar import FakeCalendarAdapter
 from safe_agent.adapters.fake_tasks import FakeInternalTaskAdapter
 from safe_agent.broker import ReferenceBroker
 from safe_agent.contracts.intake import TaskIntakeRequest
+from safe_agent.demo import synthetic_fixture_directory
 from safe_agent.evidence.ledger import OfficePhase
 from safe_agent.execution.recovery import SyntheticRecoveryWorker
 from safe_agent.execution.supervisor import (
@@ -35,8 +36,7 @@ from safe_agent.virtual_office import SyntheticOfficeState, VirtualOffice
 def run_m6_worker_demo() -> dict[str, object]:
     """Exercise assignment -> preparation -> queue -> supervised verified effect."""
     now = datetime.fromisoformat("2026-10-14T13:00:00-04:00")
-    fixture = (Path(__file__).resolve().parents[3]
-               / "fixtures/synthetic_office/office_state.json")
+    fixture = synthetic_fixture_directory() / "office_state.json"
     source = SyntheticOfficeState.from_fixture(fixture)
     with TemporaryDirectory(prefix="safe_agent_m6_worker_synthetic_") as temporary:
         repo = LedgerRepository.testing_sqlite(

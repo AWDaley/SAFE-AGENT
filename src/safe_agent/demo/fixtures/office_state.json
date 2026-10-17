@@ -1,0 +1,176 @@
+{
+  "schema_version": "safe_agent.synthetic_office.v1",
+  "organization_id": "org_demo",
+  "task_list_revision": "tasks_source_rev_1",
+  "calendars": [
+    {
+      "calendar_id": "cal_main_private",
+      "organization_id": "org_demo",
+      "time_zone": "America/New_York",
+      "source_revision": "main_rev_1",
+      "office_hours": [
+        {
+          "weekday": 0,
+          "opens": "09:00:00",
+          "closes": "17:00:00"
+        },
+        {
+          "weekday": 1,
+          "opens": "09:00:00",
+          "closes": "17:00:00"
+        },
+        {
+          "weekday": 2,
+          "opens": "09:00:00",
+          "closes": "17:00:00"
+        },
+        {
+          "weekday": 3,
+          "opens": "09:00:00",
+          "closes": "17:00:00"
+        },
+        {
+          "weekday": 4,
+          "opens": "09:00:00",
+          "closes": "17:00:00"
+        }
+      ],
+      "bookings": [
+        {
+          "booking_id": "booking_early",
+          "customer_id": "cust_c2",
+          "start_at": "2026-10-15T09:00:00-04:00",
+          "end_at": "2026-10-15T09:30:00-04:00"
+        },
+        {
+          "booking_id": "booking_midday",
+          "customer_id": "cust_c3",
+          "start_at": "2026-10-15T11:00:00-04:00",
+          "end_at": "2026-10-15T12:00:00-04:00"
+        },
+        {
+          "booking_id": "booking_afternoon",
+          "customer_id": "cust_c4",
+          "start_at": "2026-10-15T14:00:00-04:00",
+          "end_at": "2026-10-15T14:30:00-04:00"
+        }
+      ]
+    },
+    {
+      "calendar_id": "cal_front_desk_private",
+      "organization_id": "org_demo",
+      "time_zone": "America/New_York",
+      "source_revision": "front_rev_1",
+      "office_hours": [
+        {
+          "weekday": 0,
+          "opens": "08:00:00",
+          "closes": "16:00:00"
+        },
+        {
+          "weekday": 1,
+          "opens": "08:00:00",
+          "closes": "16:00:00"
+        },
+        {
+          "weekday": 2,
+          "opens": "08:00:00",
+          "closes": "16:00:00"
+        },
+        {
+          "weekday": 3,
+          "opens": "08:00:00",
+          "closes": "16:00:00"
+        },
+        {
+          "weekday": 4,
+          "opens": "08:00:00",
+          "closes": "16:00:00"
+        },
+        {
+          "weekday": 6,
+          "opens": "00:30:00",
+          "closes": "03:30:00"
+        }
+      ],
+      "bookings": [
+        {
+          "booking_id": "booking_front",
+          "customer_id": "cust_c1",
+          "start_at": "2026-10-15T10:00:00-04:00",
+          "end_at": "2026-10-15T11:00:00-04:00"
+        },
+        {
+          "booking_id": "booking_fall_dst",
+          "customer_id": "cust_c5",
+          "start_at": "2026-11-01T01:15:00-04:00",
+          "end_at": "2026-11-01T01:45:00-04:00"
+        }
+      ]
+    }
+  ],
+  "customers": [
+    {
+      "customer_id": "cust_c1",
+      "organization_id": "org_demo",
+      "name": "Ada Synthetic",
+      "email": "ada@example.invalid"
+    },
+    {
+      "customer_id": "cust_c2",
+      "organization_id": "org_demo",
+      "name": "Bert Synthetic",
+      "email": "bert@example.invalid"
+    },
+    {
+      "customer_id": "cust_c3",
+      "organization_id": "org_demo",
+      "name": "Cleo Synthetic",
+      "email": "cleo@example.invalid"
+    },
+    {
+      "customer_id": "cust_c4",
+      "organization_id": "org_demo",
+      "name": "Dara Synthetic",
+      "email": "dara@example.invalid"
+    },
+    {
+      "customer_id": "cust_c5",
+      "organization_id": "org_demo",
+      "name": "Ezra Synthetic",
+      "email": null
+    }
+  ],
+  "appointment_templates": [
+    {
+      "template_id": "follow_up_v1",
+      "duration_minutes": 30
+    },
+    {
+      "template_id": "intake_v1",
+      "duration_minutes": 60
+    },
+    {
+      "template_id": "quick_checkin_v1",
+      "duration_minutes": 15
+    }
+  ],
+  "internal_tasks": [
+    {
+      "task_id": "itask_c1_callback",
+      "organization_id": "org_demo",
+      "customer_id": "cust_c1",
+      "task_code": "call_back",
+      "status": "open",
+      "due_at": "2026-10-16T15:00:00-04:00"
+    },
+    {
+      "task_id": "itask_c2_docs",
+      "organization_id": "org_demo",
+      "customer_id": "cust_c2",
+      "task_code": "prepare_documents",
+      "status": "done",
+      "due_at": "2026-10-12T10:00:00-04:00"
+    }
+  ]
+}

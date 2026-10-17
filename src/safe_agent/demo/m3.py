@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta
-from pathlib import Path
 
 from safe_agent.adapters.fake_calendar import FakeCalendarAdapter
 from safe_agent.agent.fake import FakePlanner
@@ -13,6 +12,7 @@ from safe_agent.canonical import sha256
 from safe_agent.contracts.actions import CalendarCreateEvent
 from safe_agent.contracts.control import Task, TaskBudget, TaskManifest
 from safe_agent.contracts.office import SimulatedChange
+from safe_agent.demo import synthetic_fixture_directory
 from safe_agent.execution.synthetic import SyntheticExecutionGateway
 from safe_agent.orchestration.office_tasks import TrustedOfficeTasks
 from safe_agent.orchestration.runner import TaskRunner
@@ -27,8 +27,7 @@ def run_m3_demo() -> dict[str, object]:
     now = datetime.fromisoformat("2026-10-14T13:00:00-04:00")
     start = datetime.fromisoformat("2026-10-15T13:00:00-04:00")
     end = datetime.fromisoformat("2026-10-15T17:00:00-04:00")
-    fixture = (Path(__file__).resolve().parents[3]
-               / "fixtures/synthetic_office/office_state.json")
+    fixture = synthetic_fixture_directory() / "office_state.json"
     source = SyntheticOfficeState.from_fixture(fixture)
     # A deterministic key is safe ONLY because these are bundled fake test records.
     broker = ReferenceBroker(secret=b"m3_synthetic_test_only_key_not_a_provider_secret_111")
