@@ -14,7 +14,7 @@ from datetime import timedelta
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from safe_agent.agent.json_planner import PLANNER_INSTRUCTION, ClosedJsonPlanner
+from safe_agent.agent.json_planner import PLANNER_INSTRUCTION
 from safe_agent.canonical import sha256
 from safe_agent.contracts.inference import (
     InferenceRequest,
@@ -345,23 +345,17 @@ def test_pinned_https_socket_uses_numeric_address_with_hostname_sni(monkeypatch)
     conn.close()
 
 
-def test_full_gateway_accepts_only_mocked_https_sidecar_reply():
+def test_legacy_gateway_refuses_https_sidecar_before_credentials_or_wire():
+    # The low-level HTTPS tests above remain useful for protocol conformance.
+    # They do not authorize using an uncoordinated network gateway as a planner.
     endpoint = policy()
-    sidecar, _, wire = build(egress_policy=endpoint)
-    gateway = InferenceGateway(
-        InferenceRoutePolicy(
-            route_id=endpoint.route_id, model_revision=endpoint.model_revision,
-        ),
-        sidecar, clock=lambda: NOW,
-    )
-    _, _, text = fixture()
-    result = gateway.infer(text)
-    assert result.proposal.operation == "calendar.create_event"
-    assert result.provider_effect_performed is False
-    assert result.model_authorized_execution is False
-    assert result.reported_usage is not None
-    assert result.reported_usage.independently_verified is False
-    assert len(wire.calls) == 1
-    assert isinstance(ClosedJsonPlanner(gateway.generate).propose(
-        fixture()[0], fixture()[1],
-    ).model_dump_json(), str)
+    sidecar, secrets, wire = build(egress_policy=endpoint)
+    with pytest.raises(TypeError, match="coordinated"):
+        InferenceGateway(
+            InferenceRoutePolicy(
+                route_id=endpoint.route_id, model_revision=endpoint.model_revision,
+            ),
+            sidecar, clock=lambda: NOW,
+        )
+    assert secrets.loads == 0
+    assert wire.calls == []

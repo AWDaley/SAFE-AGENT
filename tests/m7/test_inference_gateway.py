@@ -65,11 +65,12 @@ def rule(**update):
 
 
 def mock_gateway(*, clock=lambda: NOW, policy=None, backend=None):
-    return InferenceGateway(
-        policy or rule(),
-        OfflineMockInferenceTransport() if backend is None else backend,
-        clock=clock,
-    )
+    # Fault injection belongs in TEST code, not a permissive production factory.
+    # The closed runtime constructor still admits only the exact offline fake.
+    transport = OfflineMockInferenceTransport()
+    if backend is not None:
+        transport.infer = backend.infer
+    return InferenceGateway(policy or rule(), transport, clock=clock)
 
 
 class Intercept:
@@ -135,7 +136,7 @@ def test_mock_gateway_yields_one_typed_non_executable_proposal():
     assert outcome.reported_usage is not None
     assert outcome.reported_usage.source == "synthetic_mock"
 
-    # The same gateway can feed the existing closed-schema text planner.
+    # The same fixture gateway can feed the closed-schema offline text planner.
     proposal = ClosedJsonPlanner(gateway.generate).propose(context, projection)
     assert isinstance(proposal, CalendarCreateEvent)
     assert proposal.customer_ref == context.customer_ref
