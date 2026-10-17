@@ -1,4 +1,4 @@
-"""Forward 0010 -> 0011 migration and metadata parity on real SQLite schema."""
+"""Forward 0010 admission upgrade and metadata parity on real SQLite schema."""
 
 from pathlib import Path
 
@@ -36,6 +36,6 @@ def test_forward_upgrade_preserves_0010_and_admission_persists(tmp_path: Path):
     assert first.binding == second.binding
     assert before == repo.read_events(args[1].task_id)
     with engine.connect() as db:
-        assert db.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0011_inference_admission"
+        assert db.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0012_inference_results"
         assert db.execute(select(InferenceAdmissionRow.request_id)).scalars().all() == [first.binding.request_id]
     repo.close()

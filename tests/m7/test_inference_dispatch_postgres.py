@@ -78,7 +78,7 @@ def advance(conn, bound, previous, state, *, at, reason=None, proposal=None):
 
 def test_postgres_migrated_head_composite_bindings_and_triggers_are_present(connection):
     assert connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all() == [
-        "0011_inference_admission",
+        "0012_inference_results",
     ]
     triggers = set(connection.execute(text(
         "SELECT tgname FROM pg_trigger WHERE NOT tgisinternal"
@@ -86,6 +86,7 @@ def test_postgres_migrated_head_composite_bindings_and_triggers_are_present(conn
     assert {
         "safe_inference_invocation_guard", "safe_inference_invocation_events_immutable",
         "safe_inference_budget_events_immutable", "safe_inference_billing_attestations_immutable",
+        "safe_inference_result_guard",
     } <= triggers
     assert len(inspect(connection).get_foreign_keys(INVOCATIONS.name)) == 3
 

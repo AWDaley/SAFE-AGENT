@@ -122,7 +122,11 @@ def main() -> None:
             assert result.invocation.state == "RESPONSE_VALIDATED", result.invocation.state
             assert result.outcome is not None and result.outcome.provider_effect_performed is False
             repeated = coordinator.execute(*args)
-            assert not repeated.dispatched_this_call and repeated.outcome is None
+            assert not repeated.dispatched_this_call
+            assert repeated.outcome == result.outcome
+            recovered = coordinator.resume(*args[:2])
+            assert recovered.status == "AVAILABLE" and recovered.outcome == result.outcome
+            assert recovered.business_execution_authorized is False
             with httpx.Client(transport=httpx.HTTPTransport(uds=str(path), retries=0),
                               base_url="http://" + HOST, timeout=3) as client:
                 headers = {"Authorization": "Bearer " + token.get_secret_value()}
@@ -151,6 +155,7 @@ def main() -> None:
             replayed = restarted.execute(*lost_args)
             assert replayed.invocation.state in ("DISPATCH_STARTED", "UNKNOWN")
             assert replayed.dispatched_this_call is False
+            assert replayed.outcome is None
             deadline_at = restarted.store.admission.admit(*lost_args).binding.deadline_at
             remaining = (deadline_at - datetime.now(UTC)).total_seconds()
             assert remaining <= 10
@@ -166,6 +171,7 @@ def main() -> None:
                 assert status["accepted"] == 0, "restart caused a duplicate backend call"
             assert restarted.store.admission.admit(*lost_args).reservation.held_microusd > 0
             print("M7_COORDINATED_UDS_RESTART_NO_REDISPATCH=PASS")
+            print("W3_COORDINATED_VALIDATED_RESULT_REUSE=PASS")
             print("BUSINESS_EFFECTS=0; HOSTED_INFERENCE=DISABLED; M5_LIVE_ACCEPTANCE=BLOCKED")
         finally:
             repo.close()
