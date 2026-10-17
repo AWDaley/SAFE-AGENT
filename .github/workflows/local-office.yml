@@ -27,15 +27,15 @@ jobs:
           mypy src/safe_agent
       - name: Workspace, principal and restarted application acceptance
         run: |
-          pytest tests/local_office/test_workspace.py tests/local_office/test_application.py --tb=short --junitxml=local-unit.xml
-          python -c "import xml.etree.ElementTree as E; s=E.parse('local-unit.xml').getroot().findall('testsuite'); assert s and sum(int(x.get('tests',0)) for x in s)>=44; assert all(int(x.get(k,0))==0 for x in s for k in ('skipped','errors','failures'))"
+          pytest tests/local_office/test_workspace.py tests/local_office/test_application.py tests/local_office/test_maintenance.py --tb=short --junitxml=local-unit.xml
+          python -c "import xml.etree.ElementTree as E; s=E.parse('local-unit.xml').getroot().findall('testsuite'); assert s and sum(int(x.get('tests',0)) for x in s)>=50; assert all(int(x.get(k,0))==0 for x in s for k in ('skipped','errors','failures'))"
       - name: Installed CLI, real API restart, UDS and independent worker
         env:
           SAFE_AGENT_TEST_LOCAL_PROCESS: '1'
           SAFE_AGENT_LOCAL_CLI: ${{ github.workspace }}/.venv-local-office/bin/safe-agent-local
         run: |
           pytest tests/local_office/test_process.py --tb=short --junitxml=local-process.xml
-          python -c "import xml.etree.ElementTree as E; s=E.parse('local-process.xml').getroot().findall('testsuite'); assert s and sum(int(x.get('tests',0)) for x in s)>=1; assert all(int(x.get(k,0))==0 for x in s for k in ('skipped','errors','failures'))"
+          python -c "import xml.etree.ElementTree as E; s=E.parse('local-process.xml').getroot().findall('testsuite'); assert s and sum(int(x.get('tests',0)) for x in s)>=2; assert all(int(x.get(k,0))==0 for x in s for k in ('skipped','errors','failures'))"
       - name: Keep real provider release blocks in place
         run: |
           python scripts/check_m5_release.py --mode offline

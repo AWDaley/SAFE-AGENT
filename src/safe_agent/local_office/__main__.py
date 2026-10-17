@@ -24,6 +24,12 @@ from safe_agent.inference_service.service import (
 )
 from safe_agent.inference_service.socket_lifecycle import OwnedUnixListener
 from safe_agent.local_office.application import create_local_api, issue_session, require_environment
+from safe_agent.local_office.maintenance import (
+    install_billing_keyring,
+    pin_billing_distribution_root,
+    rollback_workspace,
+    upgrade_workspace,
+)
 from safe_agent.local_office.state import HOST, MODEL, ROUTE, initialize, open_office
 from safe_agent.local_office.workspace import (
     LocalOfficeBlocked,
@@ -85,6 +91,24 @@ def main() -> None:
     init.add_argument("--migrations", required=True, type=Path,
                       help="Trusted checkout's migrations directory; used only during init")
     commands.add_parser("status", help="Inspect local persisted state without starting services")
+    upgrade = commands.add_parser(
+        "upgrade", help="Explicitly upgrade an existing legacy workspace with a backup",
+    )
+    upgrade.add_argument("--migrations", required=True, type=Path)
+    upgrade.add_argument("--backup", required=True, type=Path)
+    rollback = commands.add_parser(
+        "rollback", help="Restore the pre-upgrade workspace from a verified backup",
+    )
+    rollback.add_argument("--backup", required=True, type=Path)
+    pin_root = commands.add_parser(
+        "pin-billing-root", help="Pin one offline billing-keyring distribution public key",
+    )
+    pin_root.add_argument("--key-id", required=True)
+    pin_root.add_argument("--public-key-file", required=True, type=Path)
+    install_keyring = commands.add_parser(
+        "install-billing-keyring", help="Install the next signed billing verifier keyring",
+    )
+    install_keyring.add_argument("--bundle", required=True, type=Path)
     session = commands.add_parser("session", help="Explicitly issue a short-lived local token")
     session.add_argument("--role", required=True, choices=("requester", "approver"))
     session.add_argument("--seconds", type=int, default=900)
@@ -105,6 +129,30 @@ def main() -> None:
             value = initialize(root, options.migrations)
             report = {"status": "INITIALIZED", "workspace_id": value.workspace_id,
                       "mode": value.mode, "live_providers_enabled": False}
+        elif options.command == "upgrade":
+            report = upgrade_workspace(root, options.migrations, options.backup)
+        elif options.command == "rollback":
+            report = rollback_workspace(root, options.backup)
+        elif options.command == "pin-billing-root":
+            pinned = pin_billing_distribution_root(
+                root, distribution_key_id=options.key_id,
+                public_key_file=options.public_key_file,
+            )
+            report = {
+                "status": "BILLING_DISTRIBUTION_ROOT_PINNED",
+                "distribution_key_id": pinned.distribution_key_id,
+                "public_key_fingerprint": pinned.public_key_fingerprint,
+                "production_authorized": False,
+            }
+        elif options.command == "install-billing-keyring":
+            installed = install_billing_keyring(root, options.bundle)
+            report = {
+                "status": "BILLING_KEYRING_INSTALLED",
+                "distribution_key_id": installed.distribution_key_id,
+                "generation": installed.generation,
+                "bundle_digest": installed.bundle_digest,
+                "production_authorized": False,
+            }
         elif options.command == "session":
             print(issue_session(root, options.role, lifetime=options.seconds))
             return
