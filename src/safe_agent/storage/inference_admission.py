@@ -12,7 +12,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from secrets import token_hex
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -42,6 +42,7 @@ from safe_agent.storage.inference_budget import InferenceBudgetLedger, _audit_ev
 from safe_agent.storage.models import (
     InferenceAdmissionAuthorityRow,
     InferenceAdmissionRow,
+    InferenceBillingAttestationRow,
     InferenceBudgetReservationRow,
     InferenceInvocationEventRow,
     InferenceInvocationRow,
@@ -217,6 +218,7 @@ class TrustedInferenceAdmission:
     def _capacity(self, tx: TaskTransaction, context: SafeTaskContext, now: datetime) -> None:
         lim = self._policy.throughput
         a, inv = InferenceAdmissionRow, InferenceInvocationRow
+        reserve, billing = InferenceBudgetReservationRow, InferenceBillingAttestationRow
         scopes = (
             ((), lim.global_requests, lim.global_outstanding),
             ((inv.organization_id == context.organization_id,),
@@ -224,17 +226,43 @@ class TrustedInferenceAdmission:
             ((inv.organization_id == context.organization_id, inv.task_id == context.task_id),
              lim.task_requests, lim.task_outstanding),
         )
+        # A billing attestation can settle monetary uncertainty, but it never
+        # proves a live dispatch finished. RESERVED and DISPATCH_STARTED always
+        # remain outstanding. UNKNOWN stops consuming an outstanding slot only
+        # when the canonical reservation is fully RECONCILED and its immutable
+        # attestation exactly matches the settled charge/evidence.
+        unresolved = or_(
+            inv.state.in_(("RESERVED", "DISPATCH_STARTED")),
+            and_(
+                inv.state == "UNKNOWN",
+                or_(
+                    reserve.status != "RECONCILED",
+                    reserve.held_microusd != 0,
+                    reserve.evidence_hash.is_(None),
+                    billing.request_id.is_(None),
+                    billing.attestation_digest != reserve.evidence_hash,
+                    billing.charge_microusd != reserve.charged_microusd,
+                    billing.accepted_at < inv.dispatch_started_at,
+                ),
+            ),
+        )
         for predicates, max_requests, max_outstanding in scopes:
-            query = select(func.count()).select_from(a).join(inv, a.request_id == inv.request_id)
-            query = query.where(*predicates)
+            query = select(func.count()).select_from(a).join(
+                inv, a.request_id == inv.request_id,
+            ).where(*predicates)
             recent = tx.session.scalar(query.where(a.admitted_at > now - timedelta(
                 seconds=lim.window_seconds,
             )))
-            outstanding = tx.session.scalar(query.where(inv.state.in_(
-                ("RESERVED", "DISPATCH_STARTED", "UNKNOWN"),
-            )))
-            # Expired RESERVED/DISPATCH_STARTED and UNKNOWN continue to consume
-            # capacity. No lease-expiry refund, eviction or in-memory fallback.
+            outstanding_query = query.join(
+                reserve, reserve.request_id == inv.request_id,
+            ).outerjoin(
+                billing, billing.request_id == inv.request_id,
+            ).where(unresolved)
+            outstanding = tx.session.scalar(outstanding_query)
+            # Reconciliation releases only the concurrency/outstanding slot for
+            # an already-UNKNOWN invocation. It is not a refund, does not erase
+            # request-rate history, and cannot authorize another attempt on the
+            # same stale task.
             if recent is None or outstanding is None or recent >= max_requests or (
                 outstanding >= max_outstanding
             ):

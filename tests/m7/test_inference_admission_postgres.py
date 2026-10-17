@@ -28,6 +28,7 @@ from safe_agent.storage.models import (
     InferenceInvocationEventRow,
 )
 from safe_agent.storage.repository import LedgerRepository
+from tests.m7 import test_inference_accounting_reconciliation as accounting_cases
 from tests.m7.admission_fixtures import NOW, assigned, policy
 from tests.m7.test_inference_admission import sizes
 
@@ -165,3 +166,15 @@ def test_postgres_reopened_repository_preserves_identity_holds_and_rate(pg_repo)
             assert db.scalars(select(InferenceBudgetReservationRow.held_microusd)).all() == [205]
     finally:
         reopened.close()
+
+
+def test_postgres_attested_unknown_releases_outstanding_capacity(pg_repo):
+    accounting_cases.test_attested_unknown_releases_outstanding_slot_but_keeps_real_charge(
+        pg_repo,
+    )
+
+
+def test_postgres_reconciled_live_dispatch_still_consumes_outstanding_capacity(pg_repo):
+    accounting_cases.test_financial_reconciliation_does_not_release_live_dispatch_slot(
+        pg_repo,
+    )
