@@ -1,8 +1,8 @@
-"""Isolated synthetic billing verifier with asymmetric attestation signing.
+"""Isolated billing verifier and aggregate provider-cost audit signer.
 
 The service has no SQL, broker, operator-token, inference-dispatch or business
-provider interfaces. It accepts only a closed source-signed synthetic billing
-record and returns a verifier-signed attestation.
+provider interfaces. Request-level reconciliation remains synthetic-only; optional
+provider adapters can sign aggregate audit evidence that cannot settle a request.
 """
 from __future__ import annotations
 
@@ -19,9 +19,11 @@ from fastapi.responses import Response
 from pydantic import Field, SecretStr, field_validator
 
 from safe_agent.billing.adapters import BillingEvidenceAdapter
+from safe_agent.billing.audit_adapters import ProviderCostAuditAdapter
 from safe_agent.billing.verifier import BillingSourceDenied, OfflineAsymmetricBillingVerifier
 from safe_agent.contracts.base import Identifier, StrictModel
 from safe_agent.contracts.billing_verification import VerifiedBillingAttestation
+from safe_agent.contracts.provider_billing_audit import VerifiedProviderCostAudit
 
 _HOST_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{0,252}$")
 
@@ -34,6 +36,7 @@ class TrustedBillingVerifierPolicy(StrictModel):
     issuer_id: Identifier
     verifier_key_id: Identifier
     max_request_bytes: int = Field(default=16_384, ge=1024, le=32_768)
+    max_audit_request_bytes: int = Field(default=1_048_576, ge=16_384, le=4_194_304)
     max_evidence_age_seconds: int = Field(default=3600, ge=1, le=86_400)
 
     @field_validator("expected_host")
@@ -77,6 +80,8 @@ class BillingVerifierServiceStatus(StrictModel):
     mode: Literal["SYNTHETIC_SOURCE_ONLY"] = "SYNTHETIC_SOURCE_ONLY"
     ready: Literal[True] = True
     real_invoice_reader_enabled: Literal[False] = False
+    provider_cost_audit_enabled: bool = False
+    request_level_provider_reconciliation_enabled: Literal[False] = False
     business_effect_authorized: Literal[False] = False
 
 
@@ -98,6 +103,7 @@ def create_billing_verifier_service(
     authenticator: TrustedBillingWorkloadAuthenticator,
     *,
     adapter: BillingEvidenceAdapter,
+    audit_adapter: ProviderCostAuditAdapter | None = None,
     issuer_private_key: bytes,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> FastAPI:
@@ -107,6 +113,8 @@ def create_billing_verifier_service(
         raise TypeError("trusted billing workload authenticator required")
     if not isinstance(adapter, BillingEvidenceAdapter):
         raise TypeError("trusted billing evidence adapter required")
+    if audit_adapter is not None and not isinstance(audit_adapter, ProviderCostAuditAdapter):
+        raise TypeError("trusted provider cost audit adapter required")
     verifier = OfflineAsymmetricBillingVerifier(
         issuer_private_key=issuer_private_key,
         issuer_id=policy.issuer_id,
@@ -125,47 +133,84 @@ def create_billing_verifier_service(
 
     @app.get("/healthz")
     def health() -> dict[str, object]:
-        return BillingVerifierServiceStatus().model_dump(mode="json")
+        return BillingVerifierServiceStatus(
+            provider_cost_audit_enabled=audit_adapter is not None,
+        ).model_dump(mode="json")
+
+    async def read_json_body(request: Request, maximum: int) -> str:
+        if (len(request.headers.getlist("content-type")) != 1
+                or request.headers["content-type"].split(";", 1)[0].lower()
+                   != "application/json"
+                or request.headers.get("content-encoding", "identity") != "identity"):
+            raise TypeError("billing media type denied")
+        body = bytearray()
+        async for chunk in request.stream():
+            if len(body) + len(chunk) > maximum:
+                raise OverflowError("billing request too large")
+            body.extend(chunk)
+        text = body.decode("utf-8", errors="strict")
+        parsed = json.loads(
+            text, object_pairs_hook=_unique_pairs, parse_constant=_reject_constant,
+        )
+        if not isinstance(parsed, dict):
+            raise ValueError("one billing object required")
+        return text
 
     @app.post("/v1/verify")
     async def verify(request: Request) -> Response:
         if not authenticated(request):
             return Response(status_code=401, content=b"", headers={"Cache-Control": "no-store"})
-        if (len(request.headers.getlist("content-type")) != 1
-                or request.headers["content-type"].split(";", 1)[0].lower()
-                   != "application/json"
-                or request.headers.get("content-encoding", "identity") != "identity"):
-            return Response(status_code=415, content=b"", headers={"Cache-Control": "no-store"})
-        body = bytearray()
         try:
-            async for chunk in request.stream():
-                if len(body) + len(chunk) > policy.max_request_bytes:
-                    return Response(status_code=413, content=b"",
-                                    headers={"Cache-Control": "no-store"})
-                body.extend(chunk)
-            text = body.decode("utf-8", errors="strict")
-            parsed = json.loads(
-                text, object_pairs_hook=_unique_pairs, parse_constant=_reject_constant,
-            )
-            if not isinstance(parsed, dict):
-                raise ValueError("not one billing source record")
+            text = await read_json_body(request, policy.max_request_bytes)
             current = clock()
             normalized = adapter.normalize(text, now=current)
             if (normalized.source_observed_at > current
                     or current - normalized.source_observed_at
                        > timedelta(seconds=policy.max_evidence_age_seconds)):
                 raise BillingSourceDenied()
-            attestation = verifier.sign(normalized, now=current)
             checked = VerifiedBillingAttestation.model_validate_json(
-                attestation.model_dump_json(),
+                verifier.sign(normalized, now=current).model_dump_json(),
             )
         except BillingSourceDenied:
             return Response(status_code=409, content=b"", headers={"Cache-Control": "no-store"})
+        except OverflowError:
+            return Response(status_code=413, content=b"", headers={"Cache-Control": "no-store"})
+        except TypeError:
+            return Response(status_code=415, content=b"", headers={"Cache-Control": "no-store"})
         except Exception:
             return Response(status_code=400, content=b"", headers={"Cache-Control": "no-store"})
         return Response(
-            checked.model_dump_json(),
-            media_type="application/json",
+            checked.model_dump_json(), media_type="application/json",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.post("/v1/audit/provider-costs")
+    async def audit_provider_costs(request: Request) -> Response:
+        if not authenticated(request):
+            return Response(status_code=401, content=b"", headers={"Cache-Control": "no-store"})
+        if audit_adapter is None:
+            return Response(status_code=404, content=b"", headers={"Cache-Control": "no-store"})
+        try:
+            text = await read_json_body(request, policy.max_audit_request_bytes)
+            current = clock()
+            normalized = audit_adapter.normalize_audit(text, now=current)
+            if (normalized.source_observed_at > current
+                    or current - normalized.source_observed_at
+                       > timedelta(seconds=policy.max_evidence_age_seconds)):
+                raise BillingSourceDenied()
+            checked = VerifiedProviderCostAudit.model_validate_json(
+                verifier.sign_cost_audit(normalized, now=current).model_dump_json(),
+            )
+        except BillingSourceDenied:
+            return Response(status_code=409, content=b"", headers={"Cache-Control": "no-store"})
+        except OverflowError:
+            return Response(status_code=413, content=b"", headers={"Cache-Control": "no-store"})
+        except TypeError:
+            return Response(status_code=415, content=b"", headers={"Cache-Control": "no-store"})
+        except Exception:
+            return Response(status_code=400, content=b"", headers={"Cache-Control": "no-store"})
+        return Response(
+            checked.model_dump_json(), media_type="application/json",
             headers={"Cache-Control": "no-store"},
         )
 

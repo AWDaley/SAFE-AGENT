@@ -17,6 +17,7 @@ from pydantic import SecretStr
 
 from safe_agent.billing.verifier import SyntheticBillingSourceRecord
 from safe_agent.contracts.billing_verification import VerifiedBillingAttestation
+from safe_agent.contracts.provider_billing_audit import VerifiedProviderCostAudit
 
 
 class BillingVerifierTransportDenied(ValueError):
@@ -82,23 +83,20 @@ class BillingVerifierUDSTransport:
         self._token = workload_token
         self._timeout = timeout_seconds
 
-    def verify(self, record: SyntheticBillingSourceRecord) -> VerifiedBillingAttestation:
+    def _post(self, endpoint: str, data: bytes, *, maximum: int) -> str:
         conn: _Connection | None = None
         started = time.monotonic()
         try:
-            checked = SyntheticBillingSourceRecord.model_validate_json(record.model_dump_json())
             path = self._socket
             info, parent = path.lstat(), path.parent.lstat()
             if (path.resolve(strict=True) != path or not stat.S_ISSOCK(info.st_mode)
                     or info.st_uid != os.getuid() or info.st_mode & 0o077
                     or not stat.S_ISDIR(parent.st_mode) or parent.st_uid != os.getuid()
-                    or parent.st_mode & 0o077):
-                raise BillingVerifierTransportDenied()
-            data = checked.model_dump_json().encode("utf-8")
-            if len(data) > 16_384:
+                    or parent.st_mode & 0o077
+                    or not 0 < len(data) <= maximum):
                 raise BillingVerifierTransportDenied()
             conn = _Connection(self._host, path, self._timeout)
-            conn.request("POST", "/v1/verify", body=data, headers={
+            conn.request("POST", endpoint, body=data, headers={
                 "Host": self._host,
                 "Authorization": "Bearer " + self._token.get_secret_value(),
                 "Content-Type": "application/json",
@@ -112,7 +110,7 @@ class BillingVerifierUDSTransport:
                     or response.getheader("Transfer-Encoding") is not None):
                 raise BillingVerifierTransportDenied()
             lengths = [v for k, v in response.getheaders() if k.lower() == "content-length"]
-            if len(lengths) != 1 or not lengths[0].isdigit() or not 0 < int(lengths[0]) <= 16_384:
+            if len(lengths) != 1 or not lengths[0].isdigit() or not 0 < int(lengths[0]) <= 65_536:
                 raise BillingVerifierTransportDenied()
             raw = response.read(int(lengths[0]) + 1)
             if (len(raw) != int(lengths[0])
@@ -120,9 +118,32 @@ class BillingVerifierUDSTransport:
                 raise BillingVerifierTransportDenied()
             text = raw.decode("utf-8", errors="strict")
             json.loads(text, object_pairs_hook=_unique, parse_constant=_reject_constant)
-            return VerifiedBillingAttestation.model_validate_json(text)
+            return text
         except Exception:
             raise BillingVerifierTransportDenied() from None
         finally:
             if conn is not None:
                 conn.close()
+
+    def verify(self, record: SyntheticBillingSourceRecord) -> VerifiedBillingAttestation:
+        try:
+            checked = SyntheticBillingSourceRecord.model_validate_json(record.model_dump_json())
+            text = self._post(
+                "/v1/verify", checked.model_dump_json().encode("utf-8"), maximum=16_384,
+            )
+            return VerifiedBillingAttestation.model_validate_json(text)
+        except Exception:
+            raise BillingVerifierTransportDenied() from None
+
+    def audit_provider_costs(self, payload: str) -> VerifiedProviderCostAudit:
+        try:
+            if type(payload) is not str:
+                raise BillingVerifierTransportDenied()
+            data = payload.encode("utf-8", errors="strict")
+            text = self._post(
+                "/v1/audit/provider-costs", data, maximum=1_048_576,
+            )
+            return VerifiedProviderCostAudit.model_validate_json(text)
+        except Exception:
+            raise BillingVerifierTransportDenied() from None
+

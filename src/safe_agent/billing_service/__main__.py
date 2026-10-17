@@ -13,6 +13,7 @@ from pathlib import Path
 from pydantic import SecretStr
 
 from safe_agent.billing.adapters import SyntheticHMACBillingAdapter
+from safe_agent.billing.openai_costs import OpenAIOrganizationCostsAdapter
 from safe_agent.billing_service.service import (
     TrustedBillingVerifierPolicy,
     TrustedBillingWorkloadAuthenticator,
@@ -67,6 +68,7 @@ def main() -> None:
                 source_key=source_key,
                 max_evidence_age_seconds=policy.max_evidence_age_seconds,
             ),
+            audit_adapter=OpenAIOrganizationCostsAdapter(),
             issuer_private_key=private_key,
         )
     except Exception:

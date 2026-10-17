@@ -18,11 +18,11 @@ jobs:
           python -m pip install -e '.[dev,api,coordinated-offline]'
       - name: Lint and type verifier boundary
         run: |
-          ruff check src/safe_agent/billing src/safe_agent/billing_service src/safe_agent/contracts/billing_verification.py tests/m7/test_asymmetric_billing_verifier.py scripts/smoke_billing_verifier.py
+          ruff check src/safe_agent/billing src/safe_agent/billing_service src/safe_agent/contracts/billing_verification.py src/safe_agent/contracts/provider_billing_audit.py tests/m7/test_asymmetric_billing_verifier.py tests/m7/test_openai_cost_audit.py scripts/smoke_billing_verifier.py
           mypy src/safe_agent
       - name: Asymmetric verifier and public-key reconciliation tests
         run: |
-          pytest tests/m7/test_asymmetric_billing_verifier.py tests/m7/test_billing_adapter_boundary.py --junitxml=billing-verifier.xml
-          python -c "import xml.etree.ElementTree as E; s=E.parse('billing-verifier.xml').getroot().findall('testsuite'); assert s and sum(int(x.get('tests',0)) for x in s)>=20; assert all(int(x.get(k,0))==0 for x in s for k in ('skipped','errors','failures'))"
+          pytest tests/m7/test_asymmetric_billing_verifier.py tests/m7/test_billing_adapter_boundary.py tests/m7/test_openai_cost_audit.py --junitxml=billing-verifier.xml
+          python -c "import xml.etree.ElementTree as E; s=E.parse('billing-verifier.xml').getroot().findall('testsuite'); assert s and sum(int(x.get('tests',0)) for x in s)>=31; assert all(int(x.get(k,0))==0 for x in s for k in ('skipped','errors','failures'))"
       - name: Actual UDS verifier process smoke
         run: python scripts/smoke_billing_verifier.py
