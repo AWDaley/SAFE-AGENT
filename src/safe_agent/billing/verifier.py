@@ -22,6 +22,10 @@ from safe_agent.contracts.billing_verification import (
     VerifiedBillingAttestation,
 )
 from safe_agent.contracts.inference import InferenceRequestId
+from safe_agent.contracts.provider_billing_audit import (
+    NormalizedProviderCostAudit,
+    VerifiedProviderCostAudit,
+)
 from safe_agent.contracts.inference_budget import BillingChargeAttestation
 
 SourceRecordId = Annotated[str, StringConstraints(pattern=r"^src_[0-9a-f]{32}$")]
@@ -185,6 +189,38 @@ class OfflineAsymmetricBillingVerifier:
             source_adapter_id=checked.source_adapter_id,
             issuer_id=self._issuer, verifier_key_id=self._key_id,
             observed_at=now, signature="0" * 128,
+        )
+        signature = self._private.sign(canonical_json(
+            unsigned.model_dump(mode="json", exclude={"signature"}),
+        )).hex()
+        return unsigned.model_copy(update={"signature": signature})
+
+
+    def sign_cost_audit(
+        self, audit: NormalizedProviderCostAudit, *, now: datetime,
+    ) -> VerifiedProviderCostAudit:
+        """Sign aggregate provider costs without creating request settlement evidence."""
+        current = require_aware(now).astimezone(UTC)
+        try:
+            checked = NormalizedProviderCostAudit.model_validate_json(audit.model_dump_json())
+            if checked.source_observed_at.astimezone(UTC) > current:
+                raise BillingSourceDenied()
+        except BillingSourceDenied:
+            raise
+        except Exception:
+            raise BillingSourceDenied() from None
+        audit_id = "bca_" + sha256({
+            "provider": checked.provider,
+            "source_adapter_id": checked.source_adapter_id,
+            "source_evidence_hash": checked.source_evidence_hash,
+            "window_start": checked.window_start,
+            "window_end": checked.window_end,
+            "verifier_key_id": self._key_id,
+        })[7:39]
+        unsigned = VerifiedProviderCostAudit(
+            audit_id=audit_id, audit=checked,
+            issuer_id=self._issuer, verifier_key_id=self._key_id,
+            observed_at=current, signature="0" * 128,
         )
         signature = self._private.sign(canonical_json(
             unsigned.model_dump(mode="json", exclude={"signature"}),
