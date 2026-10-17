@@ -60,7 +60,7 @@ class _Bucket(StrictModel):
     object: Literal["bucket"]
     start_time: int = Field(ge=0)
     end_time: int = Field(gt=0)
-    results: tuple[_CostResult, ...] = Field(max_length=100_000)
+    results: list[_CostResult] = Field(max_length=100_000)
 
     @model_validator(mode="after")
     def daily(self) -> _Bucket:
@@ -71,7 +71,7 @@ class _Bucket(StrictModel):
 
 class _CostsPage(StrictModel):
     object: Literal["page"]
-    data: tuple[_Bucket, ...] = Field(max_length=180)
+    data: list[_Bucket] = Field(max_length=180)
     has_more: bool
     next_page: str | None = Field(default=None, max_length=512)
 
@@ -103,11 +103,11 @@ class OpenAICostsCapture(StrictModel):
     start_time: int = Field(ge=0)
     end_time: int = Field(gt=0)
     bucket_width: Literal["1d"] = "1d"
-    group_by: tuple[Literal["project_id", "line_item"], ...] = (
-        "project_id", "line_item",
+    group_by: list[Literal["project_id", "line_item"]] = Field(
+        default_factory=lambda: ["project_id", "line_item"], min_length=2, max_length=2,
     )
     fetched_at: datetime
-    pages: tuple[_PageCapture, ...] = Field(min_length=1, max_length=180)
+    pages: list[_PageCapture] = Field(min_length=1, max_length=180)
 
     @field_validator("fetched_at")
     @classmethod
