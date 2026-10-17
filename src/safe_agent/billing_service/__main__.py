@@ -12,6 +12,7 @@ from pathlib import Path
 
 from pydantic import SecretStr
 
+from safe_agent.billing.adapters import SyntheticHMACBillingAdapter
 from safe_agent.billing_service.service import (
     TrustedBillingVerifierPolicy,
     TrustedBillingWorkloadAuthenticator,
@@ -62,7 +63,11 @@ def main() -> None:
         )
         app = create_billing_verifier_service(
             policy, TrustedBillingWorkloadAuthenticator(workload),
-            source_key=source_key, issuer_private_key=private_key,
+            adapter=SyntheticHMACBillingAdapter(
+                source_key=source_key,
+                max_evidence_age_seconds=policy.max_evidence_age_seconds,
+            ),
+            issuer_private_key=private_key,
         )
     except Exception:
         raise SystemExit("billing verifier startup denied") from None

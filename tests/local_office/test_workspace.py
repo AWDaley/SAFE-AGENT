@@ -33,7 +33,7 @@ def workspace(tmp_path):
 
 def test_init_uses_migrations_and_restart_does_not_reseed(workspace):
     value = load_manifest(workspace)
-    assert value.migration_head == "0013_coordinated_planning"
+    assert value.migration_head == "0014_billing_verifier_identity"
     assert value.live_providers_enabled is False
     assert (workspace.stat().st_mode & 0o777) == 0o700
     for filename in (*KEYS, "office.sqlite", "READY", "workspace.json", "workspace.mac"):

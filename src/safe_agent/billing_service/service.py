@@ -11,18 +11,15 @@ import hmac
 import json
 import re
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from fastapi import FastAPI, Request
 from fastapi.responses import Response
 from pydantic import Field, SecretStr, field_validator
 
-from safe_agent.billing.verifier import (
-    BillingSourceDenied,
-    OfflineAsymmetricBillingVerifier,
-    SyntheticBillingSourceRecord,
-)
+from safe_agent.billing.adapters import BillingEvidenceAdapter
+from safe_agent.billing.verifier import BillingSourceDenied, OfflineAsymmetricBillingVerifier
 from safe_agent.contracts.base import Identifier, StrictModel
 from safe_agent.contracts.billing_verification import VerifiedBillingAttestation
 
@@ -100,7 +97,7 @@ def create_billing_verifier_service(
     policy: TrustedBillingVerifierPolicy,
     authenticator: TrustedBillingWorkloadAuthenticator,
     *,
-    source_key: bytes,
+    adapter: BillingEvidenceAdapter,
     issuer_private_key: bytes,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> FastAPI:
@@ -108,12 +105,12 @@ def create_billing_verifier_service(
         raise TypeError("trusted billing verifier policy required")
     if type(authenticator) is not TrustedBillingWorkloadAuthenticator:
         raise TypeError("trusted billing workload authenticator required")
+    if not isinstance(adapter, BillingEvidenceAdapter):
+        raise TypeError("trusted billing evidence adapter required")
     verifier = OfflineAsymmetricBillingVerifier(
-        source_key=source_key,
         issuer_private_key=issuer_private_key,
         issuer_id=policy.issuer_id,
         verifier_key_id=policy.verifier_key_id,
-        max_evidence_age_seconds=policy.max_evidence_age_seconds,
     )
     app = FastAPI(
         title="SAFE-AGENT isolated billing verifier",
@@ -152,8 +149,13 @@ def create_billing_verifier_service(
             )
             if not isinstance(parsed, dict):
                 raise ValueError("not one billing source record")
-            record = SyntheticBillingSourceRecord.model_validate_json(text)
-            attestation = verifier.attest(record, now=clock())
+            current = clock()
+            normalized = adapter.normalize(text, now=current)
+            if (normalized.source_observed_at > current
+                    or current - normalized.source_observed_at
+                       > timedelta(seconds=policy.max_evidence_age_seconds)):
+                raise BillingSourceDenied()
+            attestation = verifier.sign(normalized, now=current)
             checked = VerifiedBillingAttestation.model_validate_json(
                 attestation.model_dump_json(),
             )

@@ -2,7 +2,7 @@
 
 The PR #27 cost-account migration is the ONE canonical successor to 0008.
 PR #29's alternative 0009_inference_budget must never be combined with it.
-0013 extends 0012, 0011 and 0010; canonical 0009 and 0010 stay content-pinned.
+0014 extends 0013, 0012, 0011 and 0010; canonical 0009 and 0010 stay content-pinned.
 No production connection is opened; optional DB verification is SQLite-only.
 """
 
@@ -24,7 +24,8 @@ from safe_agent.storage.inference_budget import InferenceBudgetLedger
 from safe_agent.storage.models import Base
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_HEAD = "0013_coordinated_planning"
+EXPECTED_HEAD = "0014_billing_verifier_identity"
+COORDINATED_PLANNING = "0013_coordinated_planning"
 CANONICAL_RESULTS = "0012_inference_results"
 CANONICAL_ADMISSION = "0011_inference_admission"
 CANONICAL_DISPATCH = "0010_inference_dispatch"
@@ -80,8 +81,9 @@ REQUIRED_COLUMNS = {
         "charged_microusd", "event_hash",
     },
     "safe_inference_billing_attestations": {
-        "receipt_id", "request_id", "issuer_id", "charge_microusd",
-        "source_evidence_hash", "attestation_digest",
+        "receipt_id", "request_id", "issuer_id", "verification_scheme",
+        "verifier_key_id", "verifier_public_key_hash", "source_adapter_id",
+        "charge_microusd", "source_evidence_hash", "attestation_digest",
     },
 }
 
@@ -94,7 +96,10 @@ def check_migration_and_contract() -> None:
     if set(heads) != {EXPECTED_HEAD} or len(heads) != 1:
         raise RuntimeError("M7 budget migration conflict: expected exactly one canonical head")
     head = script.get_revision(EXPECTED_HEAD)
-    if head is None or head.down_revision != CANONICAL_RESULTS:
+    if head is None or head.down_revision != COORDINATED_PLANNING:
+        raise RuntimeError("billing verifier migration must directly extend coordinated planning")
+    coordinated = script.get_revision(COORDINATED_PLANNING)
+    if coordinated is None or coordinated.down_revision != CANONICAL_RESULTS:
         raise RuntimeError("W4 planning migration must directly extend canonical 0012")
     results = script.get_revision(CANONICAL_RESULTS)
     if results is None or results.down_revision != CANONICAL_ADMISSION:
@@ -169,7 +174,7 @@ def check_migrated_test_database() -> None:
         with engine.connect() as conn:
             revisions = conn.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
         if revisions != [EXPECTED_HEAD]:
-            raise RuntimeError("SQLite migration head does not match reviewed 0013")
+            raise RuntimeError("SQLite migration head does not match reviewed 0014")
     finally:
         engine.dispose()
 
