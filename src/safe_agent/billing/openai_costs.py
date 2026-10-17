@@ -157,14 +157,14 @@ class OpenAIOrganizationCostsAdapter(ProviderCostAuditAdapter):
     ) -> NormalizedProviderCostAudit:
         current = require_aware(now).astimezone(UTC)
         try:
-            parsed = json.loads(
+            json.loads(
                 payload,
                 parse_float=Decimal,
                 parse_int=int,
                 object_pairs_hook=_unique,
                 parse_constant=_reject_constant,
             )
-            capture = OpenAICostsCapture.model_validate(parsed)
+            capture = OpenAICostsCapture.model_validate_json(payload)
             fetched = capture.fetched_at.astimezone(UTC)
             if fetched > current:
                 raise ValueError("future provider capture")
