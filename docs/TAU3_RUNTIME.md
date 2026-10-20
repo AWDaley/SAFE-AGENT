@@ -113,6 +113,37 @@ SAFE_AGENT_TEST_POSTGRES_EPISODES=1 \
 The opt-in suite deliberately mutates its test database. Use a disposable test
 instance. The CI gate rejects skipped tests in this suite.
 
+### Container attempted-read acceptance
+
+The separate Linux Docker profile supplies the implementation plan's free
+process-isolation probe for one explicit image and launcher. From a nonroot
+Linux account with access to the local Docker Engine, run:
+
+```bash
+SAFE_EPISODE_BUILD_DIR="$(mktemp -d)"
+python scripts/episode_service_container.py prepare-context --output "$SAFE_EPISODE_BUILD_DIR"
+docker build --pull --tag safe-episode-model:review "$SAFE_EPISODE_BUILD_DIR"
+SAFE_EPISODE_IMAGE_ID="$(docker image inspect --format '{{.Id}}' safe-episode-model:review)"
+python scripts/episode_service_container.py probe \
+  --image "$SAFE_EPISODE_IMAGE_ID" --output episode-container-probe.json
+```
+
+This boots the real sidecar with synthetic keys and network disabled. It tests
+service health and unauthenticated rejection, then attempts six reads of
+unmounted host evaluator and harness-secret canaries from inside the container.
+It verifies the intended key reads, three exact mounts, environment separation,
+nonroot identity, dropped capabilities, no-new-privileges, and read-only root.
+The image uses a positive source allowlist and contains no benchmark package,
+data, evaluator, or run artifacts. No successful inference or model call occurs.
+
+The `container-isolation-probe` CI job is mandatory. Its result applies to this
+profile, not the bare Python launch below. See
+[TAU3_CONTAINER_PROFILE.md](TAU3_CONTAINER_PROFILE.md) for the exact deployment
+command, dedicated state-directory checks, supported host setup, and limits.
+Enabling bridge networking for a hosted pilot is a separate choice; the offline
+probe does not establish live egress confinement or generic hostile-code
+containment.
+
 ## Runtime boundaries
 
 | Boundary | Implemented behavior |
@@ -162,6 +193,11 @@ Other model-specific settings require an explicit backend implementation and a
 new frozen comparison condition.
 
 ### 1. Configure the model-only sidecar
+
+Choose the constrained container launch documented in
+[TAU3_CONTAINER_PROFILE.md](TAU3_CONTAINER_PROFILE.md), or the trusted-host Python
+launch below. Only the container launch applies the tested mount and process
+restrictions.
 
 Provision three owner-controlled paths outside the repository and output
 directories:

@@ -54,7 +54,7 @@ jobs:
           python scripts/generate_tau_domain_catalog.py "$TAU3_SOURCE_ROOT" --check
       - name: Full source lint and typing
         run: |
-          ruff check src tests scripts migrations/versions/0015_benchmark_episodes.py migrations/versions/0016_episode_inference.py
+          ruff check src tests scripts docker/episode_service_probe.py migrations/versions/0015_benchmark_episodes.py migrations/versions/0016_episode_inference.py
           mypy src/safe_agent
       - name: Authored episode, domain, and real harness fixtures without model calls
         run: |
@@ -109,3 +109,23 @@ jobs:
         run: |
           python -m pytest tests/episodes/test_episode_postgres.py --junitxml=tau3-postgres.xml
           python -c "import xml.etree.ElementTree as E; s=E.parse('tau3-postgres.xml').getroot().findall('testsuite'); assert s and sum(int(x.get('tests',0)) for x in s)>=8; assert all(int(x.get(k,0))==0 for x in s for k in ('skipped','errors','failures'))"
+
+  container-isolation-probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Build the allowlisted model-only image without benchmark material
+        run: |
+          docker version
+          python scripts/episode_service_container.py prepare-context --output "$RUNNER_TEMP/episode-service-build"
+          docker build --pull --tag safe-episode-model:ci "$RUNNER_TEMP/episode-service-build"
+      - name: Mandatory attempted-read probe in the actual network-disabled service
+        run: |
+          SAFE_EPISODE_IMAGE_ID="$(docker image inspect --format '{{.Id}}' safe-episode-model:ci)"
+          python scripts/episode_service_container.py probe --image "$SAFE_EPISODE_IMAGE_ID" --output tau3-container-isolation.json

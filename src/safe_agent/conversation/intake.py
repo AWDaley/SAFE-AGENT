@@ -26,6 +26,17 @@ _SSN = re.compile(r"(?<!\d)\d{3}-\d{2}-\d{4}(?!\d)")
 _BANK_HEADER = re.compile(r"^Found \d+ record\(s\) in '([A-Za-z_]+)':$")
 _BANK_RECORD = re.compile(r"^(\d+\. Record ID: )(.+)$")
 _BANK_FIELD = re.compile(r"^(   )([A-Za-z_]+)(: )(.*)$")
+# Native banking tools sometimes take the database row key rather than the
+# separately displayed business ID. Only these pinned table presentations
+# establish its resource kind; ownership still comes from the record or a
+# previously scoped authoritative observation.
+_BANK_RECORD_KINDS = {
+    "users": "user_id",
+    "accounts": "account_id",
+    "credit_card_accounts": "account_id",
+    "credit_card_transaction_history": "transaction_id",
+    "bank_account_transaction_history": "transaction_id",
+}
 _PUBLIC_RESOURCE_KINDS = {"product_id", "item_id"}
 
 _ALIASES = {
@@ -35,6 +46,12 @@ _ALIASES = {
     "address1": "address", "address2": "address", "street": "address",
     "account_number": "account_id", "card_number": "card_id", "ssn": "ssn",
     "orders": "order_ids", "customer_name": "person_name", "full_name": "person_name",
+    # Explicit field aliases in the pinned banking/retail tool schemas. These
+    # preserve the resource kind; they do not authorize another subject, outer
+    # operation, or an unobserved resource. Other *_id kinds stay distinct.
+    "credit_card_account_id": "account_id", "checking_account_id": "account_id",
+    "source_account_id": "account_id", "destination_account_id": "account_id",
+    "new_email": "email", "shipping_address": "address", "new_item_ids": "item_ids",
 }
 _IDENTITY = {"email", "phone", "dob", "first_name", "last_name", "person_name", "zip", "ssn"}
 
@@ -131,10 +148,19 @@ class ReferenceVault:
         for record in known:
             def replace_known(text: str, current: dict[str, Any] = record) -> str:
                 token = current["reference"]
-                if source == "customer" and current["value"] in text:
+                native = current["value"]
+                # An old address can be a suffix of a new address. Replacing
+                # that substring would make a fabricated prefix + opaque handle
+                # instead of protecting the new complete email scalar.
+                complete_email = current["kind"] == "email" and _EMAIL.fullmatch(native)
+                present = (any(match.group() == native for match in _EMAIL.finditer(text))
+                           if complete_email else native in text)
+                if source == "customer" and present:
                     token = self.reference(current["value"], kind=current["kind"],
                                            source="customer", subject_id=subject_id)
-                return text.replace(current["value"], token)
+                if complete_email:
+                    return _EMAIL.sub(lambda match: token if match.group() == native else match.group(), text)
+                return text.replace(native, token)
             result = self._outside_references(result, replace_known)
         for kind, pattern in (("ssn", _SSN), ("email", _EMAIL), ("phone", _PHONE)):
             def replace_identity(text: str, current: re.Pattern[str] = pattern,
@@ -239,10 +265,11 @@ class ReferenceVault:
                 subject = native if not owners or owners == [native] else None
             elif subject is None:
                 subject = self._resource_subjects.get("bank:" + native)
-            record_kind = "user_id" if table == "users" else "resource_id"
-            for name, values in fields.items():
-                if values == [native] and private_kind(name):
-                    record_kind = private_kind(name) or record_kind
+            record_kind = _BANK_RECORD_KINDS.get(table, "resource_id")
+            if table not in _BANK_RECORD_KINDS:
+                for name, values in fields.items():
+                    if values == [native] and private_kind(name):
+                        record_kind = private_kind(name) or record_kind
             record_token = self.reference(native, kind=record_kind, source="tool", subject_id=subject)
             output.append(record.group(1) + record_token + line[len(bare):])
             for field_line in lines[index + 1:end]:
@@ -355,20 +382,32 @@ class ReferenceVault:
 
     def resolve_arguments(self, operation: str, arguments: dict[str, Any], *,
                           now: datetime, subject_id: str | None) -> dict[str, Any]:
-        if operation == "call_discoverable_agent_tool":
-            inner = arguments.get("agent_tool_name")
-            raw = arguments.get("arguments")
-            if (set(arguments) != {"agent_tool_name", "arguments"}
+        if operation in {"call_discoverable_agent_tool", "give_discoverable_user_tool"}:
+            inner_key = ("agent_tool_name" if operation == "call_discoverable_agent_tool"
+                         else "discoverable_tool_name")
+            required = ({inner_key, "arguments"} if operation == "call_discoverable_agent_tool"
+                        else {inner_key})
+            inner = arguments.get(inner_key)
+            raw = arguments.get("arguments", "{}")
+            if (not required <= set(arguments) <= {inner_key, "arguments"}
                     or not isinstance(inner, str) or not isinstance(raw, str)):
                 raise ProjectionDenied("INVALID_NESTED_ARGUMENTS")
-            parsed = strict_json(raw, max_bytes=65_536)
+            try:
+                parsed = strict_json(raw, max_bytes=65_536)
+            except ValueError as exc:
+                raise ProjectionDenied("INVALID_NESTED_ARGUMENTS") from exc
             if not isinstance(parsed, dict):
                 raise ProjectionDenied("INVALID_NESTED_ARGUMENTS")
             # The outer operation is the allowlisted transport; the domain pack
             # separately checks the discovered inner name and exact schema.
+            # A user-tool grant only carries scoped arguments: its execution
+            # remains with the official user simulator, never the agent.
             from safe_agent.contracts.episodes import canonical_arguments_json
             resolved = self.resolve(parsed, operation=operation, now=now, subject_id=subject_id)
-            return {"agent_tool_name": inner, "arguments": canonical_arguments_json(resolved)}
+            envelope = {inner_key: inner}
+            if "arguments" in arguments:
+                envelope["arguments"] = canonical_arguments_json(resolved)
+            return envelope
         return self.resolve(arguments, operation=operation, now=now, subject_id=subject_id)
 
     def render(self, text: str, *, now: datetime, subject_id: str | None,

@@ -47,6 +47,8 @@ Start with the [τ³ runtime runbook](docs/TAU3_RUNTIME.md) for free offline che
 then the [evaluation protocol](docs/TAU3_EVALUATION_PROTOCOL.md) for a matched
 SAFE/stock-agent comparison. Authored harness fixtures establish integration
 behavior; a hosted full-domain capability score is a separate evaluation.
+The [implementation handoff](docs/TAU3_DELIVERY.md) maps the delivered work to
+the original plan and identifies the remaining empirical milestones.
 
 ### Existing office profile
 

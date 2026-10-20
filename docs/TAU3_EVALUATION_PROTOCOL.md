@@ -70,6 +70,29 @@ such as unlock and user-tool grant can mutate state; `ToolType.WRITE` alone is
 not a complete effect classification. Granting a user tool does not execute it
 or establish success. The official user simulator owns user-only actions.
 
+Both the agent dispatcher and `give_discoverable_user_tool` decode their nested
+JSON argument envelope before resolving private references. Resolution retains
+the outer operation, episode, subject, expiry, and resource-kind constraints;
+the domain pack separately checks the discovered target and its schema. An
+omitted user-grant argument object retains the upstream default. Malformed or
+duplicate-key nested JSON produces a bounded repairable rejection.
+
+The projection uses explicit aliases from the pinned schemas: banking account
+parameter names share the account kind, `new_email` shares the email kind,
+`shipping_address` shares the address kind, and retail `new_item_ids` shares the
+item kind. Account and transaction-history table row keys keep their specific
+native kind even when a separate business ID is displayed. Other identifier
+kinds remain distinct; domain ownership checks still apply after resolution.
+
+The authored banking runtime fixture covers BM25 discovery, two-field identity
+verification, a scoped referral-tool grant, rejection of a completion claim
+based only on that grant, user-only execution by the official toolkit, and an
+authoritative read of the resulting referral. Native-format fixtures also cover
+account/transaction row aliases, email replacement, shipping-address binding,
+retail variant IDs, and wrong-kind/wrong-subject denials. These prove those
+mechanical paths; they do not establish full operation-family policy coverage
+or a model score.
+
 Retrieved documents and tool results cannot change SAFE authority. Customer
 consent is bound to the applicable action and subject independently of operator
 execution authority. Hidden task/evaluator files and result directories must
