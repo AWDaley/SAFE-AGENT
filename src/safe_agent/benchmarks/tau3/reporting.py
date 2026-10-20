@@ -7,10 +7,42 @@ import math
 from collections import Counter, defaultdict
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
+
+from pydantic import Field
 
 from . import TAU_COMMIT
+from .protocol import BoundaryModel
 from .runner import _write_json
+
+_USD_PATTERN = r"^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,12})?$"
+
+
+class BillingAllocation(BoundaryModel):
+    task_id: str = Field(min_length=1, max_length=200)
+    trial: int = Field(ge=0)
+    amount_usd: str = Field(pattern=_USD_PATTERN, max_length=64)
+
+
+class AgentBillingReconciliation(BoundaryModel):
+    """One reviewed full-run agent total, replacing its upstream aggregate.
+
+    A reviewer/source hash supplies provenance, not provider attestation. The
+    declared scope includes failed and repair attempts, never reservation holds.
+    """
+
+    category: Literal["agent_provider_billing"]
+    run_id: str = Field(min_length=1, max_length=200)
+    component: Literal["agent"]
+    currency: Literal["USD"]
+    scope: Literal["all_agent_attempts_including_failures_and_repairs"]
+    replaces: Literal["upstream_agent_aggregate"]
+    amount_usd: str = Field(pattern=_USD_PATTERN, max_length=64)
+    event_id: str = Field(min_length=1, max_length=200)
+    provider: str = Field(min_length=1, max_length=100)
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reviewer: str = Field(min_length=1, max_length=200)
+    allocations: list[BillingAllocation] | None = None
 
 
 def pass_hat_k(trials: int, successes: int, k: int) -> float:
@@ -42,6 +74,231 @@ def _money(value: Any) -> Decimal | None:
     if not result.is_finite() or result < 0:
         raise ValueError("Recorded costs must be finite and nonnegative")
     return result
+
+
+def cost_accounting(
+    manifest: dict[str, Any],
+    simulations: list[dict[str, Any]],
+    additional_costs: list[dict[str, Any]] | None = None,
+) -> tuple[dict[str, Any], dict[tuple[str, int | None], dict[str, Any]]]:
+    """Recorded run totals and explicitly attributed pair costs, without inference.
+
+    Missing per-pair allocations remain unknown even when a run invoice total is
+    known. Exactly one full-run agent reconciliation can replace upstream agent
+    charges; its provenance is asserted by the supplied reviewed ledger.
+    """
+    additional = additional_costs or []
+    reconciliation_rows = [
+        event for event in additional if event.get("category") == "agent_provider_billing"
+    ]
+    if len(reconciliation_rows) > 1:
+        raise ValueError("DUPLICATE_AGENT_BILLING_RECONCILIATION")
+    reconciled: AgentBillingReconciliation | None = None
+    if reconciliation_rows:
+        try:
+            reconciled = AgentBillingReconciliation.model_validate(reconciliation_rows[0])
+        except ValueError:
+            raise ValueError("AGENT_BILLING_RECONCILIATION_INVALID") from None
+        if reconciled.run_id != manifest["run_id"]:
+            raise ValueError("AGENT_BILLING_RUN_MISMATCH")
+        if any(
+            event.get("category") == "agent_extra"
+            or (
+                event.get("category") == "failed_request"
+                and event.get("component") not in {"user", "judge", "retrieval", "infrastructure"}
+            )
+            for event in additional
+        ):
+            raise ValueError("AGENT_BILLING_WOULD_DOUBLE_COUNT_ADDITIONAL_CHARGES")
+    scheduled = {(str(row["task_id"]), row["trial"]) for row in manifest["scheduled"]}
+    grouped: dict[tuple[str, int | None], list[dict[str, Any]]] = defaultdict(list)
+    known: dict[str, Decimal] = defaultdict(Decimal)
+    missing: Counter[str] = Counter()
+    pair_known: dict[tuple[str, int | None], dict[str, Decimal]] = defaultdict(
+        lambda: defaultdict(Decimal)
+    )
+    pair_seen: dict[tuple[str, int | None], set[str]] = defaultdict(set)
+    pair_missing: dict[tuple[str, int | None], set[str]] = defaultdict(set)
+    upstream_agent = Decimal(0)
+    upstream_agent_missing = 0
+    for row in simulations:
+        pair = (str(row["task_id"]), row.get("trial"))
+        grouped[pair].append(row)
+        for category in ("agent", "user"):
+            amount = _money(row.get(category + "_cost"))
+            if category == "agent":
+                if amount is None:
+                    upstream_agent_missing += 1
+                else:
+                    upstream_agent += amount
+                if reconciled is not None:
+                    continue
+            pair_seen[pair].add(category)
+            if amount is None:
+                missing[category] += 1
+                pair_missing[pair].add(category)
+            else:
+                known[category] += amount
+                pair_known[pair][category] += amount
+    categories_seen = {"agent", "user"} if simulations else set()
+    event_ids: set[str] = set()
+    unallocated_components: set[str] = set()
+    operating_failed_requests = Decimal(0)
+    operating_attribution_unknown = False
+    for event in additional:
+        if "run_id" in event and event["run_id"] != manifest["run_id"]:
+            raise ValueError("COST_EVENT_RUN_MISMATCH")
+        if "event_id" in event:
+            event_id = event["event_id"]
+            if not isinstance(event_id, str) or not event_id or event_id in event_ids:
+                raise ValueError("DUPLICATE_OR_INVALID_COST_EVENT_ID")
+            event_ids.add(event_id)
+        category = event["category"]
+        if category in {"agent", "user"}:
+            raise ValueError(
+                "Additional costs must not double-count upstream agent/user aggregates"
+            )
+        if category not in {
+            "judge",
+            "review",
+            "retrieval",
+            "infrastructure",
+            "agent_extra",
+            "failed_request",
+            "agent_provider_billing",
+        }:
+            raise ValueError("Unknown additional cost category")
+        categories_seen.add(category)
+        amount = _money(event.get("amount_usd"))
+        if amount is None:
+            missing[category] += 1
+        else:
+            known[category] += amount
+        if category == "agent_provider_billing":
+            continue
+        if category == "failed_request":
+            component = event.get("component")
+            if component is not None and component not in {
+                "agent",
+                "user",
+                "judge",
+                "retrieval",
+                "infrastructure",
+            }:
+                raise ValueError("FAILED_REQUEST_COMPONENT_INVALID")
+            if amount is not None and component in {"agent", "retrieval"}:
+                operating_failed_requests += amount
+            elif component is None and (amount is None or amount > 0):
+                operating_attribution_unknown = True
+        if ("task_id" in event) != ("trial" in event):
+            raise ValueError("COST_ALLOCATION_REQUIRES_TASK_AND_TRIAL")
+        if "task_id" in event:
+            pair = (str(event["task_id"]), event["trial"])
+            if type(pair[1]) is not int or pair not in scheduled:
+                raise ValueError("COST_ALLOCATION_NOT_SCHEDULED")
+            pair_seen[pair].add(category)
+            if amount is None:
+                pair_missing[pair].add(category)
+            else:
+                pair_known[pair][category] += amount
+        elif amount is None or amount > 0:
+            unallocated_components.add(category)
+    if reconciled is not None:
+        categories_seen.add("agent")
+        if reconciled.allocations is not None:
+            allocated: set[tuple[str, int | None]] = set()
+            total = Decimal(0)
+            for allocation in reconciled.allocations:
+                pair = (allocation.task_id, allocation.trial)
+                if pair in allocated or pair not in scheduled:
+                    raise ValueError("AGENT_BILLING_ALLOCATION_PAIR_INVALID")
+                allocated.add(pair)
+                amount = Decimal(allocation.amount_usd)
+                total += amount
+                pair_seen[pair].add("agent")
+                pair_known[pair]["agent"] = amount
+            if allocated != scheduled or total != Decimal(reconciled.amount_usd):
+                raise ValueError("AGENT_BILLING_ALLOCATIONS_MUST_COVER_SCHEDULE_AND_TOTAL")
+    unavailable = sorted(set(manifest.get("expected_cost_components", [])) - categories_seen)
+    matrix_complete = set(grouped) == scheduled and all(len(rows) == 1 for rows in grouped.values())
+    successes = sum(
+        len(grouped[pair]) == 1
+        and bool(grouped[pair][0].get("termination_reason"))
+        and grouped[pair][0].get("termination_reason") != "infrastructure_error"
+        and _success(_reward(grouped[pair][0]))
+        for pair in scheduled
+    )
+    complete = not missing and not unavailable and matrix_complete
+    denominator_complete = matrix_complete and all(
+        bool(rows[0].get("termination_reason"))
+        and rows[0].get("termination_reason") != "infrastructure_error"
+        and type(_reward(rows[0])) in {int, float}
+        and math.isfinite(_reward(rows[0]))
+        for rows in grouped.values()
+    )
+    operating = (
+        sum(
+            (
+                known.get(category, Decimal(0))
+                for category in ("agent", "agent_provider_billing", "agent_extra", "retrieval")
+            ),
+            Decimal(0),
+        )
+        + operating_failed_requests
+    )
+    expected_pair_categories = set(manifest.get("expected_cost_components", [])) | categories_seen
+    if reconciled is not None:
+        expected_pair_categories.discard("agent_provider_billing")
+        expected_pair_categories.add("agent")
+    pair_costs = {}
+    for pair in scheduled:
+        unknown = (
+            (expected_pair_categories - pair_seen[pair])
+            | pair_missing[pair]
+            | unallocated_components
+        )
+        pair_costs[pair] = {
+            "known_usd_by_category": {
+                key: str(value) for key, value in sorted(pair_known[pair].items())
+            },
+            "known_total_usd": str(sum(pair_known[pair].values(), Decimal(0))),
+            "unattributed_or_unknown_components": sorted(unknown),
+            "complete": not unknown,
+        }
+    summary = {
+        "known_usd_by_category": {key: str(value) for key, value in sorted(known.items())},
+        "known_total_usd": str(sum(known.values(), Decimal(0))),
+        "missing_cost_entries": dict(missing),
+        "unreported_components": unavailable,
+        "unallocated_additional_components": sorted(unallocated_components),
+        "complete": complete,
+        "operating_cost_attribution_complete": not operating_attribution_unknown,
+        "valid_successful_scheduled_pairs": successes,
+        "known_agent_operating_cost_per_success_usd": str(operating / successes)
+        if successes
+        else None,
+        "cost_per_success_denominator": (
+            "full_unique_terminal_graded_schedule"
+            if denominator_complete
+            else "observed_valid_successes_in_incomplete_outcome_matrix"
+        ),
+        "successful_denominator_complete": denominator_complete,
+        "cost_per_success_is_lower_bound": bool(successes)
+        and denominator_complete
+        and (not complete or operating_attribution_unknown),
+        "upstream_agent_reported_usd": str(upstream_agent),
+        "upstream_agent_missing_entries": upstream_agent_missing,
+        "agent_provider_reconciliation": {
+            "present": reconciled is not None,
+            "upstream_agent_amount_replaced": reconciled is not None,
+            "source_sha256": reconciled.source_sha256 if reconciled else None,
+            "provenance": "reviewed supplied ledger; source hash recorded, no provider attestation",
+            "provider_attestation_verified": False,
+            "task_allocations_complete": reconciled is not None
+            and reconciled.allocations is not None,
+        },
+    }
+    return summary, pair_costs
 
 
 def summarize_saved_results(
@@ -86,8 +343,15 @@ def summarize_saved_results(
                 value = usage.get(key)
                 if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
                     safe_inference[key] += value
-            for source in usage.get("safe_usage_source") or []:
-                usage_sources[str(source)] += 1
+            sources = usage.get("safe_usage_source") or []
+            if not isinstance(sources, list):
+                sources = [None]
+            for source in sources:
+                usage_sources[
+                    source
+                    if isinstance(source, str) and source in {"scripted", "provider_reported"}
+                    else "unrecognized"
+                ] += 1
     task_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in eligible:
         task_groups[str(row["task_id"])].append(row)
@@ -109,6 +373,7 @@ def summarize_saved_results(
         rows = by_pair.get(pair, [])
         operational[pair[0]].append(
             len(rows) == 1
+            and bool(rows[0].get("termination_reason"))
             and rows[0].get("termination_reason") != "infrastructure_error"
             and _success(_reward(rows[0]))
         )
@@ -120,55 +385,7 @@ def summarize_saved_results(
                     pass_hat_k(len(values), sum(values), k) for values in operational.values()
                 ) / len(operational)
 
-    known_costs: dict[str, Decimal] = defaultdict(Decimal)
-    missing_costs: Counter[str] = Counter()
-    for row in simulations:
-        for category in ("agent", "user"):
-            amount = _money(row.get(category + "_cost"))
-            if amount is None:
-                missing_costs[category] += 1
-            else:
-                known_costs[category] += amount
-    additional = additional_costs or []
-    categories_seen = {"agent", "user"} if simulations else set()
-    for event in additional:
-        category = event["category"]
-        if category in {"agent", "user"}:
-            raise ValueError(
-                "Additional costs must not double-count upstream agent/user aggregates"
-            )
-        if category not in {
-            "judge",
-            "review",
-            "retrieval",
-            "infrastructure",
-            "agent_extra",
-            "failed_request",
-        }:
-            raise ValueError("Unknown additional cost category")
-        categories_seen.add(category)
-        amount = _money(event.get("amount_usd"))
-        if amount is None:
-            missing_costs[category] += 1
-        else:
-            known_costs[category] += amount
-    unavailable_categories = sorted(
-        set(manifest.get("expected_cost_components", [])) - categories_seen
-    )
-    successful_attempts = sum(_success(_reward(row)) for row in simulations)
-    operating_cost = known_costs["agent"] + known_costs["agent_extra"] + known_costs["retrieval"]
-    cost_complete = not missing_costs and not unavailable_categories and not missing
-    costs = {
-        "known_usd_by_category": {key: str(value) for key, value in sorted(known_costs.items())},
-        "known_total_usd": str(sum(known_costs.values(), Decimal(0))),
-        "missing_cost_entries": dict(missing_costs),
-        "unreported_components": unavailable_categories,
-        "complete": cost_complete,
-        "known_agent_operating_cost_per_success_usd": (
-            str(operating_cost / successful_attempts) if successful_attempts else None
-        ),
-        "cost_per_success_is_lower_bound": not cost_complete,
-    }
+    costs, _ = cost_accounting(manifest, simulations, additional_costs)
     return {
         "run_id": manifest["run_id"],
         "system": manifest["system"],

@@ -24,10 +24,10 @@ The PR labels in the original plan are work-package names, not GitHub PR numbers
 | PR 4: conversation | Field-aware private references, source-bound identity inputs, one-use action confirmation, receipt-backed completion, clarification and user guidance | Evaluate ordinary conversational correctness and policy-specific wording. |
 | PR 5: official loop | Actual SAFE runtime registered in the pinned official harness; sole upstream tool execution; privileged task metadata excluded | Run real model/user/evaluator trajectories. |
 | PR 6: retail | Pinned operation inventory and encoded constraints; authored runtime/harness and consent/scope cases | Five-task model pilot and complete 114-task coverage report. |
-| PR 7: banking retrieval | Real BM25 search, observed discovery/unlock, nested schema checking, bounded projected context | Measure retrieval and long-dialogue task success with the model. |
-| PR 8: banking workflows | Customer-sourced two-field verification, observed resource ownership, native operation-family fixtures, scoped user-tool grants, and agent/user action separation | Five-task model pilot and complete 97-task coverage report; review semantic policy failures. |
+| PR 7: banking retrieval | Real BM25 search, observed discovery/unlock, nested schema checking, bounded source spans/provenance, retained unlocked definitions and pending context | Measure retrieval and long-dialogue task success with the model. |
+| PR 8: banking workflows | Customer-sourced two-field verification, observed resource ownership, 14 representative native workflow fixtures, scoped user-tool grants, and agent/user action separation | Five-task model pilot and complete 97-task coverage report; review semantic policy failures. |
 | PR 9: recovery and isolation | No resend after uncertain effects, retained budget holds, duplicate-result fencing, private host files, and a separately constrained model-container acceptance profile | Reconcile actual provider costs and assess the chosen live deployment condition. |
-| PR 10: comparison | Frozen SAFE/stock configurations, official recorded-reward metrics, conservative schedule accounting, aggregate diagnostics, and reviewed-denial annotations | Run 97 tasks × 4 trials × 2 systems; produce the research comparison and any reviewed submission package from those real results. |
+| PR 10: comparison | Frozen SAFE/stock configurations, official recorded-reward metrics, conservative schedule accounting, paired task uncertainty intervals, reviewed failure/billing records, aggregate diagnostics, and private submission validation | Run 97 tasks × 4 trials × 2 systems; produce the research comparison and reviewed submission package from those real results. |
 
 ## How to interpret the evidence
 
@@ -71,3 +71,6 @@ full-domain allowances may be too small to finish every conversation.
 See [the evaluation protocol](TAU3_EVALUATION_PROTOCOL.md) for exact metrics,
 development exposure, cost accounting, and diagnostics review rules, and
 [the domain coverage document](benchmark-domains.md) for the policy subset.
+The [saved-result analysis guide](TAU3_REPORTS.md) documents the comparison,
+billing reconciliation, and private submission commands. No live report or
+submission package is generated until real complete run records are supplied.

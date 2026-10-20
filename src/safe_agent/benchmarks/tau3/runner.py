@@ -263,6 +263,10 @@ def run_official(
         from tau2.metrics.agent_metrics import compute_metrics  # type: ignore[import-untyped]
 
         _write_json(output_dir / "official_metrics.json", compute_metrics(results).model_dump())
+        manifest["saved_artifacts_sha256"] = {
+            name: hashlib.sha256((output_dir / name).read_bytes()).hexdigest()
+            for name in ("results.json", "official_metrics.json")
+        }
         manifest["status"] = "complete"
     except BaseException as exc:
         manifest["status"] = (

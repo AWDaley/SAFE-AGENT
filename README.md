@@ -49,6 +49,8 @@ SAFE/stock-agent comparison. Authored harness fixtures establish integration
 behavior; a hosted full-domain capability score is a separate evaluation.
 The [implementation handoff](docs/TAU3_DELIVERY.md) maps the delivered work to
 the original plan and identifies the remaining empirical milestones.
+The [saved-result analysis guide](docs/TAU3_REPORTS.md) covers paired comparison,
+reviewed billing reconciliation, and private custom-submission preparation.
 
 ### Existing office profile
 

@@ -77,6 +77,15 @@ the domain pack separately checks the discovered target and its schema. An
 omitted user-grant argument object retains the upstream default. Malformed or
 duplicate-key nested JSON produces a bounded repairable rejection.
 
+Context compaction uses the frozen `tau3-observed-evidence-v1` profile. It retains
+observed document IDs/hashes and literal source spans with retrieval provenance,
+complete unlocked definitions, current subject and pending action/consent
+bindings, and first/latest customer turns. Optional history and facts fill the
+remaining byte budget deterministically. Required-core overflow stops before
+provider admission; it cannot silently remove the pending evidence. The runtime
+runbook describes the exact excerpt limits. Retention is mechanical evidence
+preservation, not proof that an excerpt is semantically sufficient for a task.
+
 The projection uses explicit aliases from the pinned schemas: banking account
 parameter names share the account kind, `new_email` shares the email kind,
 `shipping_address` shares the address kind, and retail `new_item_ids` shares the
@@ -237,17 +246,39 @@ unknown rather than zero. For charges not included there, add an
 ```
 
 Supported additional categories are judge, review, retrieval, infrastructure,
-agent_extra, and failed_request. Do not add agent/user aggregates again. Known
+agent_extra, and failed_request. A separately validated `agent_provider_billing`
+record can replace the upstream agent aggregate with a reviewed full-run amount;
+it cannot add the same component twice. Do not add agent/user aggregates again. Known
 totals and missing/unreported components are separate; cost per successful
 attempt includes failed attempts' recorded spend and is undefined at zero
-successes. An incomplete cost ledger is labelled as a lower bound.
+successes. With a complete outcome denominator, an incomplete cost ledger gives
+a lower bound. An incomplete outcome matrix retains an explicitly qualified
+observed-spend-per-observed-success ratio rather than claiming that bound.
 
 SAFE emits token/attempt provenance and reserved cost holds separately. It does
 not have independently attested provider-dollar charges in this integration.
 The upstream aggregate can turn absent message costs into zero; the wrapper
-therefore explicitly flags `agent_provider_billing` as unreported for SAFE.
+therefore explicitly flags `agent_provider_billing` as unreported for SAFE until
+a valid run-bound reconciliation is supplied. That reconciliation records a
+review assertion and its source hash; it is not independent provider attestation.
 Reserved microdollar allowances, including holds in scripted tests, are not
 actual spend and are never added to the known billed total.
+
+## Paired report and private submission tooling
+
+`compare` validates matched frozen run metadata, preserves the full scheduled
+matrix, and reports paired task-cluster bootstrap intervals separately from
+official recorded metrics. Per-task outcomes, latency, calls, costs, missingness,
+and bound reviewed failure labels remain visible. Completed run manifests bind
+the exact saved result and metric bytes so inconsistent later edits are rejected.
+
+`prepare-submission` requires a complete canonical final run, verified source and
+task inventory, unchanged graded results, and explicit submitter/development
+metadata. It uses pinned upstream public task/trial checks, submission schemas,
+and saved-reward metrics. The resulting private bundle is marked custom and
+contains unchanged trajectories; it does not copy private runtime databases or
+publish anything. Public consistency checks do not establish run authenticity
+independently. See [TAU3_REPORTS.md](TAU3_REPORTS.md) for commands and schemas.
 
 ## Separate runtime diagnostics
 

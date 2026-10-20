@@ -53,6 +53,13 @@ from safe_agent.conversation.consent import (
     confirmation_text,
     consent_evidence,
 )
+from safe_agent.conversation.context_evidence import (
+    CONTEXT_RETENTION_PROFILE,
+    ContextRetentionDenied,
+    ObservedResult,
+    collect_evidence,
+    fit_optional,
+)
 from safe_agent.conversation.intake import ProjectionDenied, ReferenceVault, identity_values
 from safe_agent.conversation.renderer import ResponseDenied, render_response
 from safe_agent.domains import get_domain_pack
@@ -130,6 +137,7 @@ class EpisodeRuntime:
             raise ValueError("INVALID_EPISODE_RUN_ID")
         self.run_id = context.run_id if context.run_id[0].isalpha() else "run_" + context.run_id
         config_hash = wire_digest({"profile": "tau3-v1.0.1-episode-v1",
+                                   "context_retention_profile": CONTEXT_RETENTION_PROFILE,
                                    "domain": context.domain, "model": context.model,
                                    "model_args": context.model_args,
                                    "episode_limits": self.limits.model_dump(),
@@ -172,7 +180,8 @@ class EpisodeRuntime:
     @staticmethod
     def _policy_hash(domain: str, policy: str, tools: list[dict[str, Any]]) -> str:
         return wire_digest({"domain": domain, "policy": policy, "tools": tools,
-                            "admission_profile": "tau3-v1.0.1-encoded-rules-v1"})
+                            "admission_profile": "tau3-v1.0.1-encoded-rules-v1",
+                            "context_retention_profile": CONTEXT_RETENTION_PROFILE})
 
     def _owned_episode(self, episode_id: str) -> EpisodeView:
         view = self.episodes.inspect(episode_id)
@@ -319,11 +328,24 @@ class EpisodeRuntime:
         # free text or banking's line-oriented query output.
         facts = vault.project(ctx.entities, source="tool", subject_id=ctx.subject_id)
         projected = []
-        for raw in data["history"]:
+        calls: dict[str, tuple[int, dict[str, Any]]] = {}
+        matched_calls: dict[int, int] = {}
+        observations: list[ObservedResult] = []
+        for index, raw in enumerate(data["history"]):
             item = dict(raw)
             source = "customer" if item["role"] == "user" else "tool"
             if item["role"] == "tool":
-                result, _ = self._parse_result(Message.model_validate(item))
+                prior = calls.pop(item["call_id"], None)
+                if prior is None:
+                    raise RuntimeStorageDenied("UNMATCHED_CONTEXT_RESULT")
+                call_index, call = prior
+                matched_calls[index] = call_index
+                item["tool_name"] = call["tool_name"]
+                result, success = self._parse_result(Message.model_validate(item))
+                observations.append(ObservedResult(
+                    item["call_id"], call["tool_name"], call.get("arguments") or {},
+                    result, success, index,
+                ))
                 if isinstance(result, str) and (item.get("tool_name") or "").startswith("find_user_id"):
                     result = {"user_id": result}
                 # Results must carry an explicit record owner or match trusted
@@ -331,6 +353,8 @@ class EpisodeRuntime:
                 # that every row in an ambiguous lookup belongs to them.
                 item["content"] = vault.project(result, source=source, subject_id=None)
             else:
+                if item["role"] == "assistant" and item.get("call_id") and item.get("tool_name"):
+                    calls[item["call_id"]] = index, dict(raw)
                 item["content"] = vault.project_text(item.get("content") or "", source=source,
                                                        subject_id=ctx.subject_id)
                 if item.get("arguments"):
@@ -338,7 +362,7 @@ class EpisodeRuntime:
                                                         subject_id=ctx.subject_id)
             # Oversized retrieved data is bounded, with explicit loss metadata.
             encoded = wire_json(item).encode("utf-8")
-            if len(encoded) > 24_576:
+            if item["role"] != "user" and len(encoded) > 24_576:
                 text = wire_json(item.get("content"))
                 item["content"] = {"truncated": True, "full_hash": wire_digest(item["content"]),
                                    "excerpt": text.encode("utf-8")[:20_000].decode("utf-8", "ignore")}
@@ -346,31 +370,187 @@ class EpisodeRuntime:
         # A second pass removes known structured values from earlier free text,
         # including restored history. This does not assert universal PII detection.
         projected = vault.project(projected, source="history", subject_id=ctx.subject_id)
+
+        # Retain an exact, projected pending proposal, not a model-written task
+        # summary. Hashes bind the native values and are never text-redacted.
+        pending_confirmation = None
+        pending_action = None
+        pending_operation = None
+        active_arguments: list[Any] = []
+        customer = vault.project({"user_id": ctx.subject_id}, source="tool", subject_id=ctx.subject_id)
+        for field in ("pending_consent", "pending_call"):
+            pending = data.get(field)
+            if pending is None:
+                continue
+            proposal = ToolProposal.model_validate_json(wire_json(pending["proposal"]))
+            active_arguments.append(proposal.arguments)
+            pending_operation = (str(proposal.arguments.get("agent_tool_name"))
+                                 if proposal.tool_name == "call_discoverable_agent_tool"
+                                 else proposal.tool_name)
+            binding = {
+                "tool_name": proposal.tool_name,
+                "arguments": vault.project(proposal.arguments, source="tool", subject_id=ctx.subject_id),
+                "proposal_hash": proposal.digest, "arguments_hash": proposal.arguments_hash,
+                "policy_hash": data["policy_hash"], "customer": customer,
+            }
+            if field == "pending_consent":
+                pending_confirmation = {
+                    **binding, "status": "awaiting_exact_customer_reply",
+                    "displayed_text": vault.project_text(pending["displayed_text"], source="tool",
+                                                          subject_id=ctx.subject_id),
+                    "displayed_text_hash": wire_digest(pending["displayed_text"]),
+                }
+            else:
+                prepared = self.episodes.get_call(data["episode_id"], pending["call_id"])
+                pending_action = {
+                    **binding, "call_id": pending["call_id"],
+                    "status": "awaiting_correlated_tool_result",
+                    "effective_tool_name": pending["effective_tool_name"],
+                    "domain_admission_hash": pending["tal_decision_hash"],
+                    "authorization_hash": sha256(prepared.authorization),
+                    "consent_hash": prepared.call.consent_hash,
+                    "observation_hash": prepared.call.observation_hash,
+                    "action_hash": prepared.call.action_hash,
+                }
+        if observations:
+            active_arguments.append(observations[-1].arguments)
+        try:
+            evidence = collect_evidence(
+                observations, unlocked_tools=ctx.unlocked_tools,
+                discovered_tools=ctx.discovered_tools, pending_operation=pending_operation,
+            )
+        except ContextRetentionDenied as exc:
+            raise EpisodeInferenceDenied(str(exc)) from None
+
+        def project_document(document: dict[str, Any]) -> dict[str, Any]:
+            # Source offsets/hashes refer to the native observation, while text
+            # is projected separately. Never run hashes/IDs through free-text
+            # replacement: a short private value could coincidentally match one.
+            return {
+                **document,
+                "title": (vault.project_text(document["title"], source="tool", subject_id=None)
+                          if document["title"] is not None else None),
+                "retrieval_query": (vault.project_text(document["retrieval_query"], source="tool",
+                                                        subject_id=ctx.subject_id)
+                                    if isinstance(document["retrieval_query"], str) else None),
+                "spans": [{**span, "text": vault.project_text(span["text"], source="tool", subject_id=None)}
+                          for span in document["spans"]],
+            }
+
+        definitions = [{**definition, "definition_text": vault.project_text(
+            definition["definition_text"], source="tool", subject_id=None,
+        )} for definition in evidence.unlocked_definitions]
+        grants = [{**grant, "arguments": vault.project_text(
+            grant["arguments"], source="tool", subject_id=ctx.subject_id,
+        ), "instructions": vault.project_text(
+            grant["instructions"], source="tool", subject_id=ctx.subject_id,
+        )} for grant in evidence.user_tool_grants]
+
+        def argument_strings(value: Any) -> set[str]:
+            if isinstance(value, dict):
+                result: set[str] = set()
+                for key, child in value.items():
+                    if key == "arguments" and isinstance(child, str):
+                        try:
+                            child = strict_json(child, max_bytes=65_536)
+                        except ValueError:
+                            pass
+                    result.update(argument_strings(child))
+                return result
+            if isinstance(value, list):
+                return set().union(*(argument_strings(child) for child in value))
+            return {value} if isinstance(value, str) else set()
+
+        active_values = argument_strings(active_arguments)
+        required_fact_keys = {"user:" + str(ctx.subject_id), "bank:current_time"}
+        required_fact_keys.update(key for key in ctx.entities if key.partition(":")[2] in active_values)
+        # Projection preserves mapping order, but private entity keys become
+        # opaque references. Zip binds each retained value to its native key.
+        fact_entries = list(zip(ctx.entities, facts.items(), strict=True))
+        required_facts = {key: value for native, (key, value) in fact_entries
+                          if native in required_fact_keys}
+        user_indices = [index for index, item in enumerate(projected) if item["role"] == "user"]
+        anchors = {len(projected) - 1} if projected else set()
+        if user_indices:
+            anchors.update((user_indices[0], user_indices[-1]))
+        if projected and len(projected) - 1 in matched_calls:
+            anchors.add(matched_calls[len(projected) - 1])
+        selected = {index: projected[index] for index in anchors}
+        consent_binding = None if ctx.consent is None else {
+            "proposal_hash": ctx.consent.proposal_digest, "policy_hash": ctx.consent.policy_hash,
+            "confirmation_turn": ctx.consent.user_turn_id, "customer": customer,
+        }
         base: dict[str, Any] = {
             "domain": data["domain"], "domain_policy": data["policy"],
             "tool_schemas": data["tools"], "authenticated": ctx.authenticated,
-            "observed_facts": facts,
+            "subject": {**customer, "authenticated": ctx.authenticated,
+                        "policy_hash": ctx.policy_hash, "observation_hash": ctx.observation_hash},
+            "observed_facts": required_facts,
             "successful_calls": data["successful_calls"],
-            "pending_confirmation": None,
+            "pending_confirmation": pending_confirmation, "pending_action": pending_action,
+            "consent_binding": consent_binding,
+            "discovered_tools": list(ctx.discovered_tools),
+            "unlocked_tool_definitions": definitions, "user_tool_grants": grants,
+            "retrieval_documents": [project_document(document) for document in evidence.required_documents],
+            "retrieval_inventory": dict(evidence.inventory),
             "privacy_profile": "synthetic_benchmark_field_policy_v1",
             "semantic_policy_verified": False,
-            "feedback": feedback, "conversation": [], "omitted_history_messages": 0,
+            "feedback": feedback,
+            "conversation": [selected[index] for index in sorted(selected)],
+            "omitted_history_messages": len(projected) - len(selected),
+            "context_retention": {
+                "profile": CONTEXT_RETENTION_PROFILE,
+                "anchor_history_indices": sorted(anchors),
+                "omitted_fact_entries": len(facts) - len(required_facts),
+                "observed_facts_hash": wire_digest(ctx.entities),
+                "compacted_tool_history_indices": [],
+            },
         }
-        if len(wire_json(base).encode()) > self.limits.max_prompt_bytes:
-            # Keep policy and schemas intact; bounded facts have an explicit digest.
-            base["observed_facts"] = {"omitted_due_to_limit": True, "hash": wire_digest(facts)}
-        if len(wire_json(base).encode()) > self.limits.max_prompt_bytes:
-            raise EpisodeInferenceDenied("EPISODE_POLICY_AND_SCHEMA_CONTEXT_TOO_LARGE")
-        selected: list[dict[str, Any]] = []
-        for item in reversed(projected):
-            trial = [item, *selected]
-            base["conversation"] = trial
-            if len(wire_json(base).encode()) > self.limits.max_prompt_bytes:
+        limit = self.limits.max_prompt_bytes
+        # A retrieval/unlock result already retained above can be represented by
+        # its source binding in the conversational copy. Its required excerpts
+        # and complete unlocked definition are never dropped to make room.
+        for observed in reversed(observations):
+            if len(wire_json(base).encode("utf-8")) <= limit:
                 break
-            selected = trial
-        base["conversation"] = selected
+            if observed.history_index not in selected or observed.operation not in {
+                "KB_search", "KB_search_bm25", "KB_search_dense", "grep",
+                "unlock_discoverable_agent_tool", "give_discoverable_user_tool",
+            }:
+                continue
+            selected[observed.history_index] = {
+                **selected[observed.history_index],
+                "content": {"retained_in_evidence_fields": True, "source": observed.binding()},
+            }
+            base["context_retention"]["compacted_tool_history_indices"].append(observed.history_index)
+            base["conversation"] = [selected[index] for index in sorted(selected)]
+        if len(wire_json(base).encode()) > self.limits.max_prompt_bytes:
+            raise EpisodeInferenceDenied("EPISODE_REQUIRED_CONTEXT_TOO_LARGE")
+        for document in evidence.optional_documents:
+            base["retrieval_inventory"]["retained_document_occurrences"] += 1
+            base["retrieval_inventory"]["omitted_document_occurrences"] -= 1
+            if not fit_optional(base, limit=limit, field="retrieval_documents", value=project_document(document)):
+                base["retrieval_inventory"]["retained_document_occurrences"] -= 1
+                base["retrieval_inventory"]["omitted_document_occurrences"] += 1
+        for native, (key, value) in reversed(fact_entries):
+            if native in required_fact_keys:
+                continue
+            base["observed_facts"][key] = value
+            base["context_retention"]["omitted_fact_entries"] -= 1
+            if len(wire_json(base).encode("utf-8")) > limit:
+                del base["observed_facts"][key]
+                base["context_retention"]["omitted_fact_entries"] += 1
+        for index in reversed(range(len(projected))):
+            if index in selected:
+                continue
+            selected[index] = projected[index]
+            base["conversation"] = [selected[position] for position in sorted(selected)]
+            base["omitted_history_messages"] = len(projected) - len(selected)
+            if len(wire_json(base).encode("utf-8")) > limit:
+                del selected[index]
+        base["conversation"] = [selected[index] for index in sorted(selected)]
         base["omitted_history_messages"] = len(projected) - len(selected)
-        if not selected:
+        if not selected or len(wire_json(base).encode("utf-8")) > limit:
             raise EpisodeInferenceDenied("EPISODE_OBSERVATION_CONTEXT_TOO_LARGE")
         return base
 

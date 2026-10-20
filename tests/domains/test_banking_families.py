@@ -26,14 +26,19 @@ class _Bank:
     pack: DomainPack
     context: DomainContext
 
-    def call(self, op: str, **args: Any) -> str:
+    def call(self, op: str, *, expected_error: str | None = None, **args: Any) -> str:
         proposal = _proposal(op, args)
         decision = self.pack.admit(proposal, self.context)
         assert decision.allowed, (op, decision.reason_code)
         assert decision.tal_decision_hash
         result = getattr(self.tools, op)(**args)
-        assert not result.lstrip().startswith(("Error", "Failed")), (op, result)
+        if expected_error is None:
+            assert not result.lstrip().startswith(("Error", "Failed")), (op, result)
+        else:
+            assert result.startswith(expected_error), (op, result)
         self.context = self.pack.observe(proposal, result, self.context)
+        if expected_error is not None:
+            assert not self.context.observations[-1].success
         return result
 
     def discover(self, op: str) -> None:
@@ -47,11 +52,29 @@ class _Bank:
         )
         self.call("unlock_discoverable_agent_tool", agent_tool_name=op)
 
-    def inner(self, op: str, **args: Any) -> str:
+    def inner(self, op: str, *, expected_error: str | None = None, **args: Any) -> str:
         self.discover(op)
         return self.call(
-            "call_discoverable_agent_tool", agent_tool_name=op, arguments=json.dumps(args)
+            "call_discoverable_agent_tool",
+            agent_tool_name=op,
+            arguments=json.dumps(args),
+            expected_error=expected_error,
         )
+
+    def deny(
+        self,
+        op: str,
+        *,
+        expected_reason: str = "DOMAIN_BANK_RESOURCE_OWNERSHIP_REQUIRED",
+        **args: Any,
+    ) -> None:
+        before = self.db.model_dump()
+        proposal = _proposal(op, args)
+        decision = self.pack.admit(proposal, self.context)
+        assert not decision.allowed
+        assert decision.reason_code == expected_reason
+        # A denied proposal never reaches the native dispatcher.
+        assert self.db.model_dump() == before
 
     def deny_inner(
         self,
@@ -61,16 +84,12 @@ class _Bank:
         **args: Any,
     ) -> None:
         self.discover(op)
-        before = self.db.model_dump()
-        proposal = _proposal(
+        self.deny(
             "call_discoverable_agent_tool",
-            {"agent_tool_name": op, "arguments": json.dumps(args)},
+            expected_reason=expected_reason,
+            agent_tool_name=op,
+            arguments=json.dumps(args),
         )
-        decision = self.pack.admit(proposal, self.context)
-        assert not decision.allowed
-        assert decision.reason_code == expected_reason
-        # A denied proposal never reaches the native dispatcher.
-        assert self.db.model_dump() == before
 
 
 @pytest.fixture
@@ -168,6 +187,8 @@ def bank(monkeypatch):
                     "account_id": "checking_probe",
                     "status": "ACTIVE",
                     "last_4_digits": "1234",
+                    "pin_locked": True,
+                    "pin_attempts_remaining": 0,
                 },
                 "foreign_card": {
                     "card_id": "foreign_card",
@@ -330,3 +351,106 @@ def test_card_payment_scopes_both_accounts_and_changes_balances(bank):
     bank.inner(op, **args, checking_account_id="checking_probe", credit_card_account_id="credit_probe")
     assert bank.db.accounts.data["checking_probe"]["current_holdings"] == "975.00"
     assert bank.db.credit_card_accounts.data["credit_probe"]["current_balance"] == "$75.00"
+
+
+def test_credit_card_replacement_scopes_order_and_supporting_read(bank):
+    op = "order_replacement_credit_card_7291"
+    args = {
+        "user_id": "customer_probe",
+        "shipping_address": "1 Example Way",
+        "reason": "lost",
+    }
+    bank.deny_inner(op, **args, credit_card_account_id="foreign_credit")
+    bank.inner(op, **args, credit_card_account_id="credit_probe")
+    assert len(bank.db.credit_card_orders.data) == 1
+    order_id, order = next(iter(bank.db.credit_card_orders.data.items()))
+    assert order["credit_card_account_id"] == "credit_probe"
+    assert order["user_id"] == "customer_probe"
+    assert order["shipping_address"] == "1 Example Way"
+    assert order["status"] == "ORDERED" and order["old_card_cancelled"] is True
+    assert bank.db.credit_card_accounts.data["credit_probe"]["status"] == "CLOSED"
+
+    read_op = "get_pending_replacement_orders_5765"
+    bank.deny_inner(read_op, credit_card_account_id="foreign_credit")
+    result = bank.inner(read_op, credit_card_account_id="credit_probe")
+    assert order_id in result
+    assert bank.context.entity_owners["bank:" + order_id] == "customer_probe"
+
+
+def test_credit_card_closure_scopes_account_after_balance_payment(bank):
+    op = "close_credit_card_account_7834"
+    bank.deny_inner(op, user_id="customer_probe", credit_card_account_id="foreign_credit")
+    bank.inner(
+        "pay_credit_card_from_checking_9182",
+        user_id="customer_probe",
+        checking_account_id="checking_probe",
+        credit_card_account_id="credit_probe",
+        amount=100.0,
+    )
+    bank.inner(op, user_id="customer_probe", credit_card_account_id="credit_probe")
+    account = bank.db.credit_card_accounts.data["credit_probe"]
+    assert account["current_balance"] == "$0.00"
+    assert account["status"] == "CLOSED" and account["closed_by"] == "customer_probe"
+    assert account["closed_date"]
+
+
+def test_fee_correction_scopes_account_and_posts_readable_refund(bank):
+    op = "apply_checking_account_credit_5829"
+    args = {"amount": 7.50, "credit_type": "fee_refund"}
+    bank.deny_inner(op, **args, account_id="foreign_account")
+    bank.inner(op, **args, account_id="checking_probe")
+    assert bank.db.accounts.data["checking_probe"]["current_holdings"] == "$1007.50"
+    assert len(bank.db.bank_account_transaction_history.data) == 1
+    transaction_id, record = next(iter(bank.db.bank_account_transaction_history.data.items()))
+    assert record["account_id"] == "checking_probe"
+    assert record["type"] == "fee_refund" and record["status"] == "posted"
+    assert record["amount"] == 7.50
+
+    read_op = "get_bank_account_transactions_9173"
+    bank.deny_inner(read_op, account_id="foreign_account")
+    result = bank.inner(read_op, account_id="checking_probe")
+    assert transaction_id in result
+    assert bank.context.entity_owners["bank:" + transaction_id] == "customer_probe"
+
+
+def test_debit_card_closure_scopes_card_and_records_permanent_cancellation(bank):
+    op = "close_debit_card_4721"
+    bank.deny_inner(op, card_id="foreign_card", reason="stolen")
+    bank.inner(op, card_id="debit_probe", reason="stolen")
+    card = bank.db.debit_cards.data["debit_probe"]
+    assert card["status"] == "CLOSED" and card["closure_reason"] == "stolen"
+    assert card["closed_date"]
+    assert bank.db.debit_cards.data["foreign_card"]["status"] == "ACTIVE"
+
+
+def test_pin_reset_requires_owned_card_and_native_card_verification(bank):
+    op = "reset_debit_card_pin_6284"
+    bank.deny_inner(op, card_id="foreign_card", last_4_digits="1234", new_pin="4826")
+    before = bank.db.debit_cards.model_dump()
+    bank.inner(
+        op,
+        card_id="debit_probe",
+        last_4_digits="9999",
+        new_pin="4826",
+        expected_error="Error: Card verification failed.",
+    )
+    assert bank.db.debit_cards.model_dump() == before
+    bank.inner(op, card_id="debit_probe", last_4_digits="1234", new_pin="4826")
+    card = bank.db.debit_cards.data["debit_probe"]
+    assert card["pin_locked"] is False and card["pin_attempts_remaining"] == 3
+    assert card["pin_last_changed"]
+
+
+def test_handoff_accepts_native_reason_and_rejects_unknown_route(bank):
+    op = "transfer_to_human_agents"
+    summary = "Authored customer requests security-team help with an unfamiliar charge."
+    bank.deny(
+        op,
+        summary=summary,
+        reason="invented_transfer_route",
+        expected_reason="DOMAIN_ARGUMENT_SCHEMA_INVALID",
+    )
+    result = bank.call(op, summary=summary, reason="fraud_or_security_concern")
+    assert result.startswith("Transfer successful (reason: fraud_or_security_concern).")
+    assert bank.context.observations[-1].tool_name == op
+    assert bank.context.observations[-1].success

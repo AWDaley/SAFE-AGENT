@@ -1,7 +1,11 @@
 import pytest
 
 from safe_agent.benchmarks.tau3 import TAU_COMMIT
-from safe_agent.benchmarks.tau3.reporting import pass_hat_k, summarize_saved_results
+from safe_agent.benchmarks.tau3.reporting import (
+    cost_accounting,
+    pass_hat_k,
+    summarize_saved_results,
+)
 
 
 def manifest():
@@ -114,3 +118,153 @@ def test_safe_reservation_holds_are_not_billed_spend():
     assert usage["sources"] == {"scripted": 2}
     assert not usage["reserved_cost_is_actual_spend"]
     assert not usage["billing_verified"]
+
+
+def reviewed_agent_invoice():
+    return {
+        "category": "agent_provider_billing",
+        "run_id": "test_run",
+        "component": "agent",
+        "currency": "USD",
+        "scope": "all_agent_attempts_including_failures_and_repairs",
+        "replaces": "upstream_agent_aggregate",
+        "amount_usd": "2.00",
+        "event_id": "authored-invoice-total",
+        "provider": "authored-provider",
+        "source_sha256": "a" * 64,
+        "reviewer": "PRIVATE_REVIEWER_CANARY",
+        "allocations": [{**pair, "amount_usd": "0.25"} for pair in manifest()["scheduled"]],
+    }
+
+
+def test_reviewed_invoice_replaces_the_upstream_agent_aggregate_without_double_counting():
+    run_manifest = manifest()
+    run_manifest["expected_cost_components"].append("agent_provider_billing")
+    rows = simulations()
+    report = summarize_saved_results(run_manifest, rows, [reviewed_agent_invoice()])
+    costs = report["costs"]
+    assert costs["known_total_usd"] == "2.40"
+    assert costs["upstream_agent_reported_usd"] == "0.8"
+    assert "agent" not in costs["known_usd_by_category"]
+    assert costs["known_usd_by_category"]["agent_provider_billing"] == "2.00"
+    assert costs["unreported_components"] == ["judge"]
+    assert not costs["complete"]
+    assert costs["agent_provider_reconciliation"]["upstream_agent_amount_replaced"]
+    assert not costs["agent_provider_reconciliation"]["provider_attestation_verified"]
+    assert "PRIVATE_REVIEWER_CANARY" not in str(report)
+    rows[0]["agent_cost"] = None
+    complete = summarize_saved_results(
+        run_manifest,
+        rows,
+        [
+            reviewed_agent_invoice(),
+            {"category": "judge", "amount_usd": "0", "event_id": "authored-judge-zero"},
+        ],
+    )
+    assert complete["costs"]["complete"]
+    assert "agent" not in complete["costs"]["missing_cost_entries"]
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"run_id": "another-run"},
+        {"currency": "EUR"},
+        {"component": "user"},
+        {"scope": "successful_attempts_only"},
+        {"source_sha256": "not_a_digest"},
+    ],
+)
+def test_invoice_requires_exact_run_component_currency_scope_and_provenance(changes):
+    with pytest.raises(ValueError, match="AGENT_BILLING"):
+        summarize_saved_results(
+            manifest(), simulations(), [dict(reviewed_agent_invoice(), **changes)]
+        )
+
+
+def test_invoice_cannot_duplicate_totals_or_absorb_ambiguous_extra_agent_charges():
+    for extra in (
+        reviewed_agent_invoice(),
+        {"category": "agent_extra", "amount_usd": "0.2"},
+        {"category": "failed_request", "amount_usd": "0.2"},
+    ):
+        with pytest.raises(ValueError, match="AGENT_BILLING"):
+            summarize_saved_results(manifest(), simulations(), [reviewed_agent_invoice(), extra])
+
+
+def test_invoice_allocations_must_cover_every_pair_and_equal_the_run_total():
+    event = reviewed_agent_invoice()
+    event["allocations"][0]["amount_usd"] = "0.30"
+    with pytest.raises(ValueError, match="ALLOCATIONS"):
+        summarize_saved_results(manifest(), simulations(), [event])
+    event = reviewed_agent_invoice()
+    event["allocations"].pop()
+    with pytest.raises(ValueError, match="ALLOCATIONS"):
+        summarize_saved_results(manifest(), simulations(), [event])
+
+
+@pytest.mark.parametrize("condition", ["missing", "duplicate", "ungraded", "infrastructure"])
+def test_cost_ratio_is_not_a_lower_bound_with_an_unfixed_success_denominator(condition):
+    assert summarize_saved_results(manifest(), simulations())["costs"][
+        "cost_per_success_is_lower_bound"
+    ]
+    rows = simulations()
+    if condition == "missing":
+        rows.pop()
+    elif condition == "duplicate":
+        rows.append(dict(rows[0]))
+    elif condition == "ungraded":
+        rows[0]["reward_info"] = None
+    else:
+        rows[0].update(termination_reason="infrastructure_error", reward_info=None)
+    costs = summarize_saved_results(manifest(), rows)["costs"]
+    assert not costs["successful_denominator_complete"]
+    assert not costs["cost_per_success_is_lower_bound"]
+    assert (
+        costs["cost_per_success_denominator"]
+        == "observed_valid_successes_in_incomplete_outcome_matrix"
+    )
+
+
+def test_failed_agent_and_retrieval_charges_are_in_the_operating_numerator():
+    run_manifest = dict(
+        manifest(),
+        scheduled=[{"task_id": "a", "trial": 0}],
+        expected_cost_components=["agent", "user"],
+    )
+    row = dict(simulations()[0], agent_cost=1, user_cost=0)
+    costs, _ = cost_accounting(
+        run_manifest,
+        [row],
+        [
+            {"category": "failed_request", "component": "agent", "amount_usd": "5"},
+            {"category": "failed_request", "component": "retrieval", "amount_usd": "2"},
+        ],
+    )
+    assert costs["known_total_usd"] == "8"
+    assert costs["known_agent_operating_cost_per_success_usd"] == "8"
+    assert costs["complete"] and costs["operating_cost_attribution_complete"]
+    ambiguous, _ = cost_accounting(
+        run_manifest, [row], [{"category": "failed_request", "amount_usd": "5"}]
+    )
+    assert not ambiguous["operating_cost_attribution_complete"]
+    assert ambiguous["cost_per_success_is_lower_bound"]
+
+
+def test_unallocated_cost_in_an_already_allocated_category_keeps_task_totals_incomplete():
+    pairs = [{"task_id": task, "trial": 0} for task in ("a", "b")]
+    run_manifest = dict(manifest(), scheduled=pairs)
+    rows = [
+        dict(simulations()[index], task_id=pair["task_id"], trial=0, agent_cost=1, user_cost=0)
+        for index, pair in enumerate(pairs)
+    ]
+    events = [{"category": "judge", "amount_usd": "1", **pair} for pair in pairs]
+    events.append({"category": "judge", "amount_usd": "100"})
+    costs, allocations = cost_accounting(run_manifest, rows, events)
+    assert costs["known_total_usd"] == "104"
+    assert costs["unallocated_additional_components"] == ["judge"]
+    assert costs["complete"]
+    for item in allocations.values():
+        assert item["known_total_usd"] == "2"
+        assert not item["complete"]
+        assert item["unattributed_or_unknown_components"] == ["judge"]

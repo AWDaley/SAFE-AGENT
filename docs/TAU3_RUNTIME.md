@@ -59,6 +59,7 @@ python scripts/generate_tau_domain_catalog.py "$TAU3_SOURCE_ROOT" --check
 python -m pytest tests/episodes tests/domains tests/benchmarks/tau3 \
   --ignore=tests/episodes/test_episode_postgres.py
 python -m ruff check src tests scripts \
+  docker/episode_service_probe.py \
   migrations/versions/0015_benchmark_episodes.py \
   migrations/versions/0016_episode_inference.py
 python -m mypy src/safe_agent
@@ -167,6 +168,23 @@ Model attempts similarly reserve budget and persist their request before
 dispatch. A transport timeout or interrupted claim holds the reservation and
 ends in uncertainty. A known malformed response can take a separately budgeted,
 bounded repair attempt. The host never refunds an unknown bill automatically.
+
+The `tau3-observed-evidence-v1` context profile keeps correlated BM25 document
+IDs, content hashes, literal source spans, retrieval-call provenance, and complete
+observed unlock definitions. It retains the current subject, exact pending
+action/confirmation bindings, applicable consent, and first/latest customer
+turns before adding optional recent evidence and history. It never imports an
+unseen discoverable schema or summarizes facts with another model. Span offsets
+and hashes refer to the original observation; text is privately projected before
+model delivery. Omission counts and hashes make compaction visible.
+
+Literal excerpts use 768-character windows around a document's prefix, active
+operation names, and a deterministic query-term window, with at most eight
+optional recent document versions. This is a bounded retention rule, not a
+guarantee of semantic retrieval relevance. Required evidence that cannot fit
+within `max_prompt_bytes` stops before provider admission. The profile is bound
+into run and policy hashes so an old run cannot silently resume under new
+retention rules.
 
 Consent is customer dialogue state bound to the exact pending action. It does
 not grant operator or execution authority. Banking's user-only tools remain with
@@ -309,6 +327,20 @@ Then use `tau3-final.toml` and `tau3-final-baseline.toml` for the matched four-t
 comparison. Preserve official `EvaluationType.ALL`, including applicable NL
 assertions, for both systems.
 
+Compare the saved runs without making new model or judge calls:
+
+```bash
+python -m safe_agent.benchmarks.tau3 compare \
+  --safe-run-dir artifacts/tau3/bank-final-safe \
+  --baseline-run-dir artifacts/tau3/bank-final-baseline \
+  --output artifacts/tau3/bank-comparison.json
+```
+
+The [saved-result analysis guide](TAU3_REPORTS.md) documents paired uncertainty
+intervals, reviewed failure categories, agent-billing reconciliation, and the
+`prepare-submission` command. A submission package requires real complete final
+results and explicit submitter metadata; packaging does not publish it.
+
 The stock baseline uses the same underlying model. This measures the effect of
 the SAFE runtime and its constraints under matched benchmark conditions. A claim
 about a different named competitor requires that competitor's supported adapter,
@@ -324,6 +356,7 @@ offline implementation.
 
 - [Original implementation plan](TAU3_IMPLEMENTATION_PLAN.md)
 - [Evaluation protocol](TAU3_EVALUATION_PROTOCOL.md)
+- [Saved-result analysis and private submission guide](TAU3_REPORTS.md)
 - [Domain policy coverage and limits](benchmark-domains.md)
 - [Adapter and runner](../src/safe_agent/benchmarks/tau3/)
 - [Runtime](../src/safe_agent/orchestration/episode_runtime.py)
