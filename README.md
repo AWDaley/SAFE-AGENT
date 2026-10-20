@@ -36,6 +36,20 @@ trusted-only and **not** an executable bearer capability or live certification.
 
 ## Local setup
 
+### Frozen τ³ text benchmark profile
+
+The separate benchmark profile adds a durable SAFE episode runtime, reviewed
+TAL retail/banking admission, an official τ³ v1.0.1 adapter, a model-only Unix
+socket sidecar, and coverage/cost/runtime diagnostics. It has its own dependency
+lock and TAL pin; the office profile below retains its existing pin and workflow.
+
+Start with the [τ³ runtime runbook](docs/TAU3_RUNTIME.md) for free offline checks,
+then the [evaluation protocol](docs/TAU3_EVALUATION_PROTOCOL.md) for a matched
+SAFE/stock-agent comparison. Authored harness fixtures establish integration
+behavior; a hosted full-domain capability score is a separate evaluation.
+
+### Existing office profile
+
 Use Python 3.12+ from the repository root:
 
 ```bash

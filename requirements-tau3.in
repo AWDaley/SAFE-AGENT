@@ -1,0 +1,3 @@
+# Separate benchmark environment; do not combine with the office dependency lock.
+-e .[tau3,dev,postgres]
+tervoro-agentic-language @ git+https://github.com/AWDaley/TervoroAgenticLanguage-TAL-.git@f70b5e70bcdf79ce9fd8f691661c8041807a734a

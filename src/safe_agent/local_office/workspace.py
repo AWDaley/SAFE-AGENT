@@ -18,18 +18,38 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final, Iterator, Literal
 
+from alembic.script import ScriptDirectory
 from pydantic import Field
 
 from safe_agent.canonical import canonical_json, sha256
 from safe_agent.contracts.base import StrictModel
 
 HEAD: Final = "0014_billing_verifier_identity"
+BENCHMARK_HEAD: Final = "0016_episode_inference"
 KEYS = ("broker.key", "operator.key", "workload.token", "dispatch.key")
 LOCKS = ("operation.lock", "api.lock", "worker.lock")
 
 
 class LocalOfficeBlocked(ValueError):
     """Only fixed codes from trusted code may be reported to a local operator."""
+
+
+def require_office_migration_source(script: ScriptDirectory) -> None:
+    """Keep office workspaces at their accepted revision despite additive tables.
+
+    Only the explicitly reviewed benchmark tail is accepted. This is not a
+    general permission to migrate an office workspace to arbitrary descendants.
+    """
+    heads = script.get_heads()
+    if heads == [HEAD]:
+        return
+    if heads != [BENCHMARK_HEAD]:
+        raise LocalOfficeBlocked("MIGRATION_SOURCE_MISMATCH")
+    for revision, parent in ((BENCHMARK_HEAD, "0015_benchmark_episodes"),
+                              ("0015_benchmark_episodes", HEAD)):
+        node = script.get_revision(revision)
+        if node is None or node.down_revision != parent:
+            raise LocalOfficeBlocked("MIGRATION_SOURCE_MISMATCH")
 
 
 class WorkspaceManifest(StrictModel):

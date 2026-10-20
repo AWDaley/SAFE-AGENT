@@ -44,6 +44,7 @@ from safe_agent.local_office.workspace import (
     load_manifest,
     private_directory,
     read_private,
+    require_office_migration_source,
     secret,
     workspace_lock,
     write_new,
@@ -268,8 +269,7 @@ def _migration_config(migrations: Path) -> Config:
         raise LocalOfficeBlocked("MIGRATION_SOURCE_REQUIRED")
     config = Config()
     config.set_main_option("script_location", str(migrations).replace("%", "%%"))
-    if ScriptDirectory.from_config(config).get_heads() != [HEAD]:
-        raise LocalOfficeBlocked("MIGRATION_SOURCE_MISMATCH")
+    require_office_migration_source(ScriptDirectory.from_config(config))
     return config
 
 

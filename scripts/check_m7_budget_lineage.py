@@ -24,7 +24,9 @@ from safe_agent.storage.inference_budget import InferenceBudgetLedger
 from safe_agent.storage.models import Base
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_HEAD = "0014_billing_verifier_identity"
+EXPECTED_HEAD = "0016_episode_inference"
+EPISODE_FOUNDATION = "0015_benchmark_episodes"
+BILLING_VERIFIER = "0014_billing_verifier_identity"
 COORDINATED_PLANNING = "0013_coordinated_planning"
 CANONICAL_RESULTS = "0012_inference_results"
 CANONICAL_ADMISSION = "0011_inference_admission"
@@ -95,7 +97,12 @@ def check_migration_and_contract() -> None:
     heads = script.get_heads()
     if set(heads) != {EXPECTED_HEAD} or len(heads) != 1:
         raise RuntimeError("M7 budget migration conflict: expected exactly one canonical head")
-    head = script.get_revision(EXPECTED_HEAD)
+    for revision, parent in ((EXPECTED_HEAD, EPISODE_FOUNDATION),
+                              (EPISODE_FOUNDATION, BILLING_VERIFIER)):
+        node = script.get_revision(revision)
+        if node is None or node.down_revision != parent:
+            raise RuntimeError("benchmark migrations must extend the canonical office lineage")
+    head = script.get_revision(BILLING_VERIFIER)
     if head is None or head.down_revision != COORDINATED_PLANNING:
         raise RuntimeError("billing verifier migration must directly extend coordinated planning")
     coordinated = script.get_revision(COORDINATED_PLANNING)
@@ -174,7 +181,7 @@ def check_migrated_test_database() -> None:
         with engine.connect() as conn:
             revisions = conn.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
         if revisions != [EXPECTED_HEAD]:
-            raise RuntimeError("SQLite migration head does not match reviewed 0014")
+            raise RuntimeError("SQLite migration head does not match reviewed 0016")
     finally:
         engine.dispose()
 

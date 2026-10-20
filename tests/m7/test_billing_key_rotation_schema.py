@@ -70,7 +70,7 @@ def test_0013_legacy_billing_attestation_survives_0014_with_explicit_legacy_iden
         assert after["verifier_public_key_hash"] is None
         assert after["source_adapter_id"] == "legacy_hmac_v1"
         assert db.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == (
-            "0014_billing_verifier_identity"
+            "0016_episode_inference"
         )
 
     with pytest.raises(DBAPIError), engine.begin() as db:
