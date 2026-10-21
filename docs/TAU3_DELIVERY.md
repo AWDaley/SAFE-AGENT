@@ -17,17 +17,17 @@ The PR labels in the original plan are work-package names, not GitHub PR numbers
 
 | Package | Delivered code and offline evidence | Remaining empirical acceptance |
 | --- | --- | --- |
-| PR 0: frozen experiment | Exact τ source/data manifest, public operation catalog, isolated dependency lock, complete schedule inspection, reservation headroom disclosure | Calibrate limits from the declared pilot before final evaluation. |
+| PR 0: frozen experiment | Exact τ source/data manifest, public operation catalog, isolated dependency lock, explicit paired pilot selections, no-inference launch preflight, schedule inspection and reservation headroom disclosure | Calibrate limits from the declared pilot before final evaluation. |
 | PR 1: durable episodes | Additive migrations, immutable lineage, serial calls, exact result bindings, shared run limits, SQLite and real PostgreSQL concurrency/recovery acceptance | Observe behavior under real inference latency and failures. |
 | PR 2: domain admission | Separate reviewed TAL API, retail/banking schemas, customer/resource scope, encoded preconditions, exact authorization bindings | Measure policy outcomes; the encoded rules are a declared subset of the full natural-language policy. |
-| PR 3: model route | Signed, bounded Unix-socket protocol; durable provider-request fence; fixed-origin OpenAI backend; SDK-wire, malformed-output, timeout, and privacy fixtures | Exercise the hosted route with an actual configured model and record usage/billing. |
+| PR 3: model route | Signed, bounded Unix-socket protocol; authenticated no-inference capability exchange; durable provider-request fence; fixed-origin OpenAI backend; SDK-wire, malformed-output, timeout, and privacy fixtures | Exercise the hosted route with an actual configured model and record usage/billing. |
 | PR 4: conversation | Field-aware private references, source-bound identity inputs, one-use action confirmation, receipt-backed completion, clarification and user guidance | Evaluate ordinary conversational correctness and policy-specific wording. |
 | PR 5: official loop | Actual SAFE runtime registered in the pinned official harness; sole upstream tool execution; privileged task metadata excluded | Run real model/user/evaluator trajectories. |
 | PR 6: retail | Pinned operation inventory and encoded constraints; authored runtime/harness and consent/scope cases | Five-task model pilot and complete 114-task coverage report. |
 | PR 7: banking retrieval | Real BM25 search, observed discovery/unlock, nested schema checking, bounded source spans/provenance, retained unlocked definitions and pending context | Measure retrieval and long-dialogue task success with the model. |
 | PR 8: banking workflows | Customer-sourced two-field verification, observed resource ownership, 14 representative native workflow fixtures, scoped user-tool grants, and agent/user action separation | Five-task model pilot and complete 97-task coverage report; review semantic policy failures. |
 | PR 9: recovery and isolation | No resend after uncertain effects, retained budget holds, duplicate-result fencing, private host files, and a separately constrained model-container acceptance profile | Reconcile actual provider costs and assess the chosen live deployment condition. |
-| PR 10: comparison | Frozen SAFE/stock configurations, official recorded-reward metrics, conservative schedule accounting, paired task uncertainty intervals, reviewed failure/billing records, aggregate diagnostics, and private submission validation | Run 97 tasks × 4 trials × 2 systems; produce the research comparison and reviewed submission package from those real results. |
+| PR 10: comparison | Frozen SAFE/stock configurations, saved-pilot reservation calibration, official recorded-reward metrics, conservative schedule accounting, paired task uncertainty intervals, reviewed failure/billing records, aggregate diagnostics, and private submission validation | Run 97 tasks × 4 trials × 2 systems; produce the research comparison and reviewed submission package from those real results. |
 
 ## How to interpret the evidence
 
@@ -51,12 +51,16 @@ require separate adapters and recorded comparisons.
 ## Next execution sequence
 
 1. Reproduce the free environment and acceptance checks in
-   [the runtime runbook](TAU3_RUNTIME.md).
+   [the runtime runbook](TAU3_RUNTIME.md), then run offline preflight for the
+   explicit retail/banking pairs in [the pilot workflow](TAU3_PILOTS.md).
 2. Configure a model route and the official user/judge provider access in the
    appropriate trusted processes. Keep provider secrets outside source and
-   trajectory directories.
+   trajectory directories. Set `LITELLM_MODE=PRODUCTION` and run authenticated
+   preflight without inference; it verifies configuration, not provider access.
 3. Run the declared small pilots, retain their task IDs as development exposure,
-   inspect actual failures, and calibrate finite limits from observed usage.
+   inspect actual failures, and use `calibrate` on the real saved SAFE evidence.
+   Review its cap-increases-only proposal before changing finite limits; missing
+   or censored evidence cannot support a proposal. No template records a completed run.
 4. Run complete coverage schedules, preserving all failures, uncertainty,
    infrastructure errors, missing results, and known/unknown cost components.
 5. Freeze the final condition and run both four-trial banking configurations.
@@ -67,6 +71,10 @@ The example dollar values are conservative reservation allowances. They are not
 expected prices or a cap on agent, user, judge, and infrastructure invoices
 combined. `inspect` makes their model-attempt headroom visible; the checked-in
 full-domain allowances may be too small to finish every conversation.
+Canonical `run` requires fresh preflight before artifacts or official execution.
+The wrapper and SAFE backend use zero retries at their respective layers;
+upstream stock/user/judge provider retries default to three when absent or null.
+Readiness and retry settings do not establish actual provider usage or costs.
 
 See [the evaluation protocol](TAU3_EVALUATION_PROTOCOL.md) for exact metrics,
 development exposure, cost accounting, and diagnostics review rules, and

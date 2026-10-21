@@ -9,7 +9,7 @@ import math
 from datetime import datetime
 from typing import Annotated, Literal, TypeAlias
 
-from pydantic import Field, JsonValue, SecretStr, TypeAdapter, field_validator
+from pydantic import Field, JsonValue, SecretStr, TypeAdapter, field_validator, model_validator
 
 from safe_agent.contracts.base import Digest, Identifier, StrictModel, require_aware
 from safe_agent.contracts.episodes import CorrelationId, EpisodeDomain, OperationName
@@ -113,6 +113,88 @@ class EpisodeInferenceReply(StrictModel):
         return wire_digest(self.model_dump(mode="json"))
 
 
+class EpisodeBackendCapabilities(StrictModel):
+    """Public, immutable configuration; never provider access or quota proof."""
+
+    profile: Literal["openai_chat_v1", "scripted_fixture_v1"]
+    model: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+    provider_origin: Literal["https://api.openai.com/v1"] | None
+    timeout_seconds: float = Field(gt=0.0, le=120.0)
+    provider_retries: Literal[0] = 0
+    follow_redirects: Literal[False] = False
+    trust_env: Literal[False] = False
+    response_format: Literal["json_object", "scripted_fixture"]
+    candidate_schema_hash: Digest
+    system_instruction_hash: Digest
+
+    @model_validator(mode="after")
+    def coherent_profile(self) -> "EpisodeBackendCapabilities":
+        if self.profile == "openai_chat_v1":
+            if self.provider_origin is None or self.response_format != "json_object":
+                raise ValueError("invalid hosted capability profile")
+        elif self.provider_origin is not None or self.response_format != "scripted_fixture":
+            raise ValueError("fixture capabilities must be explicitly labelled")
+        return self
+
+
+class EpisodeServiceCapabilities(StrictModel):
+    schema_version: Literal["safe_agent.episode_capabilities.v1"] = "safe_agent.episode_capabilities.v1"
+    backend: EpisodeBackendCapabilities
+    request_schema_hash: Digest = Field(default_factory=lambda: wire_digest(
+        EpisodeInferenceRequest.model_json_schema()))
+    reply_schema_hash: Digest = Field(default_factory=lambda: wire_digest(
+        EpisodeInferenceReply.model_json_schema()))
+    max_request_bytes: int = Field(default=262_144, ge=4096, le=262_144)
+    max_reply_bytes: Literal[131_072] = 131_072
+    max_inference_seconds: Literal[120] = 120
+    provider_access_verified: Literal[False] = False
+
+
+class EpisodeCapabilitiesRequest(StrictModel):
+    schema_version: Literal["safe_agent.episode_capabilities_request.v1"] = (
+        "safe_agent.episode_capabilities_request.v1"
+    )
+    nonce: str = Field(pattern=r"^[0-9a-f]{64}$")
+    model: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+    issued_at: datetime
+    deadline: datetime
+
+    _aware = field_validator("issued_at", "deadline")(require_aware)
+
+    @model_validator(mode="after")
+    def short_lifetime(self) -> "EpisodeCapabilitiesRequest":
+        if not 0 < (self.deadline - self.issued_at).total_seconds() <= 15:
+            raise ValueError("capability challenge must expire within fifteen seconds")
+        return self
+
+    @property
+    def digest(self) -> str:
+        return wire_digest(self.model_dump(mode="json"))
+
+
+class EpisodeCapabilitiesRequestEnvelope(StrictModel):
+    request: EpisodeCapabilitiesRequest
+    signature: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class EpisodeCapabilitiesReply(StrictModel):
+    schema_version: Literal["safe_agent.episode_capabilities_reply.v1"] = (
+        "safe_agent.episode_capabilities_reply.v1"
+    )
+    nonce: str = Field(pattern=r"^[0-9a-f]{64}$")
+    request_hash: Digest
+    issued_at: datetime
+    deadline: datetime
+    capabilities: EpisodeServiceCapabilities
+
+    _aware = field_validator("issued_at", "deadline")(require_aware)
+
+
+class EpisodeCapabilitiesReplyEnvelope(StrictModel):
+    reply: EpisodeCapabilitiesReply
+    signature: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class EpisodeDispatchEnvelope(StrictModel):
     request: EpisodeInferenceRequest
     reservation_hash: Digest
@@ -141,3 +223,29 @@ class EpisodeDispatchAuthenticator:
                                    self._signature(envelope.request, envelope.reservation_hash)):
             raise ValueError("EPISODE_DISPATCH_AUTHENTICATION_FAILED")
         return envelope.request
+
+    def _capabilities_signature(self, purpose: str, value: StrictModel) -> str:
+        # Domain separation prevents a readiness signature from authorizing an
+        # inference dispatch, or a signed request from authenticating a reply.
+        body = wire_json({"purpose": purpose, "payload": value.model_dump(mode="json")})
+        return hmac.new(self._key, body.encode("utf-8"), hashlib.sha256).hexdigest()
+
+    def sign_capabilities_request(self, request: EpisodeCapabilitiesRequest) -> EpisodeCapabilitiesRequestEnvelope:
+        return EpisodeCapabilitiesRequestEnvelope(request=request, signature=self._capabilities_signature(
+            "safe_agent.episode_capabilities.request.v1", request))
+
+    def verify_capabilities_request(self, envelope: EpisodeCapabilitiesRequestEnvelope) -> EpisodeCapabilitiesRequest:
+        expected = self._capabilities_signature("safe_agent.episode_capabilities.request.v1", envelope.request)
+        if not hmac.compare_digest(envelope.signature, expected):
+            raise ValueError("EPISODE_CAPABILITIES_AUTHENTICATION_FAILED")
+        return envelope.request
+
+    def sign_capabilities_reply(self, reply: EpisodeCapabilitiesReply) -> EpisodeCapabilitiesReplyEnvelope:
+        return EpisodeCapabilitiesReplyEnvelope(reply=reply, signature=self._capabilities_signature(
+            "safe_agent.episode_capabilities.reply.v1", reply))
+
+    def verify_capabilities_reply(self, envelope: EpisodeCapabilitiesReplyEnvelope) -> EpisodeCapabilitiesReply:
+        expected = self._capabilities_signature("safe_agent.episode_capabilities.reply.v1", envelope.reply)
+        if not hmac.compare_digest(envelope.signature, expected):
+            raise ValueError("EPISODE_CAPABILITIES_AUTHENTICATION_FAILED")
+        return envelope.reply

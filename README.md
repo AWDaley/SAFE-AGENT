@@ -44,9 +44,11 @@ socket sidecar, and coverage/cost/runtime diagnostics. It has its own dependency
 lock and TAL pin; the office profile below retains its existing pin and workflow.
 
 Start with the [τ³ runtime runbook](docs/TAU3_RUNTIME.md) for free offline checks,
-then the [evaluation protocol](docs/TAU3_EVALUATION_PROTOCOL.md) for a matched
+then the [pilot workflow](docs/TAU3_PILOTS.md) for explicit matched task selections,
+no-inference readiness checks, and reservation calibration from real saved evidence.
+The [evaluation protocol](docs/TAU3_EVALUATION_PROTOCOL.md) defines the matched
 SAFE/stock-agent comparison. Authored harness fixtures establish integration
-behavior; a hosted full-domain capability score is a separate evaluation.
+behavior; no model-backed pilot or full-domain capability score has been produced.
 The [implementation handoff](docs/TAU3_DELIVERY.md) maps the delivered work to
 the original plan and identifies the remaining empirical milestones.
 The [saved-result analysis guide](docs/TAU3_REPORTS.md) covers paired comparison,

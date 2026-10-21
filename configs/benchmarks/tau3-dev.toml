@@ -2,6 +2,8 @@
 # Monetary fields are conservative reservation allowances, not invoice estimates.
 # $10 run allowance / $0.10 per-attempt hold permits 100 SAFE model attempts
 # across five conversations (20 each on average). Pilot-calibrate further runs.
+# Fixed development selection: the first five IDs in pinned source order.
+# These IDs become development exposure when this pilot is executed.
 schema_version = 1
 tau_commit = "fc0055dc4e0a316c3f83133267fbd6faaa770992"
 tau_root = "../tau2-bench-v1.0.1"
@@ -13,6 +15,7 @@ output_dir = "artifacts/tau3/retail-development"
 task_split_name = "base"
 num_trials = 1
 num_tasks = 5
+task_ids = ["0", "1", "2", "3", "4"]
 seed = 300
 max_steps = 200
 max_errors = 10
@@ -21,7 +24,7 @@ max_retries = 0
 retrieval_config = "bm25"
 llm_agent = "gpt-4.1-2025-04-14"
 llm_user = "gpt-4.1-2025-04-14"
-development_task_ids = []
+development_task_ids = ["0", "1", "2", "3", "4"]
 runtime_factory = "safe_agent.orchestration.episode_runtime:runtime_factory"
 
 [llm_args_agent]

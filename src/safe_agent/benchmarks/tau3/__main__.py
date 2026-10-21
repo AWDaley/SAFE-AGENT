@@ -29,10 +29,19 @@ def _write_new_report(path: Path, value: dict[str, Any], inputs: tuple[Path, ...
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Pinned τ³ text integration for SAFE-AGENT")
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("inspect", "run"):
+    for name in ("inspect", "run", "preflight"):
         command = commands.add_parser(name)
         command.add_argument("--config", required=True, type=Path)
         command.add_argument("--tau-root", type=Path)
+        if name == "preflight":
+            command.add_argument("--offline", action="store_true",
+                                 help="Check configuration without reading keys or contacting a socket")
+            command.add_argument("--output", type=Path)
+    calibration = commands.add_parser("calibrate", help="Read-only reservation analysis of a saved pilot")
+    calibration.add_argument("--run-dir", required=True, type=Path)
+    calibration.add_argument("--target-config", required=True, type=Path)
+    calibration.add_argument("--headroom-factor", type=float, default=1.5)
+    calibration.add_argument("--output", type=Path)
     report = commands.add_parser("report")
     report.add_argument("--run-dir", required=True, type=Path)
     diagnostics = commands.add_parser("diagnostics", help="Read-only aggregate runtime diagnostics")
@@ -55,7 +64,23 @@ def main(argv: list[str] | None = None) -> int:
     submission.add_argument("--output", required=True, type=Path)
     submission.add_argument("--tau-root", type=Path)
     args = parser.parse_args(argv)
-    if args.command == "compare":
+    if args.command == "calibrate":
+        from .calibration import CalibrationError, calibrate_pilot
+
+        try:
+            target = load_config(args.target_config)
+            result = calibrate_pilot(args.run_dir, target,
+                                     headroom_factor=args.headroom_factor)
+            if args.output:
+                _write_new_report(args.output, result, (args.run_dir, Path(target.output_dir)))
+        except (CalibrationError, ValueError, OSError, KeyError, TypeError) as exc:
+            reason = str(exc) if isinstance(exc, CalibrationError) else "INVALID_CALIBRATION_INPUT_OR_OUTPUT"
+            print(json.dumps({"kind": "pilot_reservation_calibration", "status": "unavailable",
+                              "reason": reason}))
+            return 2
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0 if result["status"] == "review_required" else 2
+    elif args.command == "compare":
         from .comparison import ComparisonError, compare_saved_runs
 
         try:
@@ -104,12 +129,33 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "report":
         result = report_saved_run(args.run_dir)
     else:
-        config = load_config(args.config)
+        try:
+            config = load_config(args.config)
+        except (ValueError, OSError):
+            print(json.dumps({"status": "unavailable", "reason": "INVALID_BENCHMARK_CONFIG"}))
+            return 2
         if args.command == "inspect":
             result = inspect_benchmark(config, args.tau_root)
             print(json.dumps(result, indent=2, sort_keys=True))
             return 0 if result["status"] == "ready" else 2
-        output = run_official(config, tau_root=args.tau_root)
+        from .preflight import PreflightError, preflight_run
+
+        if args.command == "preflight":
+            result = preflight_run(config, tau_root=args.tau_root, offline=args.offline)
+            if args.output:
+                try:
+                    _write_new_report(args.output, result, (Path(config.output_dir),))
+                except (OSError, ValueError):
+                    print(json.dumps({"kind": "benchmark_preflight", "status": "blocked",
+                                      "reason": "INVALID_PREFLIGHT_OUTPUT"}))
+                    return 2
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return 0 if result["status"] in {"ready_for_attempt", "configuration_validated"} else 2
+        try:
+            output = run_official(config, tau_root=args.tau_root)
+        except PreflightError as exc:
+            print(json.dumps(exc.report, indent=2, sort_keys=True))
+            return 2
         result = report_saved_run(output)
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0

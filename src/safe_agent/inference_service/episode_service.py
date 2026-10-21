@@ -20,10 +20,14 @@ from fastapi.responses import Response
 from starlette.concurrency import run_in_threadpool
 
 from safe_agent.contracts.episode_inference import (
+    EpisodeBackendCapabilities,
+    EpisodeCapabilitiesReply,
+    EpisodeCapabilitiesRequestEnvelope,
     EpisodeDispatchAuthenticator,
     EpisodeDispatchEnvelope,
     EpisodeInferenceReply,
     EpisodeInferenceRequest,
+    EpisodeServiceCapabilities,
     strict_json,
 )
 from safe_agent.inference_service.__main__ import _secret_from_file
@@ -72,10 +76,49 @@ def create_episode_service(*, model: str, authenticator: EpisodeDispatchAuthenti
                            clock: Callable[[], datetime] = lambda: datetime.now(UTC)) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     capacity = threading.BoundedSemaphore(1)
+    descriptor = getattr(backend, "capabilities", None)
+    capabilities = None
+    if isinstance(descriptor, EpisodeBackendCapabilities):
+        if descriptor.model != model:
+            raise ValueError("EPISODE_CAPABILITY_MODEL_CONFIGURATION_MISMATCH")
+        capabilities = EpisodeServiceCapabilities(backend=descriptor, max_request_bytes=max_request_bytes)
 
     @app.get("/healthz")
     def health() -> dict[str, str]:
         return {"status": "ready", "mode": "episode_model_only"}
+
+    @app.post("/v1/episode/capabilities")
+    async def get_capabilities(inbound: Request) -> Response:
+        """Authenticate public configuration without inference or fence writes."""
+        headers = {"Cache-Control": "no-store"}
+        if (inbound.headers.getlist("host") != ["safe-episode"]
+                or inbound.headers.get("content-type", "").split(";", 1)[0] != "application/json"
+                or inbound.headers.get("content-encoding", "identity") != "identity"):
+            return Response(status_code=400, headers=headers)
+        raw = bytearray()
+        try:
+            async for chunk in inbound.stream():
+                if len(raw) + len(chunk) > 8192:
+                    return Response(status_code=413, headers=headers)
+                raw.extend(chunk)
+            strict_json(raw.decode("utf-8"), max_bytes=8192)
+            envelope = EpisodeCapabilitiesRequestEnvelope.model_validate_json(bytes(raw))
+            challenge = authenticator.verify_capabilities_request(envelope)
+            now = clock()
+            if challenge.model != model or not challenge.issued_at <= now < challenge.deadline:
+                raise ValueError("capability route or deadline denied")
+        except Exception:
+            return Response(status_code=403, headers=headers)
+        if capabilities is None:
+            # Existing injected test backends without a descriptor retain their
+            # inference behavior, but cannot claim configured hosted readiness.
+            return Response(status_code=503, headers=headers)
+        reply = EpisodeCapabilitiesReply(
+            nonce=challenge.nonce, request_hash=challenge.digest,
+            issued_at=now, deadline=challenge.deadline, capabilities=capabilities,
+        )
+        signed = authenticator.sign_capabilities_reply(reply)
+        return Response(content=signed.model_dump_json(), media_type="application/json", headers=headers)
 
     @app.post("/v1/episode/infer")
     async def infer(inbound: Request) -> Response:

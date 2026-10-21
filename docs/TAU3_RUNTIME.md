@@ -83,6 +83,11 @@ documents. The banking coverage configuration schedules 97 conversations. The
 two final banking configurations schedule 388 each, 776 combined. Inspecting a
 schedule does not execute those conversations.
 
+For a five-task development selection, use the paired templates and offline
+`preflight` commands in [the pilot workflow](TAU3_PILOTS.md). Offline preflight
+checks launch configuration without reading keys, contacting a service, or
+creating run artifacts. It does not establish provider access.
+
 ### What the offline tests establish
 
 The tests cover the actual SAFE runtime and official retail/banking tool
@@ -210,6 +215,11 @@ limits. The initial SAFE backend accepts `temperature` and optional `seed` only.
 Other model-specific settings require an explicit backend implementation and a
 new frozen comparison condition.
 
+The [pilot workflow](TAU3_PILOTS.md) lists matching SAFE and stock templates for
+retail IDs `0`–`4` and banking IDs `task_001`–`task_005`. These fixed source-order
+selections are declared in both `task_ids` and `development_task_ids`; loading a
+template does not mean its pilot has been executed.
+
 ### 1. Configure the model-only sidecar
 
 Choose the constrained container launch documented in
@@ -225,6 +235,8 @@ directories:
   of 32–512 characters. The runtime and sidecar use the same file.
 - A separate agent-provider-key file, mode `0600`, containing the OpenAI API key.
   The sidecar reads it; never put its content in configuration files or prompts.
+
+Keep the key files in an owner-controlled directory with mode `0700` as well.
 
 Set paths, not key values, and start the service in its own terminal:
 
@@ -254,7 +266,13 @@ and set:
 ```bash
 export SAFE_EPISODE_SOCKET=/absolute/private/service-directory/episode.sock
 export SAFE_EPISODE_DISPATCH_KEY_FILE=/absolute/private/dispatch-key
+export LITELLM_LOCAL_MODEL_COST_MAP=True
+export LITELLM_MODE=PRODUCTION
 ```
+
+`LITELLM_MODE=PRODUCTION` disables implicit `.env` loading by the frozen harness's
+LiteLLM dependency. The initial hosted preflight rejects endpoint overrides and
+credentials supplied inside model arguments.
 
 The official user simulator and any NL judge also need provider credentials in
 their trusted harness process, typically `OPENAI_API_KEY` for the example model.
@@ -263,11 +281,17 @@ SAFE's projected model context. The offline checker is intentionally run before
 adding these credentials, because its credential-free contract is stricter than
 the live harness's requirements.
 
-### 3. Run a small declared pilot
+### 3. Check readiness, then run a small declared pilot
 
-The checked-in development configuration selects five retail tasks:
+This example uses the five-task retail SAFE template. Its matched stock template
+is `configs/benchmarks/tau3-dev-baseline.toml`; use the same preflight/run sequence
+for that configuration. The paired banking commands are in
+[TAU3_PILOTS.md](TAU3_PILOTS.md).
 
 ```bash
+python -m safe_agent.benchmarks.tau3 preflight \
+  --config configs/benchmarks/tau3-dev.toml \
+  --tau-root "$TAU3_SOURCE_ROOT"
 python -m safe_agent.benchmarks.tau3 run \
   --config configs/benchmarks/tau3-dev.toml \
   --tau-root "$TAU3_SOURCE_ROOT"
@@ -277,21 +301,32 @@ python -m safe_agent.benchmarks.tau3 diagnostics \
   --run-dir artifacts/tau3/retail-development
 ```
 
+Online preflight authenticates the sidecar's declared model/protocol without
+inference and checks harness credential presence. `provider_access_verified=false`
+remains explicit: provider key validity, quota, model access, and billing have
+not been tested. Canonical `run` repeats this check before creating the output
+directory or constructing the official simulator. A saved report cannot bypass
+the fresh gate; a blocked check creates no run artifacts.
+
 Pilot exposure must be recorded. Use the selected IDs in `manifest.json` to
 populate `development_task_ids` before freezing final configs. Diagnose actual
 failures before widening the run. If a known benchmark policy requirement is
 unsupported, improve the corresponding general rule and rerun authored fixtures;
 do not insert expected task actions or answers into the runtime.
 
-A nonempty output directory is rejected. Automatic retries, automatic review,
-and automatic resume are disabled. Use a new run ID and directory for an explicit
-new experiment; retain the interrupted schedule and its outcomes.
+A nonempty output directory is rejected. The simulation wrapper uses
+`max_retries=0`, and SAFE's provider backend disables automatic retries. The
+unchanged upstream stock agent, user simulator, and NL judge use provider
+`num_retries=3` when absent or null. These are separate retry scopes, not measured
+call counts. Automatic review and resume are disabled. Use a new run ID and
+directory for an explicit new experiment; retain interrupted schedules and outcomes.
 
 ## Reading the evidence
 
 Each run writes a manifest before invoking the official runner. It contains the
 full scheduled task/trial matrix, source/config fingerprints, model settings,
-retrieval condition, and limits. Official outputs remain evaluator-side.
+retrieval condition, limits, and the fresh preflight report/hash. Official outputs
+remain evaluator-side.
 
 `report` reads recorded rewards without rerunning a judge. It distinguishes
 missing, duplicate, infrastructure-failed, ungraded, and scored conversations.
@@ -319,6 +354,14 @@ failed-request, and infrastructure charges separately when available. Full costs
 and cost per success remain qualified while components are unknown.
 
 ## Moving from the pilot to the comparison
+
+Run `calibrate` on the actual saved SAFE pilot before choosing coverage/final
+allowances; see [TAU3_PILOTS.md](TAU3_PILOTS.md) and
+[the saved-result guide](TAU3_REPORTS.md). It retains complete natural task failures
+and withholds suggestions for incomplete, uncertain, capped, or scripted evidence.
+Eligible evidence produces only proposed cap increases; deadlines, prompt/output
+limits, repair limits, and the per-attempt hold remain unchanged. It never edits
+configs, estimates invoices, or authorizes the next run.
 
 After the pilot, freeze code, dependencies, prompt/schema/policy hashes, exact
 agent/user/judge model settings, exposure record, BM25 settings, and limits.
@@ -356,6 +399,7 @@ offline implementation.
 
 - [Original implementation plan](TAU3_IMPLEMENTATION_PLAN.md)
 - [Evaluation protocol](TAU3_EVALUATION_PROTOCOL.md)
+- [Pilot readiness and reservation calibration](TAU3_PILOTS.md)
 - [Saved-result analysis and private submission guide](TAU3_REPORTS.md)
 - [Domain policy coverage and limits](benchmark-domains.md)
 - [Adapter and runner](../src/safe_agent/benchmarks/tau3/)

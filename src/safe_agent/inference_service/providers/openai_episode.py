@@ -8,8 +8,10 @@ from pydantic import SecretStr
 
 from safe_agent.contracts.episode_inference import (
     CANDIDATE_ADAPTER,
+    EpisodeBackendCapabilities,
     EpisodeInferenceReply,
     EpisodeInferenceRequest,
+    wire_digest,
     wire_json,
 )
 
@@ -30,28 +32,51 @@ the host and must bind the exact proposed action.
 """
 
 
+def episode_system_instructions() -> str:
+    return SYSTEM_INSTRUCTION + "\nCandidate schema:\n" + wire_json(CANDIDATE_ADAPTER.json_schema())
+
+
+def openai_backend_capabilities(*, model: str, timeout_seconds: float = 60.0) -> EpisodeBackendCapabilities:
+    """Pure expected configuration: no SDK construction, secret read, or call."""
+    return EpisodeBackendCapabilities(
+        profile="openai_chat_v1", model=model, provider_origin="https://api.openai.com/v1",
+        timeout_seconds=timeout_seconds, response_format="json_object",
+        candidate_schema_hash=wire_digest(CANDIDATE_ADAPTER.json_schema()),
+        system_instruction_hash=wire_digest(episode_system_instructions()),
+    )
+
+
 class OpenAIEpisodeBackend:
     def __init__(self, *, model: str, api_key: SecretStr, timeout_seconds: float = 60.0):
         from openai import DefaultHttpxClient, OpenAI
 
-        self.model = model
+        self._capabilities = openai_backend_capabilities(model=model, timeout_seconds=timeout_seconds)
+        self._instructions = episode_system_instructions()
         # Fixed HTTPS origin, no environment-controlled base URL, no automatic
         # provider retries. One coordinator reservation represents one attempt.
         self._client = OpenAI(api_key=api_key.get_secret_value(),
-                              base_url="https://api.openai.com/v1", max_retries=0,
-                              timeout=timeout_seconds,
+                              base_url=self.capabilities.provider_origin,
+                              max_retries=self.capabilities.provider_retries,
+                              timeout=self.capabilities.timeout_seconds,
                               http_client=DefaultHttpxClient(
-                                  follow_redirects=False, trust_env=False,
+                                  follow_redirects=self.capabilities.follow_redirects,
+                                  trust_env=self.capabilities.trust_env,
                               ))
+
+    @property
+    def capabilities(self) -> EpisodeBackendCapabilities:
+        return self._capabilities
+
+    @property
+    def model(self) -> str:
+        return self._capabilities.model
 
     def infer(self, request: EpisodeInferenceRequest) -> EpisodeInferenceReply:
         if request.model != self.model:
             raise ValueError("MODEL_ROUTE_DENIED")
-        instructions = SYSTEM_INSTRUCTION + "\nCandidate schema:\n" + wire_json(
-            CANDIDATE_ADAPTER.json_schema())
         kwargs: dict[str, Any] = {
             "model": self.model,
-            "messages": [{"role": "system", "content": instructions},
+            "messages": [{"role": "system", "content": self._instructions},
                          {"role": "user", "content": wire_json(request.projected_context)}],
             "max_completion_tokens": request.max_output_tokens,
             "temperature": request.temperature,

@@ -186,6 +186,15 @@ def run_official(
     inventory = inspect_benchmark(config, root)
     if inventory["status"] != "ready" or root is None:
         raise RuntimeError("Official run requires a complete, content-verified pinned τ checkout")
+    preflight: dict[str, Any] | None = None
+    if runtime_factory is None and config.runtime_factory == CANONICAL_RUNTIME_FACTORY:
+        from .preflight import PreflightError, preflight_run
+
+        preflight = preflight_run(config, tau_root=root)
+        if not preflight["ready_for_attempt"]:
+            # No run directory, official simulator, budget hold, or provider
+            # dispatch exists when launch configuration is rejected here.
+            raise PreflightError(preflight)
     output_dir = Path(config.output_dir).resolve()
     if output_dir.exists() and any(output_dir.iterdir()):
         raise FileExistsError("Run directory is not empty; choose a new run ID/output directory")
@@ -225,6 +234,8 @@ def run_official(
         "evaluation_type": "ALL",
         "automatic_review": False,
         "retries": 0,
+        "preflight": preflight,
+        "preflight_sha256": content_hash(preflight) if preflight is not None else None,
         "billing_cap_scope": "SAFE durable reservation limits; external billed spend is not independently capped/verified",
         "expected_cost_components": ["agent", "user"]
         + (["agent_provider_billing"] if config.system == "safe_agent" else [])

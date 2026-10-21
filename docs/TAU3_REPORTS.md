@@ -6,6 +6,35 @@ them only after the run commands in [TAU3_RUNTIME.md](TAU3_RUNTIME.md) have
 produced real model-backed results. Authored tests of these commands are not
 benchmark scores.
 
+## Calibrate reservation allowances from a saved pilot
+
+Use the explicit paired selections and preflight gate in
+[TAU3_PILOTS.md](TAU3_PILOTS.md) before executing a pilot. Once real canonical
+SAFE results exist, inspect proposed allowances for the next declared schedule:
+
+```bash
+python -m safe_agent.benchmarks.tau3 calibrate \
+  --run-dir artifacts/tau3/bank-dev-safe \
+  --target-config configs/benchmarks/tau3-v1.0.1.toml \
+  --headroom-factor 1.5 \
+  --output artifacts/tau3-readiness/banking-calibration.json
+```
+
+The command checks recorded source/runtime/model conditions, saved-artifact
+bindings, the complete task/episode join, and a read-only private-ledger snapshot.
+Complete natural task failures remain in the usage sample. Missing, ungraded,
+uncertain, capped, or scripted evidence withholds suggestions; authored fixtures
+cannot supply the missing empirical pilot.
+
+For each resource, eligible evidence takes the largest complete episode's held
+usage, applies the explicit multiplier, then scales by the target schedule for
+run allowances. `status=review_required` contains only proposed cap increases.
+Existing caps are never lowered. Deadlines, prompt/output limits, repair limits,
+and the fixed per-attempt hold remain unchanged. No configuration is edited and
+no spend is authorized. Held token/cost units are not provider invoices; the
+multiplier is not a confidence bound or a completion guarantee. The output must
+be new and outside both the pilot and target run directories.
+
 ## Compare SAFE with the stock agent
 
 ```bash
@@ -49,6 +78,10 @@ Call counts distinguish observed assistant messages, emitted agent tool calls,
 attributed tool results, and SAFE's recorded model-attempt usage. User-only tools
 are excluded from agent-call counts. Missing usage remains visible; these
 trajectory observations do not establish every actual provider call or retry.
+The simulation wrapper uses `max_retries=0` and SAFE's provider backend uses zero
+automatic retries. The pinned stock agent, user simulator, and NL judge instead
+default to provider `num_retries=3` when absent or null. Those configuration
+values must not be reported as observed request counts.
 
 ## Reviewed failure categories
 

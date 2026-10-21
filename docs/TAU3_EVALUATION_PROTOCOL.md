@@ -120,7 +120,10 @@ The provided configurations are:
 
 | Configuration | Purpose | Scheduled conversations |
 | --- | --- | ---: |
-| `tau3-dev.toml` | Five retail development tasks | 5 per system |
+| `tau3-dev.toml` | SAFE retail development pilot | 5 |
+| `tau3-dev-baseline.toml` | Matched stock retail pilot | 5 |
+| `tau3-bank-dev-safe.toml` | SAFE banking development pilot | 5 |
+| `tau3-bank-dev-baseline.toml` | Matched stock banking pilot | 5 |
 | `tau3-v1.0.1.toml` | Full banking coverage, one trial | 97 |
 | `tau3-final.toml` | Full banking SAFE evaluation, four trials | 388 |
 | `tau3-final-baseline.toml` | Matched stock LLMAgent evaluation | 388 |
@@ -130,14 +133,29 @@ For the retail coverage milestone, copy the coverage config, set
 once. The two final banking configurations schedule 776 conversations total.
 These are conversation counts, not API request counts.
 
+All paths are under `configs/benchmarks/`. Pilot pairs select the first five
+source-order IDs explicitly: retail `0`–`4`, banking `task_001`–`task_005`. Their
+`development_task_ids` declare the same intended selection. After execution,
+retain actual attempted schedules and carry exposure into later configs; untouched
+templates do not represent completed runs. See [TAU3_PILOTS.md](TAU3_PILOTS.md).
+
 `run` invokes the selected model, official user simulator, and applicable
 graders. Configure the supported SAFE inference route and providers first. No
-model evaluation is implied by successful inspection or fixture tests.
+model evaluation is implied by successful inspection, preflight, or fixture tests.
+Use the hosted environment from [TAU3_RUNTIME.md](TAU3_RUNTIME.md), including
+`LITELLM_LOCAL_MODEL_COST_MAP=True` and `LITELLM_MODE=PRODUCTION`.
 
 ```sh
+python -m safe_agent.benchmarks.tau3 preflight \
+  --config configs/benchmarks/tau3-dev.toml
 python -m safe_agent.benchmarks.tau3 run \
   --config configs/benchmarks/tau3-dev.toml
 ```
+
+Add `--offline` to preflight for configuration checks without keys or a service.
+Online preflight authenticates the declared sidecar configuration without
+inference and checks harness credential presence; provider access stays untested.
+Canonical `run` repeats the fresh gate before artifacts or official execution.
 
 Run the two final configurations after freezing code, model identifiers,
 reasoning/temperature settings, prompts, policy/schema hashes, retrieval,
@@ -147,8 +165,11 @@ simulator, and evaluator. Match seeds where supported; interactive trajectories
 will diverge as assistant behavior changes.
 
 The first wrapper is serial, sets no task filter, disables automatic review and
-resume, uses zero retries, and enables communication-format validation for both
-systems. A nonempty output directory is rejected rather than overwritten or
+resume, uses simulation `max_retries=0`, and enables communication-format
+validation for both systems. SAFE's provider backend also disables automatic
+retries. Separately, the pinned stock agent, user simulator, and NL judge default
+to provider `num_retries=3` when absent or null. These settings are not measured
+request counts. A nonempty output directory is rejected rather than overwritten or
 silently resumed. Interrupted trials stay visible; a deliberate new attempt
 requires a new output directory and separate disclosure.
 
@@ -173,6 +194,7 @@ zero. Generic evaluation documentation does not override the task files.
 The wrapper writes `manifest.json` before execution, including the complete
 task/trial matrix, pinned and working-source fingerprints, selected task/data
 hashes, run configuration, budgets, exposure, and installed dependency versions.
+Canonical runs also record the fresh preflight report and its hash.
 The official runner writes its unchanged `results.json`; the wrapper stores
 `official_metrics.json` from the upstream metric implementation. Both files may
 contain evaluator-side information and must not be supplied to the planner.
@@ -223,7 +245,7 @@ Other token, call, time, and turn limits can reduce that ceiling further.
 
 | SAFE configuration | Run allowance / per-attempt hold | Maximum attempts from these holds | Mean ceiling per scheduled conversation |
 | --- | --- | ---: | ---: |
-| Five-task retail development | $10 / $0.10 | 100 | 20 |
+| Five-task development, retail or banking | $10 / $0.10 | 100 | 20 |
 | 97-task banking coverage | $10 / $0.10 | 100 | About 1.03 |
 | 388-conversation banking final | $100 / $0.10 | 1,000 | About 2.58 |
 
@@ -235,6 +257,13 @@ changes the evaluation condition and belongs in the manifest. Malformed known
 replies and uncertain attempts retain their holds. These figures are allowance
 arithmetic, not expected API usage or estimated invoices. The stock baseline
 ignores SAFE's budget sections, which do not constrain its provider charges.
+
+The read-only `calibrate` command in [TAU3_PILOTS.md](TAU3_PILOTS.md) checks real
+saved pilot evidence and proposes only required cap increases. Complete natural
+failures remain included; incomplete, uncertain, capped, or scripted evidence
+cannot support suggestions. Deadlines, prompt/output limits, repairs, and the
+per-attempt hold remain unchanged. Review the proposal explicitly: the command
+does not edit configs, authorize spend, or guarantee completion of unseen tasks.
 
 `results.json` supplies recorded agent/user aggregates. Missing costs remain
 unknown rather than zero. For charges not included there, add an
@@ -373,4 +402,5 @@ submission is a separate publication action.
 - [Runner construction and privileged task boundary](https://github.com/sierra-research/tau2-bench/blob/fc0055dc4e0a316c3f83133267fbd6faaa770992/src/tau2/runner/build.py)
 - [Official runner and evaluation default](https://github.com/sierra-research/tau2-bench/blob/fc0055dc4e0a316c3f83133267fbd6faaa770992/src/tau2/runner/batch.py)
 - [Metric implementation](https://github.com/sierra-research/tau2-bench/blob/fc0055dc4e0a316c3f83133267fbd6faaa770992/src/tau2/metrics/agent_metrics.py)
+- [Provider retry defaults and generator](https://github.com/sierra-research/tau2-bench/blob/fc0055dc4e0a316c3f83133267fbd6faaa770992/src/tau2/utils/llm_utils.py)
 - [Banking tools and discovery](https://github.com/sierra-research/tau2-bench/blob/fc0055dc4e0a316c3f83133267fbd6faaa770992/src/tau2/domains/banking_knowledge/tools.py)

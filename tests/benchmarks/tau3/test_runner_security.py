@@ -35,6 +35,10 @@ def test_failed_preparation_keeps_private_artifacts_and_restores_umask(
         },
     )
     monkeypatch.setattr(runner, "_repository_revision", lambda: {"commit": "authored_fixture"})
+    monkeypatch.setattr(
+        "safe_agent.benchmarks.tau3.preflight.preflight_run",
+        lambda *args, **kwargs: {"ready_for_attempt": True, "authored_test": True},
+    )
 
     def stop_before_import(*args):
         raise RuntimeError("Authored failure before any official runner or model call")
