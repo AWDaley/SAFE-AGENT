@@ -307,11 +307,11 @@ def test_real_uds_rejects_unprotected_filesystem_route(real_sidecar, target):
 def test_preflight_uses_protected_key_and_real_hosted_sidecar_without_provider_request(tmp_path, monkeypatch):
     """Only inventory/provenance is authored; the complete service probe is real."""
     import httpx
-    import openai
 
     from safe_agent.benchmarks.tau3 import preflight
     from safe_agent.benchmarks.tau3.config import BenchmarkConfig
 
+    openai = pytest.importorskip("openai")
     provider_requests = []
 
     def forbidden_provider(request):
