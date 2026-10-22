@@ -51,7 +51,7 @@ from .runner import _repository_revision
 _UNITS = ("turns", "model_calls", "tool_calls", "tokens")
 _DEPENDENCIES = ("tervoro-safe-agent", "tau2", "pydantic", "litellm", "rank-bm25")
 _MATCHED_CONDITIONS = (
-    "domain", "llm_agent", "llm_args_agent", "llm_user", "llm_args_user", "seed",
+    "domain", "model_route", "local_api_base", "llm_agent", "llm_args_agent", "llm_user", "llm_args_user", "seed",
     "max_steps", "max_errors", "timeout", "retrieval_config", "retrieval_config_kwargs",
 )
 _UNCHANGED_LIMITS = ("deadline_seconds", "max_prompt_bytes", "max_output_tokens", "max_schema_repairs")
@@ -83,6 +83,8 @@ def _base(config: BenchmarkConfig, factor: float) -> dict[str, Any]:
         "schema_version": "safe_agent.tau3_pilot_calibration.v1",
         "kind": "pilot_reservation_calibration", "status": "unavailable", "reasons": [],
         "target_config_sha256": content_hash(config.model_dump()),
+        "target_model_route": config.model_route,
+        "target_local_api_base": config.local_api_base,
         "headroom_factor": factor, "suggested_budget_patch": None,
         "derived_requirements": None, "provenance": None, "pilot": None,
         "target_scheduled_conversations": None, "per_episode_usage": None,
@@ -91,6 +93,7 @@ def _base(config: BenchmarkConfig, factor: float) -> dict[str, Any]:
         "quantile_method": "nearest rank, descriptive only",
         "cost_basis": "caller configured fixed per-attempt reservation hold, never provider prices",
         "invoice_estimate": False, "origin_authenticity_verified": False,
+        "model_weights_or_hardware_attested": False,
         "statistical_tail_guarantee": False, "target_completion_guaranteed": False,
         "review_required": True, "spend_authorized": False,
         "model_calls": 0, "writes_performed": 0,
@@ -100,6 +103,8 @@ def _base(config: BenchmarkConfig, factor: float) -> dict[str, Any]:
             "Token reservations use runtime held units, not provider-reported token counts.",
             "SAFE reservations do not cap stock, simulator, judge, or infrastructure invoices.",
             "No deadline, prompt, output, repair, or per-attempt hold changes are suggested.",
+            "Matching route, endpoint and model aliases does not attest local weights or hardware; changed local deployments require a new reviewed pilot.",
+            "Local reservation amounts do not measure hardware, electricity, or operating costs.",
         ],
     }
 
@@ -291,6 +296,8 @@ def _calibrate(run_dir: Path, target: BenchmarkConfig, factor: float) -> dict[st
              and (seed is None or type(seed) is int), "PILOT_MODEL_ARGUMENTS_INVALID")
     report["provenance"] = dict(saved.provenance)
     report["provenance"]["runtime_sources_sha256"] = saved.manifest["safe_revision"]["runtime_sources_sha256"]
+    report["provenance"]["model_route"] = pilot.model_route
+    report["provenance"]["local_api_base"] = pilot.local_api_base
     if saved.manifest.get("status") != "complete":
         reasons.append("PILOT_RUN_INCOMPLETE")
     if not saved.provenance["saved_artifact_binding_validated"]:
@@ -317,6 +324,11 @@ def _calibrate(run_dir: Path, target: BenchmarkConfig, factor: float) -> dict[st
         reasons.append("TARGET_PINNED_SOURCES_UNAVAILABLE")
     else:
         report["target_scheduled_conversations"] = inspection["scheduled_conversations"]
+        if target.model_route == "local" and (
+            type(inspection.get("selected_tasks_with_nl_assertions")) is not int
+            or inspection["selected_tasks_with_nl_assertions"] != 0
+        ):
+            reasons.append("TARGET_LOCAL_ZERO_NL_ASSERTION_SCHEDULE_REQUIRED")
         _require(0 < inspection["scheduled_conversations"] <= 16384,
                  "CALIBRATION_TARGET_SCHEDULE_TOO_LARGE")
         pilot_inspection = inspect_benchmark(pilot, root)
@@ -324,6 +336,10 @@ def _calibrate(run_dir: Path, target: BenchmarkConfig, factor: float) -> dict[st
             pilot_inspection[name] == saved.manifest["inventory"][name]
             for name in ("selected_task_ids", "task_ids_sha256", "task_content_sha256")
         ), "PILOT_SOURCE_SCHEDULE_MISMATCH")
+        if pilot.model_route == "local":
+            _require(type(pilot_inspection.get("selected_tasks_with_nl_assertions")) is int
+                     and pilot_inspection["selected_tasks_with_nl_assertions"] == 0,
+                     "PILOT_LOCAL_ZERO_NL_ASSERTION_SCHEDULE_REQUIRED")
     terminations = Counter(row["termination_reason"] for row in saved.rows.values())
     report["pilot"] = {
         "scheduled_conversations": len(saved.scheduled), "recorded_conversations": len(saved.rows),

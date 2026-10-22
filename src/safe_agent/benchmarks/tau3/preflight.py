@@ -1,9 +1,10 @@
-"""No-inference launch checks for the frozen hosted benchmark condition.
+"""No-inference launch checks for hosted and local benchmark conditions.
 
 An authenticated local capability exchange proves a matching sidecar
 configuration. It does not test provider credentials, quota, or model access.
+Local mode can also inspect the server's model listing, without generation.
 Nothing here constructs an official agent, opens a run database, or reserves
-inference budget. Offline mode does not read dispatch keys or contact a socket.
+inference budget. Offline mode does not read dispatch keys or contact endpoints.
 """
 
 from __future__ import annotations
@@ -18,7 +19,11 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from safe_agent.contracts.episode_inference import EpisodeInferenceRequest
+from safe_agent.contracts.episode_inference import (
+    EpisodeInferenceRequest,
+    strict_json,
+    validate_local_api_base,
+)
 
 from . import TAU_COMMIT, TAU_RELEASE
 from .config import CANONICAL_RUNTIME_FACTORY, BenchmarkConfig
@@ -68,10 +73,9 @@ def _runtime_configuration(config: BenchmarkConfig) -> dict[str, Any]:
             "minimum_token_hold_basis": "smallest valid empty-context request; actual prompts require more"}
 
 
-def _harness_arguments(arguments: dict[str, Any]) -> None:
-    # This first launch profile deliberately covers the checked-in OpenAI
-    # condition, without accepting hidden credentials, endpoint overrides,
-    # callbacks, mock replies, or custom provider routes in model arguments.
+def _harness_arguments(arguments: dict[str, Any], *, local: bool = False) -> None:
+    # Routing comes from typed top-level configuration, never hidden
+    # credentials, endpoint overrides, callbacks, or mock replies in arguments.
     if set(arguments) - {"temperature", "seed", "num_retries", "max_tokens"}:
         raise ValueError("UNSUPPORTED_HARNESS_MODEL_ARGUMENTS")
     temperature = arguments.get("temperature", 0.0)
@@ -84,6 +88,8 @@ def _harness_arguments(arguments: dict[str, Any]) -> None:
     retries = arguments.get("num_retries")
     if retries is not None and (type(retries) is not int or not 0 <= retries <= 20):
         raise ValueError("INVALID_HARNESS_MODEL_ARGUMENTS")
+    if local and "num_retries" in arguments and (type(retries) is not int or retries != 0):
+        raise ValueError("LOCAL_HARNESS_RETRIES_MUST_BE_ZERO")
     tokens = arguments.get("max_tokens")
     if tokens is not None and (type(tokens) is not int or tokens <= 0):
         raise ValueError("INVALID_HARNESS_MODEL_ARGUMENTS")
@@ -103,6 +109,46 @@ def _openai_model(model: str) -> bool:
     return bool(re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", model)) and model.startswith(
         ("gpt-", "chatgpt-", "o1", "o3", "o4", "ft:gpt-")
     )
+
+
+def _local_model(model: str) -> bool:
+    # Alias grammar also fits the signed sidecar protocol. Explicit cloud tags
+    # are rejected, but an alias cannot attest what a local server executes.
+    return bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", model)) and not model.lower().endswith(
+        (":cloud", "-cloud")
+    )
+
+
+def _probe_local_models(config: BenchmarkConfig) -> dict[str, Any]:
+    """Bounded local metadata request; no key lookup, model load, or generation."""
+    import httpx
+
+    if config.local_api_base is None:
+        raise ValueError("LOCAL_API_BASE_REQUIRED")
+    base = validate_local_api_base(config.local_api_base)
+    payload = bytearray()
+    with httpx.Client(trust_env=False, follow_redirects=False, timeout=5.0) as client:
+        with client.stream("GET", base + "/models", headers={
+            "Authorization": "Bearer safe-local-no-key", "Accept-Encoding": "identity",
+        }) as response:
+            response.raise_for_status()
+            if response.headers.get("content-encoding", "identity") != "identity":
+                raise ValueError("LOCAL_MODEL_LIST_ENCODING_DENIED")
+            for chunk in response.iter_raw():
+                payload.extend(chunk)
+                if len(payload) > 65_536:
+                    raise ValueError("LOCAL_MODEL_LIST_TOO_LARGE")
+    document = strict_json(payload.decode("utf-8"), max_bytes=65_536)
+    if not isinstance(document, dict) or not isinstance(document.get("data"), list):
+        raise ValueError("LOCAL_MODEL_LIST_INVALID")
+    available = {row["id"] for row in document["data"]
+                 if isinstance(row, dict) and isinstance(row.get("id"), str)}
+    required = {config.llm_agent, config.llm_user}
+    if not required.issubset(available):
+        raise ValueError("LOCAL_REQUIRED_MODELS_UNAVAILABLE")
+    return {"verified": True, "status": "selected_models_listed", "api_base": base,
+            "selected_models": sorted(required), "inference_verified": False,
+            "local_execution_attested": False, "model_weights_attested": False}
 
 
 def _pinned_judge(root: Path) -> tuple[str, dict[str, Any], int]:
@@ -179,6 +225,9 @@ def _probe_service(config: BenchmarkConfig) -> dict[str, Any]:
     )
     from safe_agent.inference.episode_gateway import EpisodeUnixTransport
     from safe_agent.inference_service.__main__ import _secret_from_file
+    from safe_agent.inference_service.providers.local_openai_episode import (
+        local_openai_backend_capabilities,
+    )
     from safe_agent.inference_service.providers.openai_episode import openai_backend_capabilities
 
     socket_path = Path(os.environ["SAFE_EPISODE_SOCKET"])
@@ -188,11 +237,14 @@ def _probe_service(config: BenchmarkConfig) -> dict[str, Any]:
     if not key_path.is_absolute() or key_path.resolve() != key_path:
         raise ValueError("DISPATCH_KEY_PATH_DENIED")
     authenticator = EpisodeDispatchAuthenticator(_secret_from_file(key_path))
+    backend = (
+        local_openai_backend_capabilities(model=config.llm_agent, base_url=config.local_api_base)
+        if config.model_route == "local" and config.local_api_base is not None
+        else openai_backend_capabilities(model=config.llm_agent)
+    )
     response = EpisodeUnixTransport(socket_path, timeout_seconds=5).capabilities(
         authenticator,
-        expected=EpisodeServiceCapabilities(
-            backend=openai_backend_capabilities(model=config.llm_agent)
-        ),
+        expected=EpisodeServiceCapabilities(backend=backend),
     )
     return {"verified": True, "configuration": response.reply.capabilities.model_dump(mode="json"),
             "proof_sha256": content_hash(response.model_dump(mode="json")),
@@ -201,7 +253,7 @@ def _probe_service(config: BenchmarkConfig) -> dict[str, Any]:
 
 def preflight_run(config: BenchmarkConfig, *, tau_root: Path | None = None,
                   offline: bool = False) -> dict[str, Any]:
-    """Inspect launch readiness; only online mode contacts a local Unix socket.
+    """Inspect launch readiness; online mode contacts declared local endpoints.
 
     ``ready_for_attempt`` means the declared launch requirements pass. The
     provider key is checked only for presence in the trusted harness process;
@@ -213,10 +265,13 @@ def preflight_run(config: BenchmarkConfig, *, tau_root: Path | None = None,
         "schema_version": "safe_agent.tau3_preflight.v1", "kind": "benchmark_preflight",
         "status": "blocked", "offline": offline, "model_calls": 0,
         "provider_requests": 0, "provider_access_verified": False,
+        "inference_requests": 0, "model_server_metadata_requests": 0,
+        "model_route": config.model_route,
         "config_sha256": None, "run_id": config.run_id,
         "configuration_validated": False, "ready_for_attempt": False,
         "issues": issues, "warnings": warnings,
         "sidecar": {"verified": False, "status": "not_checked"},
+        "local_server": {"verified": False, "status": "not_checked"},
         "billing_scope": "SAFE reservation headroom only; total external invoices are not capped",
     }
     try:
@@ -266,14 +321,32 @@ def preflight_run(config: BenchmarkConfig, *, tau_root: Path | None = None,
     if config.stage == "final" and not config.development_task_ids:
         warnings.append("NO_DECLARED_DEVELOPMENT_EXPOSURE_REVIEW_REQUIRED")
 
-    for model in (config.llm_agent, config.llm_user):
-        if not _openai_model(model):
+    local = config.model_route == "local"
+    if local:
+        try:
+            if config.local_api_base is None:
+                raise ValueError("LOCAL_API_BASE_REQUIRED")
+            validate_local_api_base(config.local_api_base)
+        except (ValueError, TypeError):
+            issues.append("LOCAL_API_BASE_INVALID")
+        if config.stage != "development" or inventory["selected_tasks_with_nl_assertions"]:
+            issues.append("LOCAL_ROUTE_REQUIRES_DEVELOPMENT_TASKS_WITHOUT_HOSTED_JUDGE")
+        if not all(_local_model(model) for model in (config.llm_agent, config.llm_user)):
+            issues.append("LOCAL_MODEL_ALIASES_INVALID_OR_CLOUD_TAGGED")
+        warnings.append("LOCAL_SERVER_EXECUTION_AND_MODEL_WEIGHTS_NOT_ATTESTED")
+        report["billing_scope"] = (
+            "Local endpoint condition; reservation holds and upstream zero prices do not "
+            "measure hardware, electricity, or server operating costs"
+        )
+    else:
+        if config.model_route != "openai" or config.local_api_base is not None:
+            issues.append("MODEL_ROUTE_CONFIGURATION_INVALID")
+        if not all(_openai_model(model) for model in (config.llm_agent, config.llm_user)):
             issues.append("PREFLIGHT_SUPPORTS_EXPLICIT_OPENAI_MODEL_NAMES_ONLY")
-            break
     try:
-        _harness_arguments(config.llm_args_user)
+        _harness_arguments(config.llm_args_user, local=local)
         if config.system == "llm_agent":
-            _harness_arguments(config.llm_args_agent)
+            _harness_arguments(config.llm_args_agent, local=local)
             report["safe_budget_applies"] = False
         else:
             budgets = _runtime_configuration(config)
@@ -291,7 +364,7 @@ def preflight_run(config: BenchmarkConfig, *, tau_root: Path | None = None,
                     or run["max_tokens"] < minimum_token_hold * conversations
                     or (hold and run["max_cost_microusd"] < hold * conversations)):
                 issues.append("RUN_CANNOT_RESERVE_ONE_ATTEMPT_PER_CONVERSATION")
-            if not hold:
+            if not hold and not local:
                 warnings.append("ZERO_COST_HOLD_IS_NOT_FREE_PROVIDER_INFERENCE")
             effective = config.model_copy(update={"episode_budget": episode, "run_budget": run})
             report["safe_reservation_headroom"] = reservation_headroom(effective, conversations)
@@ -300,12 +373,14 @@ def preflight_run(config: BenchmarkConfig, *, tau_root: Path | None = None,
 
     try:
         judge, judge_args, default_retries = _pinned_judge(root)
+        provider = "local_openai_compatible" if local else "openai"
+        harness_retries = 0 if local else default_retries
         roles: dict[str, dict[str, Any]] = {
-            "agent": {"model": config.llm_agent, "provider": "openai",
+            "agent": {"model": config.llm_agent, "provider": provider,
                       "provider_num_retries": 0 if config.system == "safe_agent" else
-                      _reported_retries(config.llm_args_agent, default_retries)},
-            "user": {"model": config.llm_user, "provider": "openai",
-                     "provider_num_retries": _reported_retries(config.llm_args_user, default_retries)},
+                      _reported_retries(config.llm_args_agent, harness_retries)},
+            "user": {"model": config.llm_user, "provider": provider,
+                     "provider_num_retries": _reported_retries(config.llm_args_user, harness_retries)},
         }
         if inventory["selected_tasks_with_nl_assertions"]:
             roles["judge"] = {"model": judge, "provider": "openai",
@@ -335,10 +410,21 @@ def preflight_run(config: BenchmarkConfig, *, tau_root: Path | None = None,
     if any(os.environ.get(name) for name in
            ("OPENAI_BASE_URL", "OPENAI_API_BASE", "LITELLM_PROXY_API_BASE", "LITELLM_API_BASE")):
         issues.append("PROVIDER_ENDPOINT_OVERRIDE_UNSUPPORTED")
-    credential_present = bool(os.environ.get("OPENAI_API_KEY"))
-    report["harness_credential_presence"] = credential_present
-    if not credential_present:
-        issues.append("HARNESS_OPENAI_CREDENTIAL_NOT_CONFIGURED")
+    if local:
+        report["harness_credential_presence"] = "not_required_for_local_route"
+        if report["configuration_validated"]:
+            report["model_server_metadata_requests"] = 1
+            report["provider_requests"] = 1
+            try:
+                report["local_server"] = _probe_local_models(config)
+            except Exception:
+                issues.append("LOCAL_MODEL_SERVER_UNAVAILABLE_OR_MODELS_MISSING")
+    else:
+        report["local_server"] = {"verified": False, "status": "not_used_by_hosted_route"}
+        credential_present = bool(os.environ.get("OPENAI_API_KEY"))
+        report["harness_credential_presence"] = credential_present
+        if not credential_present:
+            issues.append("HARNESS_OPENAI_CREDENTIAL_NOT_CONFIGURED")
     if config.system == "safe_agent":
         if not os.environ.get("SAFE_EPISODE_SOCKET") or not os.environ.get("SAFE_EPISODE_DISPATCH_KEY_FILE"):
             issues.append("SIDECAR_SOCKET_AND_DISPATCH_KEY_NOT_CONFIGURED")

@@ -124,6 +124,8 @@ The provided configurations are:
 | `tau3-dev-baseline.toml` | Matched stock retail pilot | 5 |
 | `tau3-bank-dev-safe.toml` | SAFE banking development pilot | 5 |
 | `tau3-bank-dev-baseline.toml` | Matched stock banking pilot | 5 |
+| `tau3-bank-dev-local-safe.toml` | Local SAFE banking development pilot | 5 |
+| `tau3-bank-dev-local-baseline.toml` | Matched local stock banking pilot | 5 |
 | `tau3-v1.0.1.toml` | Full banking coverage, one trial | 97 |
 | `tau3-final.toml` | Full banking SAFE evaluation, four trials | 388 |
 | `tau3-final-baseline.toml` | Matched stock LLMAgent evaluation | 388 |
@@ -139,10 +141,19 @@ source-order IDs explicitly: retail `0`–`4`, banking `task_001`–`task_005`. 
 retain actual attempted schedules and carry exposure into later configs; untouched
 templates do not represent completed runs. See [TAU3_PILOTS.md](TAU3_PILOTS.md).
 
+The local pair declares `model_route="local"` and an explicit loopback
+`local_api_base`. Agent and user use the same raw local model alias. Record
+installed weight digest, server version, context, quantization, and hardware as
+experiment conditions; an endpoint or alias does not independently attest them.
+Local runs are development-only and preflight rejects selected NL assertions.
+The frozen hosted judge is unchanged; full coverage/final runs retain the hosted
+route. The five local tasks are the same source-order banking selection already
+used by the hosted pilot, not a new selection optimized for model outcomes.
+
 `run` invokes the selected model, official user simulator, and applicable
 graders. Configure the supported SAFE inference route and providers first. No
 model evaluation is implied by successful inspection, preflight, or fixture tests.
-Use the hosted environment from [TAU3_RUNTIME.md](TAU3_RUNTIME.md), including
+Use the chosen route's environment from [TAU3_RUNTIME.md](TAU3_RUNTIME.md), including
 `LITELLM_LOCAL_MODEL_COST_MAP=True` and `LITELLM_MODE=PRODUCTION`.
 
 ```sh
@@ -154,7 +165,10 @@ python -m safe_agent.benchmarks.tau3 run \
 
 Add `--offline` to preflight for configuration checks without keys or a service.
 Online preflight authenticates the declared sidecar configuration without
-inference and checks harness credential presence; provider access stays untested.
+inference. Hosted mode checks harness credential presence; local mode checks a
+bounded model-list response for both configured aliases. Offline mode contacts
+neither the sidecar nor model server. Alias availability does not test model
+inference, tool/JSON support, or where weights execute.
 Canonical `run` repeats the fresh gate before artifacts or official execution.
 
 Run the two final configurations after freezing code, model identifiers,
@@ -167,9 +181,11 @@ will diverge as assistant behavior changes.
 The first wrapper is serial, sets no task filter, disables automatic review and
 resume, uses simulation `max_retries=0`, and enables communication-format
 validation for both systems. SAFE's provider backend also disables automatic
-retries. Separately, the pinned stock agent, user simulator, and NL judge default
-to provider `num_retries=3` when absent or null. These settings are not measured
-request counts. A nonempty output directory is rejected rather than overwritten or
+retries. For hosted runs, the pinned stock agent, user simulator, and NL judge
+default to provider `num_retries=3` when absent or null. The local route explicitly
+sets stock/user provider retries to zero and permits no required NL judge.
+These settings are not measured request counts. A nonempty output directory is
+rejected rather than overwritten or
 silently resumed. Interrupted trials stay visible; a deliberate new attempt
 requires a new output directory and separate disclosure.
 
@@ -292,6 +308,13 @@ a valid run-bound reconciliation is supplied. That reconciliation records a
 review assertion and its source hash; it is not independent provider attestation.
 Reserved microdollar allowances, including holds in scripted tests, are not
 actual spend and are never added to the known billed total.
+
+Local server-reported usage is also not an invoice or proof of zero experiment
+cost. Hardware, electricity, and runtime belong in the declared cost scope.
+Comparison and calibration require matching model routes and local endpoints;
+mixing local and hosted conditions does not isolate SAFE's runtime effect. A local
+pilot cannot calibrate the hosted coverage/final examples or produce a final
+submission bundle.
 
 ## Paired report and private submission tooling
 

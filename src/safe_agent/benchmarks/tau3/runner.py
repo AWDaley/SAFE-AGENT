@@ -15,7 +15,7 @@ from typing import Any
 
 from . import TAU_COMMIT
 from .adapter import official_agent_class
-from .config import CANONICAL_RUNTIME_FACTORY, BenchmarkConfig
+from .config import CANONICAL_RUNTIME_FACTORY, BenchmarkConfig, harness_model_settings
 from .inventory import content_hash, inspect_benchmark
 from .protocol import RuntimeContext, RuntimeFactory
 
@@ -107,6 +107,8 @@ def register_safe_agent(
 def text_run_config(config: BenchmarkConfig, *, agent_name: str, output_dir: Path) -> Any:
     from tau2.data_model.simulation import TextRunConfig  # type: ignore[import-untyped]
 
+    agent_model, agent_args = harness_model_settings(config, "agent")
+    user_model, user_args = harness_model_settings(config, "user")
     values = dict(
         domain=config.domain,
         agent=agent_name,
@@ -115,10 +117,10 @@ def text_run_config(config: BenchmarkConfig, *, agent_name: str, output_dir: Pat
         task_ids=config.task_ids,
         num_tasks=config.num_tasks,
         num_trials=config.num_trials,
-        llm_agent=config.llm_agent,
-        llm_args_agent=dict(config.llm_args_agent),
-        llm_user=config.llm_user,
-        llm_args_user=dict(config.llm_args_user),
+        llm_agent=agent_model,
+        llm_args_agent=agent_args,
+        llm_user=user_model,
+        llm_args_user=user_args,
         max_steps=config.max_steps,
         max_errors=config.max_errors,
         max_concurrency=1,
@@ -195,6 +197,12 @@ def run_official(
             # No run directory, official simulator, budget hold, or provider
             # dispatch exists when launch configuration is rejected here.
             raise PreflightError(preflight)
+    if config.model_route == "local" and (
+        config.stage != "development" or inventory["selected_tasks_with_nl_assertions"]
+    ):
+        # Injected/custom fixtures also cannot turn the local route into an
+        # implicit hosted-judge run, even though they skip canonical preflight.
+        raise ValueError("LOCAL_ROUTE_REQUIRES_DEVELOPMENT_TASKS_WITHOUT_HOSTED_JUDGE")
     output_dir = Path(config.output_dir).resolve()
     if output_dir.exists() and any(output_dir.iterdir()):
         raise FileExistsError("Run directory is not empty; choose a new run ID/output directory")
@@ -238,9 +246,19 @@ def run_official(
         "preflight_sha256": content_hash(preflight) if preflight is not None else None,
         "billing_cap_scope": "SAFE durable reservation limits; external billed spend is not independently capped/verified",
         "expected_cost_components": ["agent", "user"]
-        + (["agent_provider_billing"] if config.system == "safe_agent" else [])
+        + (["infrastructure"] if config.model_route == "local" else
+           ["agent_provider_billing"] if config.system == "safe_agent" else [])
         + (["judge"] if inventory["selected_tasks_with_nl_assertions"] else []),
+        "model_route": config.model_route,
+        "local_api_base": config.local_api_base,
+        "local_execution_attested": False,
+        "model_weights_attested": False,
     }
+    if config.model_route == "local":
+        manifest["billing_cap_scope"] = (
+            "Local endpoint development condition; SAFE reservation limits do not measure "
+            "hardware, electricity, or server operating costs"
+        )
     manifest_path = output_dir / "manifest.json"
     previous_umask = os.umask(0o077)
     try:
@@ -268,7 +286,10 @@ def run_official(
         _write_json(manifest_path, manifest)
         from tau2.runner import run_domain  # type: ignore[import-untyped]
 
-        results = run_domain(official_config)
+        from .local_harness import harness_transport
+
+        with harness_transport(config):
+            results = run_domain(official_config)
         # run_domain saves its own unchanged Results. Store official metric
         # output as well; this reads saved rewards and never invokes a judge.
         from tau2.metrics.agent_metrics import compute_metrics  # type: ignore[import-untyped]

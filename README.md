@@ -46,6 +46,12 @@ lock and TAL pin; the office profile below retains its existing pin and workflow
 Start with the [τ³ runtime runbook](docs/TAU3_RUNTIME.md) for free offline checks,
 then the [pilot workflow](docs/TAU3_PILOTS.md) for explicit matched task selections,
 no-inference readiness checks, and reservation calibration from real saved evidence.
+Choose the [local Ollama pilot](docs/TAU3_RUNTIME.md#preparing-a-local-development-pilot)
+to use installed local weights without hosted API fees, or the
+[hosted OpenAI route](docs/TAU3_RUNTIME.md#preparing-a-hosted-pilot). The local option
+covers a declared five-task banking development pair; full coverage and final
+evaluation retain the hosted route and unchanged official judge. Local hardware,
+power, model downloads, and runtime still have costs.
 The [evaluation protocol](docs/TAU3_EVALUATION_PROTOCOL.md) defines the matched
 SAFE/stock-agent comparison. Authored harness fixtures establish integration
 behavior; no model-backed pilot or full-domain capability score has been produced.

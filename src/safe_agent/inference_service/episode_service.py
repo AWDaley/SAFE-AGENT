@@ -17,10 +17,12 @@ from typing import Protocol
 
 from fastapi import FastAPI, Request
 from fastapi.responses import Response
+from pydantic import SecretStr
 from starlette.concurrency import run_in_threadpool
 
 from safe_agent.contracts.episode_inference import (
     EpisodeBackendCapabilities,
+    EpisodeBackendRoute,
     EpisodeCapabilitiesReply,
     EpisodeCapabilitiesRequestEnvelope,
     EpisodeDispatchAuthenticator,
@@ -164,12 +166,31 @@ def create_episode_service(*, model: str, authenticator: EpisodeDispatchAuthenti
     return app
 
 
+def backend_from_environment(*, model: str, dispatch_key: SecretStr) -> ModelBackend:
+    """Select one route before startup; a local route never reads a hosted key."""
+    route = EpisodeBackendRoute.model_validate({
+        "kind": os.environ.get("SAFE_EPISODE_BACKEND", "hosted_openai"),
+        "local_api_base": os.environ.get("SAFE_EPISODE_LOCAL_BASE_URL"),
+    })
+    if route.kind == "local_openai":
+        from safe_agent.inference_service.providers.local_openai_episode import (
+            LocalOpenAIEpisodeBackend,
+        )
+
+        assert route.local_api_base is not None
+        return LocalOpenAIEpisodeBackend(model=model, base_url=route.local_api_base)
+    from safe_agent.inference_service.providers.openai_episode import OpenAIEpisodeBackend
+
+    provider_key = _secret_from_file(Path(os.environ["SAFE_EPISODE_OPENAI_KEY_FILE"]))
+    if dispatch_key == provider_key:
+        raise ValueError("SEPARATE_PROVIDER_AND_DISPATCH_KEYS_REQUIRED")
+    return OpenAIEpisodeBackend(model=model, api_key=provider_key)
+
+
 def main() -> None:
     import stat
 
     import uvicorn
-
-    from safe_agent.inference_service.providers.openai_episode import OpenAIEpisodeBackend
 
     os.umask(0o077)
     root = Path(os.environ["SAFE_EPISODE_SERVICE_DIR"])
@@ -178,11 +199,8 @@ def main() -> None:
             or info.st_uid != os.getuid() or info.st_mode & 0o077):
         raise ValueError("EPISODE_SERVICE_DIRECTORY_DENIED")
     key = _secret_from_file(Path(os.environ["SAFE_EPISODE_DISPATCH_KEY_FILE"]))
-    provider_key = _secret_from_file(Path(os.environ["SAFE_EPISODE_OPENAI_KEY_FILE"]))
-    if key == provider_key:
-        raise ValueError("SEPARATE_PROVIDER_AND_DISPATCH_KEYS_REQUIRED")
     model = os.environ["SAFE_EPISODE_MODEL"]
-    backend = OpenAIEpisodeBackend(model=model, api_key=provider_key)
+    backend = backend_from_environment(model=model, dispatch_key=key)
     app = create_episode_service(model=model, authenticator=EpisodeDispatchAuthenticator(key),
                                  backend=backend, fence=DurableServiceFence(root / "dispatch.sqlite"))
     with OwnedUnixListener(root / "episode.sock") as listener:

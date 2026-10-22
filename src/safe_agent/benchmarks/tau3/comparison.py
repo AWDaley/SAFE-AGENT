@@ -21,7 +21,7 @@ from typing import Any, Literal
 from pydantic import Field
 
 from . import EXPECTED_TASK_COUNTS, TAU_COMMIT
-from .config import BenchmarkConfig
+from .config import BenchmarkConfig, harness_model_settings
 from .inventory import content_hash, pinned_source_manifest
 from .protocol import BoundaryModel
 from .reporting import _reward, _success, cost_accounting, pass_hat_k, summarize_saved_results
@@ -42,6 +42,8 @@ MATCHED_CONFIG_FIELDS = (
     "max_retries",
     "retrieval_config",
     "retrieval_config_kwargs",
+    "model_route",
+    "local_api_base",
     "llm_agent",
     "llm_args_agent",
     "llm_user",
@@ -201,13 +203,15 @@ def _recorded_metadata(manifest: dict[str, Any], config: BenchmarkConfig) -> Non
     )
     if config.stage in {"coverage", "final"}:
         _require(len(ids) == EXPECTED_TASK_COUNTS[config.domain], "FULL_DOMAIN_SCHEDULE_REQUIRED")
+    if config.model_route == "local":
+        _require(
+            type(inventory.get("selected_tasks_with_nl_assertions")) is int
+            and inventory["selected_tasks_with_nl_assertions"] == 0,
+            "LOCAL_ZERO_NL_ASSERTION_SCHEDULE_REQUIRED",
+        )
     official = manifest["official_config"]
     for name in (
         "domain",
-        "llm_agent",
-        "llm_args_agent",
-        "llm_user",
-        "llm_args_user",
         "num_trials",
         "seed",
         "max_steps",
@@ -218,6 +222,13 @@ def _recorded_metadata(manifest: dict[str, Any], config: BenchmarkConfig) -> Non
     ):
         _require(
             name in official and official[name] == getattr(config, name), "OFFICIAL_CONFIG_MISMATCH"
+        )
+    for role in ("agent", "user"):
+        model, arguments = harness_model_settings(config, role)
+        _require(
+            official.get("llm_" + role) == model
+            and official.get("llm_args_" + role) == arguments,
+            "OFFICIAL_CONFIG_MISMATCH",
         )
     _require(
         official.get("agent")
@@ -253,9 +264,10 @@ def _validate_info(info: dict[str, Any], manifest: dict[str, Any], config: Bench
         _require(info.get(name) == getattr(config, name), "RESULTS_INFO_MISMATCH")
     for role in ("agent", "user"):
         recorded = info[role + "_info"]
+        model, arguments = harness_model_settings(config, role)
         _require(
-            recorded.get("llm") == getattr(config, "llm_" + role)
-            and recorded.get("llm_args") == getattr(config, "llm_args_" + role)
+            recorded.get("llm") == model
+            and recorded.get("llm_args") == arguments
             and recorded.get("implementation") == manifest["official_config"][role],
             "RESULTS_MODEL_MISMATCH",
         )
@@ -401,6 +413,7 @@ def _load(run_dir: Path) -> _SavedRun:
             "additional_costs_sha256": costs_hash,
             "official_metrics_sha256": metrics_hash,
             "saved_artifact_binding_validated": bindings is not None,
+            "model_route_defaulted_from_legacy_config": "model_route" not in manifest["config"],
             "origin_authenticity_verified": False,
         },
     )
@@ -435,8 +448,11 @@ def _match(left: _SavedRun, right: _SavedRun) -> None:
         )
 
     def shared_official(run: _SavedRun) -> dict[str, Any]:
+        # Each role's exact effective routing was validated above. Local SAFE
+        # uses its sidecar, while stock uses LiteLLM's explicit loopback route;
+        # compare their already-matched logical agent settings here.
         return {
-            key: value
+            key: getattr(run.config, key) if key in {"llm_agent", "llm_args_agent"} else value
             for key, value in run.manifest["official_config"].items()
             if key not in {"agent", "save_to"}
         }
@@ -729,6 +745,10 @@ def _compare(
         "stage": left.config.stage,
         "matched_metadata_valid": True,
         "shared_condition": {
+            "model_route": left.config.model_route,
+            "local_api_base": left.config.local_api_base,
+            "model_weights_or_hardware_attested": False,
+            "model_identity_basis": "declared route, endpoint and model aliases; mutable local aliases are not weight attestations",
             "agent_model": left.config.llm_agent,
             "user_model": left.config.llm_user,
             "judge_model": left.manifest["judge_model"],

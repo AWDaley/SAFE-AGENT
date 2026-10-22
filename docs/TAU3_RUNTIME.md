@@ -11,9 +11,11 @@ the real pinned harness.
 
 This is implementation and integration evidence. It is not a completed
 97-task model evaluation, a competitive score, or a claim of complete natural-
-language policy enforcement. The first hosted backend is a fixed-origin OpenAI
-route. A local/open-weight backend has not been implemented. All fixture tests,
-source inspection, and diagnostics can run without a model key or paid API call.
+language policy enforcement. Model routes include fixed-origin hosted OpenAI and
+an explicit loopback OpenAI-compatible service for local development pilots.
+Neither route has produced a model-backed benchmark score in this implementation.
+All fixture tests, source inspection, and diagnostics can run without a model key
+or paid API call.
 
 The target and dependency revisions are deliberately separate:
 
@@ -158,7 +160,7 @@ containment.
 | Durable episode store | Run and episode budgets, version checks, hash-linked events, one pending action, result correlation, immutable call/authorization binding. |
 | Private conversation store | Owner-only run files, scoped references, source-linked private values, consent proposals, and recovery state. |
 | Domain admission | Reviewed TAL decision plus encoded retail/banking rules for identity, ownership, operation/schema, discovery, and applicable consent. |
-| Model sidecar | Signed finite requests over a Unix socket; fixed provider origin/model; no automatic provider retry; durable request fence. |
+| Model sidecar | Signed finite requests over a Unix socket; declared hosted origin or validated loopback endpoint and model; no automatic provider retry; durable request fence. |
 | Completion renderer | Mutation success requires a matching successful tool receipt; recipient-scoped private interpolation. |
 | Reporting | Official recorded rewards and metrics, complete schedule accounting, separate runtime diagnostics and cost uncertainty. |
 
@@ -211,7 +213,7 @@ price estimates or verified provider billing caps. No current prices are assumed
 
 Before a model-backed run, set the exact model IDs and arguments in a copied
 configuration, choose a new `run_id` and empty `output_dir`, and set your intended
-limits. The initial SAFE backend accepts `temperature` and optional `seed` only.
+limits. The SAFE backends accept `temperature` and optional `seed` only.
 Other model-specific settings require an explicit backend implementation and a
 new frozen comparison condition.
 
@@ -241,6 +243,8 @@ Keep the key files in an owner-controlled directory with mode `0700` as well.
 Set paths, not key values, and start the service in its own terminal:
 
 ```bash
+export SAFE_EPISODE_BACKEND=hosted_openai
+unset SAFE_EPISODE_LOCAL_BASE_URL
 export SAFE_EPISODE_SERVICE_DIR=/absolute/private/service-directory
 export SAFE_EPISODE_DISPATCH_KEY_FILE=/absolute/private/dispatch-key
 export SAFE_EPISODE_OPENAI_KEY_FILE=/absolute/private/agent-provider-key
@@ -252,7 +256,7 @@ The socket is created at `$SAFE_EPISODE_SERVICE_DIR/episode.sock`. The service
 stores a durable provider-request fence in the same directory. Keep that state
 through restarts. Deleting it discards the service's duplicate-request history.
 
-The current backend fixes the origin to `https://api.openai.com/v1`, disables
+The hosted backend fixes the origin to `https://api.openai.com/v1`, disables
 automatic retries, redirects, and environment proxy inheritance, and validates
 the model against the configured route. The provider key is absent from the
 projected candidate request. This is a trusted-host deployment profile, not a
@@ -271,7 +275,7 @@ export LITELLM_MODE=PRODUCTION
 ```
 
 `LITELLM_MODE=PRODUCTION` disables implicit `.env` loading by the frozen harness's
-LiteLLM dependency. The initial hosted preflight rejects endpoint overrides and
+LiteLLM dependency. Hosted preflight rejects endpoint overrides and
 credentials supplied inside model arguments.
 
 The official user simulator and any NL judge also need provider credentials in
@@ -320,6 +324,140 @@ unchanged upstream stock agent, user simulator, and NL judge use provider
 `num_retries=3` when absent or null. These are separate retry scopes, not measured
 call counts. Automatic review and resume are disabled. Use a new run ID and
 directory for an explicit new experiment; retain interrupted schedules and outcomes.
+
+## Preparing a local development pilot
+
+The local option sends the SAFE agent and official user simulator to a local
+OpenAI-compatible service; its paired stock run uses the same service and model.
+The supplied banking pair selects `task_001`–`task_005`, exactly as the hosted
+pilot does. These five pinned tasks have no NL assertions. Local preflight rejects
+any selection requiring the unchanged hosted judge, and local runs are limited to
+`stage="development"`. Full coverage, final runs, and submission preparation
+retain the hosted route; no judge is substituted or assertion removed.
+
+With locally installed weights and cloud features disabled, this path needs no
+hosted model account or API payment. Hardware, electricity, storage, download
+time, and inference time remain real costs. A loopback URL establishes the client
+destination; it does not attest where a server executes the model or constrain
+that server's own network access. No weights have been downloaded or actual
+Ollama model quality measured by the implementation fixtures.
+
+### 1. Prepare a local model server
+
+Install [Ollama](https://docs.ollama.com/quickstart) separately on a host with
+enough RAM or VRAM for your model and context. The templates use
+[`qwen2.5:7b`](https://ollama.com/library/qwen2.5), a tool-capable example, not a
+validated recommendation for task success. SAFE needs JSON output; the stock
+agent and user simulator also need native tool calls. Ollama documents
+[OpenAI-compatible chat, tools, and JSON fields](https://docs.ollama.com/api/openai-compatibility)
+and [structured output support](https://docs.ollama.com/capabilities/structured-outputs).
+
+For a standalone server, use a dedicated terminal:
+
+```bash
+OLLAMA_HOST=127.0.0.1:11434 \
+OLLAMA_NO_CLOUD=1 \
+OLLAMA_CONTEXT_LENGTH=32768 \
+OLLAMA_NUM_PARALLEL=1 \
+ollama serve
+```
+
+If Ollama already runs as an application or service, configure that process and
+restart it instead of starting a second server. The official
+[server configuration and cloud-disable guidance](https://docs.ollama.com/faq)
+describes each platform. Keep the server bound to loopback and disable its cloud
+features. The 32,768-token context is an explicit example, not a measured capacity
+requirement or a completion guarantee. Larger contexts consume more memory; see
+[Ollama's context guidance](https://docs.ollama.com/context-length). SAFE's prompt
+limit is in bytes and does not establish that a model's token context is sufficient.
+
+In another terminal, download the example only if it is not already installed,
+then record the model and server metadata:
+
+```bash
+ollama pull qwen2.5:7b
+ollama --version
+ollama list
+ollama show qwen2.5:7b
+```
+
+The pull downloads model files; it is separate from inference. Preserve the
+resolved model digest, quantization, server version, context setting, and host
+hardware with the experiment notes. A model tag alone can change. Preflight does
+not verify the installed weights, their digest, available memory, tool behavior,
+or server liveness by sending inference.
+
+### 2. Configure the local SAFE sidecar
+
+Provision the owner-only service directory and dispatch-key file described in
+the hosted setup above. Local mode needs no agent-provider-key file. Start its
+trusted-host service in the same network namespace as Ollama:
+
+```bash
+export SAFE_EPISODE_BACKEND=local_openai
+export SAFE_EPISODE_LOCAL_BASE_URL=http://127.0.0.1:11434/v1
+export SAFE_EPISODE_MODEL=qwen2.5:7b
+export SAFE_EPISODE_SERVICE_DIR=/absolute/private/local-service-directory
+export SAFE_EPISODE_DISPATCH_KEY_FILE=/absolute/private/local-dispatch-key
+python -m safe_agent.inference_service.episode_service
+```
+
+This backend reads no OpenAI key file and sends no Authorization header. It uses
+the declared loopback endpoint with redirects, environment proxies, and automatic
+retries disabled. The signed capability exchange binds the declared endpoint and
+raw model alias. Keep its durable fence through restarts, as for hosted mode.
+
+The offline no-network container probe remains a separate acceptance profile.
+A container's `127.0.0.1` is not the host's Ollama service. This local walkthrough
+does not claim the container profile's mount or process isolation.
+
+### 3. Check and run the matched local pair
+
+Activate the pinned benchmark environment and retain its verified source/data
+paths. Use a credential-free benchmark shell and set:
+
+```bash
+export SAFE_EPISODE_SOCKET=/absolute/private/local-service-directory/episode.sock
+export SAFE_EPISODE_DISPATCH_KEY_FILE=/absolute/private/local-dispatch-key
+export LITELLM_LOCAL_MODEL_COST_MAP=True
+export LITELLM_MODE=PRODUCTION
+
+python -m safe_agent.benchmarks.tau3 preflight \
+  --config configs/benchmarks/tau3-bank-dev-local-safe.toml \
+  --tau-root "$TAU3_SOURCE_ROOT"
+python -m safe_agent.benchmarks.tau3 preflight \
+  --config configs/benchmarks/tau3-bank-dev-local-baseline.toml \
+  --tau-root "$TAU3_SOURCE_ROOT"
+python -m safe_agent.benchmarks.tau3 run \
+  --config configs/benchmarks/tau3-bank-dev-local-safe.toml \
+  --tau-root "$TAU3_SOURCE_ROOT"
+python -m safe_agent.benchmarks.tau3 run \
+  --config configs/benchmarks/tau3-bank-dev-local-baseline.toml \
+  --tau-root "$TAU3_SOURCE_ROOT"
+```
+
+Add `--offline` to preflight for static checks before installing or starting a
+model server. Online SAFE preflight authenticates the sidecar; stock preflight
+does not require it. Online local preflight checks the server's bounded model
+list for both configured aliases, without loading weights or generating text.
+`provider_access_verified=false` remains explicit: alias presence is not a test
+of inference, JSON/tool behavior, or locally executed weights. The first `run`
+is the actual model attempt.
+
+Both templates explicitly set `model_route="local"`,
+`local_api_base="http://127.0.0.1:11434/v1"`, and the same raw agent/user model
+alias. Use aliases without `/`; do not put endpoints or credentials in
+`llm_args_agent` or `llm_args_user`. The trusted harness adapter adds its provider
+prefix, local endpoint, nonsecret compatibility key, and zero provider retries.
+That placeholder is not an account credential. Change the model in both copied
+configs and the sidecar together, with new run IDs/output paths, for a new pair.
+
+The existing SAFE reservation units remain finite and unchanged: the supplied
+run hold permits at most 100 SAFE model attempts across five conversations. These
+units are not local API charges or hardware-cost estimates. Record all failed,
+uncertain, capped, and incomplete attempts. Local server-reported tokens do not
+establish zero total experiment cost. Compare the local pair with each other;
+different local and hosted model conditions cannot isolate SAFE's runtime effect.
 
 ## Reading the evidence
 
@@ -389,7 +527,7 @@ the SAFE runtime and its constraints under matched benchmark conditions. A claim
 about a different named competitor requires that competitor's supported adapter,
 the same task/evaluator condition, and its own recorded run.
 
-Remaining empirical work is explicit: hosted pilot, complete retail/banking
+Remaining empirical work is explicit: actual local and hosted pilots, complete retail/banking
 coverage runs, calibration of limits from observed usage, four-trial matched
 banking evaluation, reviewed false-refusal/policy outcomes, and provider-billing
 reconciliation. No leaderboard submission or production rollout is part of the

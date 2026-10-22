@@ -11,6 +11,8 @@ from typing import Any, Literal
 
 from pydantic import Field
 
+from safe_agent.contracts.episode_inference import validate_local_api_base
+
 from . import TAU_COMMIT
 from .protocol import BoundaryModel
 from .runner import _write_json
@@ -76,6 +78,29 @@ def _money(value: Any) -> Decimal | None:
     return result
 
 
+def _route_provenance(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Normalize only route metadata; old reports can contain partial configs."""
+    config = manifest.get("config", {})
+    route = config.get("model_route", "openai")
+    base = config.get("local_api_base")
+    if route == "local":
+        try:
+            if not isinstance(base, str):
+                raise ValueError
+            validate_local_api_base(base)
+        except ValueError:
+            raise ValueError("RECORDED_LOCAL_ROUTE_INVALID") from None
+    elif route != "openai" or base is not None:
+        raise ValueError("RECORDED_MODEL_ROUTE_INVALID")
+    return {
+        "model_route": route,
+        "local_api_base": base,
+        "defaulted_from_legacy_config": "model_route" not in config,
+        "basis": "declared saved configuration; no independent endpoint, weight or hardware attestation",
+        "model_weights_or_hardware_attested": False,
+    }
+
+
 def cost_accounting(
     manifest: dict[str, Any],
     simulations: list[dict[str, Any]],
@@ -87,6 +112,12 @@ def cost_accounting(
     known. Exactly one full-run agent reconciliation can replace upstream agent
     charges; its provenance is asserted by the supplied reviewed ledger.
     """
+    route = _route_provenance(manifest)["model_route"]
+    expected_components = set(manifest.get("expected_cost_components", []))
+    if route == "local":
+        # LiteLLM can report zero when a local alias has no known token price.
+        # It cannot establish the cost of running that model on local hardware.
+        expected_components.add("infrastructure")
     additional = additional_costs or []
     reconciliation_rows = [
         event for event in additional if event.get("category") == "agent_provider_billing"
@@ -219,7 +250,7 @@ def cost_accounting(
                 pair_known[pair]["agent"] = amount
             if allocated != scheduled or total != Decimal(reconciled.amount_usd):
                 raise ValueError("AGENT_BILLING_ALLOCATIONS_MUST_COVER_SCHEDULE_AND_TOTAL")
-    unavailable = sorted(set(manifest.get("expected_cost_components", [])) - categories_seen)
+    unavailable = sorted(expected_components - categories_seen)
     matrix_complete = set(grouped) == scheduled and all(len(rows) == 1 for rows in grouped.values())
     successes = sum(
         len(grouped[pair]) == 1
@@ -246,7 +277,7 @@ def cost_accounting(
         )
         + operating_failed_requests
     )
-    expected_pair_categories = set(manifest.get("expected_cost_components", [])) | categories_seen
+    expected_pair_categories = expected_components | categories_seen
     if reconciled is not None:
         expected_pair_categories.discard("agent_provider_billing")
         expected_pair_categories.add("agent")
@@ -266,6 +297,14 @@ def cost_accounting(
             "complete": not unknown,
         }
     summary = {
+        "model_route": route,
+        "upstream_cost_basis": (
+            "recorded upstream USD amounts; unknown local alias prices may be zero and do not measure hardware or electricity"
+            if route == "local"
+            else "recorded upstream USD amounts plus supplied additional ledgers; no independent billing attestation"
+        ),
+        "agent_operating_numerator_scope": "agent, agent extra, retrieval and attributed failed requests; excludes infrastructure",
+        "local_hardware_costs_independently_verified": False,
         "known_usd_by_category": {key: str(value) for key, value in sorted(known.items())},
         "known_total_usd": str(sum(known.values(), Decimal(0))),
         "missing_cost_entries": dict(missing),
@@ -391,6 +430,7 @@ def summarize_saved_results(
         "system": manifest["system"],
         "tau_commit": TAU_COMMIT,
         "report_basis": "recorded rewards only; no fresh judging",
+        "model_route_provenance": _route_provenance(manifest),
         "coverage": {
             "scheduled": len(scheduled),
             "recorded_attempts": len(simulations),

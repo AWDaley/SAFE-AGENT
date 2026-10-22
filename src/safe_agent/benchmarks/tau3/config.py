@@ -8,6 +8,8 @@ from typing import Literal, Self
 
 from pydantic import Field, JsonValue, model_validator
 
+from safe_agent.contracts.episode_inference import validate_local_api_base
+
 from . import TAU_COMMIT
 from .protocol import BoundaryModel
 
@@ -39,6 +41,8 @@ class BenchmarkConfig(BoundaryModel):
     max_retries: Literal[0] = 0
     retrieval_config: Literal["bm25"] = "bm25"
     retrieval_config_kwargs: dict[str, JsonValue] = Field(default_factory=dict)
+    model_route: Literal["openai", "local"] = "openai"
+    local_api_base: str | None = None
     llm_agent: str = "gpt-4.1-2025-04-14"
     llm_args_agent: dict[str, JsonValue] = Field(default_factory=_model_defaults)
     llm_user: str = "gpt-4.1-2025-04-14"
@@ -66,7 +70,39 @@ class BenchmarkConfig(BoundaryModel):
             raise ValueError("Coverage/final runs require the canonical SAFE runtime factory")
         if not self.llm_agent.strip() or not self.llm_user.strip():
             raise ValueError("Exact agent and user model identifiers are required")
+        if self.model_route == "local":
+            if self.local_api_base is None:
+                raise ValueError("The local route requires an explicit local_api_base")
+            validate_local_api_base(self.local_api_base)
+            if self.stage != "development":
+                raise ValueError("The local route currently supports development pilots only")
+        elif self.local_api_base is not None:
+            raise ValueError("The hosted route does not accept a local_api_base")
         return self
+
+
+def harness_model_settings(
+    config: BenchmarkConfig, role: Literal["agent", "user"]
+) -> tuple[str, dict[str, JsonValue]]:
+    """Resolve a declared route without secrets, imports, or provider calls.
+
+    SAFE's agent keeps the raw model alias because its Unix sidecar selects the
+    backend. The stock agent and simulated user use the pinned LiteLLM harness.
+    Endpoint and dummy-key arguments are inserted here, never accepted from
+    untrusted model arguments or forwarded to SAFE's planner.
+    """
+    model = config.llm_agent if role == "agent" else config.llm_user
+    arguments = dict(config.llm_args_agent if role == "agent" else config.llm_args_user)
+    if config.model_route == "local" and (role == "user" or config.system == "llm_agent"):
+        if config.local_api_base is None:
+            raise ValueError("LOCAL_API_BASE_REQUIRED")
+        arguments.update(
+            api_base=validate_local_api_base(config.local_api_base),
+            api_key="safe-local-no-key",
+            num_retries=0,
+        )
+        model = "openai/" + model
+    return model, arguments
 
 
 def load_config(path: str | Path) -> BenchmarkConfig:

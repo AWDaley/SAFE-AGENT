@@ -82,12 +82,16 @@ def validate_run_manifest(
         and manifest.get("status") == "complete",
         "COMPLETE_CANONICAL_SAFE_RUN_REQUIRED",
     )
-    config = BenchmarkConfig.model_validate(manifest["config"])
+    raw_config = manifest["config"]
+    _require(raw_config.get("model_route", "openai") == "openai",
+             "HOSTED_FINAL_SUBMISSION_REQUIRED")
+    config = BenchmarkConfig.model_validate(raw_config)
     _require(
         config.stage == "final"
         and config.system == "safe_agent"
         and config.run_id == manifest.get("run_id")
-        and manifest.get("config_sha256") == content_hash(config.model_dump())
+        # New optional defaults must not invalidate an older frozen manifest.
+        and manifest.get("config_sha256") == content_hash(raw_config)
         and manifest.get("evaluation_type") == "ALL"
         and manifest.get("automatic_review") is False
         and manifest.get("retries") == 0,
@@ -252,6 +256,8 @@ def prepare_submission(
     results_raw = _read_file(run_dir / "results.json", max_bytes=256_000_000)
     official_raw = _read_file(run_dir / "official_metrics.json", max_bytes=4_000_000)
     manifest = _load_json(manifest_raw)
+    _require(manifest["config"].get("model_route", "openai") == "openai",
+             "HOSTED_FINAL_SUBMISSION_REQUIRED")
     _require(manifest.get("saved_artifacts_sha256") == {
         "results.json": hashlib.sha256(results_raw).hexdigest(),
         "official_metrics.json": hashlib.sha256(official_raw).hexdigest(),
@@ -302,6 +308,8 @@ def prepare_submission(
         _write_json(temporary / "disclosures.json", {
             "run_id": config.run_id, "tau_commit": TAU_COMMIT,
             "config_sha256": manifest["config_sha256"],
+            "config_hash_basis": "raw saved config before normalization of optional defaults",
+            "model_route_defaulted_from_legacy_config": "model_route" not in manifest["config"],
             "safe_revision": manifest["safe_revision"],
             "config": {key: value for key, value in config.model_dump().items()
                        if key not in {"output_dir", "tau_root"}},

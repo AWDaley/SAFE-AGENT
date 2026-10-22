@@ -22,6 +22,7 @@ max_errors = 10
 max_concurrency = 1
 max_retries = 0
 retrieval_config = "bm25"
+model_route = "openai"
 llm_agent = "gpt-4.1-2025-04-14"
 llm_user = "gpt-4.1-2025-04-14"
 development_task_ids = ["task_001", "task_002", "task_003", "task_004", "task_005"]

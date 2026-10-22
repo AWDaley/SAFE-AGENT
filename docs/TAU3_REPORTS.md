@@ -25,6 +25,10 @@ bindings, the complete task/episode join, and a read-only private-ledger snapsho
 Complete natural task failures remain in the usage sample. Missing, ungraded,
 uncertain, capped, or scripted evidence withholds suggestions; authored fixtures
 cannot supply the missing empirical pilot.
+The route and local endpoint must match the target as well. Local evidence cannot
+calibrate hosted coverage/final configurations; local targets remain development
+conditions. Record server/weight/hardware conditions with the experiment because
+matching configured aliases does not independently verify those properties.
 
 For each resource, eligible evidence takes the largest complete episode's held
 usage, applies the explicit multiplier, then scales by the target schedule for
@@ -51,11 +55,18 @@ with owner-only permissions. Without `--output`, JSON is printed to stdout.
 The bootstrap sample limit is 100–10,000; the default is 2,000.
 
 The comparison validates the benchmark source and task inventory, scheduled
-task/trial matrix, agent/user/judge models and settings, retrieval condition,
-evaluator flags, and seeds before calculating paired differences. Differences
+task/trial matrix, model route and local endpoint, agent/user/judge models and
+settings, retrieval condition, evaluator flags, and seeds before calculating
+paired differences. Differences
 in SAFE-specific runtime limits are disclosed. The stock baseline keeps its
 own agent implementation. A comparison against a separately named commercial
 agent needs that agent's adapter and its own recorded experiment.
+
+For the local development pair, use `artifacts/tau3/bank-dev-local-safe` and
+`artifacts/tau3/bank-dev-local-baseline` after actual runs. Those five-task
+exploratory results are separate from a full-domain hosted comparison. A declared
+local route does not establish zero monetary cost: server-reported usage,
+reservation units, and unknown hardware/electricity costs remain distinct.
 
 The conservative operational view retains every scheduled pair: missing,
 ungraded, and infrastructure-failed outcomes count as failures. Duplicate or
@@ -79,9 +90,11 @@ attributed tool results, and SAFE's recorded model-attempt usage. User-only tool
 are excluded from agent-call counts. Missing usage remains visible; these
 trajectory observations do not establish every actual provider call or retry.
 The simulation wrapper uses `max_retries=0` and SAFE's provider backend uses zero
-automatic retries. The pinned stock agent, user simulator, and NL judge instead
-default to provider `num_retries=3` when absent or null. Those configuration
-values must not be reported as observed request counts.
+automatic retries. In the hosted route, the pinned stock agent, user simulator,
+and NL judge default to provider `num_retries=3` when absent or null. Local
+stock/user routing explicitly sets zero retries and rejects tasks needing the
+hosted judge. Those configuration values must not be reported as observed
+request counts.
 
 ## Reviewed failure categories
 
@@ -162,7 +175,7 @@ outcome matrix fixes that denominator and cost components remain missing.
 
 ## Prepare a private custom-submission bundle
 
-The command requires a complete final SAFE run: the canonical runtime, clean
+The command requires a complete hosted final SAFE run: the canonical runtime, clean
 recorded implementation revision, full domain, four or more trials, unchanged
 source inventory, complete graded trajectories, saved judge outputs, and
 matching saved-artifact hashes. Incomplete or infrastructure-failed attempts

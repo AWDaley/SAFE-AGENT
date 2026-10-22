@@ -21,6 +21,12 @@ PILOTS = (
         "tau3-dev-baseline.toml",
         ["0", "1", "2", "3", "4"],
     ),
+    (
+        "banking_knowledge",
+        "tau3-bank-dev-local-safe.toml",
+        "tau3-bank-dev-local-baseline.toml",
+        ["task_001", "task_002", "task_003", "task_004", "task_005"],
+    ),
 )
 
 
@@ -50,6 +56,19 @@ def test_pilot_runs_cannot_share_artifacts_with_each_other_or_final_examples():
     configs = [load_config(CONFIGS / name) for name in paths]
     assert len({config.run_id for config in configs}) == len(configs)
     assert len({Path(config.output_dir).resolve() for config in configs}) == len(configs)
+
+
+def test_local_pilots_declare_both_models_and_retain_hosted_development_selection():
+    local = load_config(CONFIGS / "tau3-bank-dev-local-safe.toml")
+    hosted = load_config(CONFIGS / "tau3-bank-dev-safe.toml")
+    assert local.model_route == "local"
+    assert local.local_api_base == "http://127.0.0.1:11434/v1"
+    assert local.llm_agent == local.llm_user == "qwen2.5:7b"
+    assert local.llm_args_agent == local.llm_args_user == {"temperature": 0.0}
+    assert local.task_ids == hosted.task_ids
+    assert local.development_task_ids == hosted.development_task_ids
+    assert hosted.model_route == "openai"
+    assert hosted.local_api_base is None
 
 
 @pytest.mark.parametrize("domain,safe_path,baseline_path,task_ids", PILOTS)

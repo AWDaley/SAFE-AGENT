@@ -20,7 +20,7 @@ The PR labels in the original plan are work-package names, not GitHub PR numbers
 | PR 0: frozen experiment | Exact τ source/data manifest, public operation catalog, isolated dependency lock, explicit paired pilot selections, no-inference launch preflight, schedule inspection and reservation headroom disclosure | Calibrate limits from the declared pilot before final evaluation. |
 | PR 1: durable episodes | Additive migrations, immutable lineage, serial calls, exact result bindings, shared run limits, SQLite and real PostgreSQL concurrency/recovery acceptance | Observe behavior under real inference latency and failures. |
 | PR 2: domain admission | Separate reviewed TAL API, retail/banking schemas, customer/resource scope, encoded preconditions, exact authorization bindings | Measure policy outcomes; the encoded rules are a declared subset of the full natural-language policy. |
-| PR 3: model route | Signed, bounded Unix-socket protocol; authenticated no-inference capability exchange; durable provider-request fence; fixed-origin OpenAI backend; SDK-wire, malformed-output, timeout, and privacy fixtures | Exercise the hosted route with an actual configured model and record usage/billing. |
+| PR 3: model route | Signed, bounded Unix-socket protocol; authenticated no-inference capability exchange; durable provider-request fence; fixed-origin OpenAI and explicit loopback development backends; malformed-output, timeout, and privacy fixtures | Exercise the selected route with an actual configured model; record usage, local hardware/server conditions, and applicable billing. |
 | PR 4: conversation | Field-aware private references, source-bound identity inputs, one-use action confirmation, receipt-backed completion, clarification and user guidance | Evaluate ordinary conversational correctness and policy-specific wording. |
 | PR 5: official loop | Actual SAFE runtime registered in the pinned official harness; sole upstream tool execution; privileged task metadata excluded | Run real model/user/evaluator trajectories. |
 | PR 6: retail | Pinned operation inventory and encoded constraints; authored runtime/harness and consent/scope cases | Five-task model pilot and complete 114-task coverage report. |
@@ -53,10 +53,12 @@ require separate adapters and recorded comparisons.
 1. Reproduce the free environment and acceptance checks in
    [the runtime runbook](TAU3_RUNTIME.md), then run offline preflight for the
    explicit retail/banking pairs in [the pilot workflow](TAU3_PILOTS.md).
-2. Configure a model route and the official user/judge provider access in the
-   appropriate trusted processes. Keep provider secrets outside source and
-   trajectory directories. Set `LITELLM_MODE=PRODUCTION` and run authenticated
-   preflight without inference; it verifies configuration, not provider access.
+2. Choose hosted OpenAI or the local banking pilot in the runtime runbook.
+   Hosted runs need user/judge provider access; the local pair uses local weights
+   for both model roles and tasks with no NL assertions. Keep secrets outside
+   source and trajectory directories. Set `LITELLM_MODE=PRODUCTION` and run
+   preflight without inference. Local readiness also checks a bounded model list;
+   neither route's readiness proves inference quality or actual execution location.
 3. Run the declared small pilots, retain their task IDs as development exposure,
    inspect actual failures, and use `calibrate` on the real saved SAFE evidence.
    Review its cap-increases-only proposal before changing finite limits; missing
@@ -73,7 +75,11 @@ combined. `inspect` makes their model-attempt headroom visible; the checked-in
 full-domain allowances may be too small to finish every conversation.
 Canonical `run` requires fresh preflight before artifacts or official execution.
 The wrapper and SAFE backend use zero retries at their respective layers;
-upstream stock/user/judge provider retries default to three when absent or null.
+hosted upstream stock/user/judge provider retries default to three when absent or
+null. The local route fixes stock/user provider retries at zero and rejects any
+selection needing the hosted judge. Local execution can avoid API fees, but
+hardware, power, and time remain costs. Coverage/final runs still use the hosted
+route. Local results cannot calibrate a different hosted condition.
 Readiness and retry settings do not establish actual provider usage or costs.
 
 See [the evaluation protocol](TAU3_EVALUATION_PROTOCOL.md) for exact metrics,
