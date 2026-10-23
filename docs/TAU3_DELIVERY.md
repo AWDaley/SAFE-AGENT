@@ -44,9 +44,11 @@ alone does not deny same-user filesystem access, and an offline container probe
 does not certify live network egress or arbitrary local model code.
 
 No benchmark reward, leaderboard ranking, cost advantage, or competitor win can
-be inferred from these tests. The stock comparison uses the same underlying
-model to measure the effect of SAFE's runtime. Other named competitor products
-require separate adapters and recorded comparisons.
+be inferred from these tests. The same-model stock comparison measures
+differences between complete systems, including prompts, planning, tool
+projection, repair behavior and SAFE's limits. It does not isolate the causal
+effect of enforcement. Other named competitor products require separate adapters
+and recorded comparisons.
 
 ## Next execution sequence
 

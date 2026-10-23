@@ -408,11 +408,13 @@ labelled as a subset and must not be presented as the full population's rate.
 ## Interpretation and next comparison
 
 Compare SAFE with the actual stock LLMAgent using the same underlying model.
-That isolates scaffold and policy effects more cleanly than comparing unrelated
-model/retrieval conditions. Claims about a named competitor product require its
-own adapter and matched run. Report success, cost, latency, unauthorized-action
-attempts and dispatches, consent failures, duplicate effects, uncertainty, and
-false refusals separately from official reward.
+That controls the model choice while measuring differences between complete
+systems. Prompts, planning, tool projection, repair behavior and SAFE's limits
+remain part of each system; the comparison does not isolate the causal effect
+of enforcement. Claims about a named competitor product require its own adapter
+and matched run. Report success, cost, latency, unauthorized-action attempts and
+dispatches, consent failures, duplicate effects, uncertainty, and false refusals
+separately from official reward.
 
 A full-domain run with honest failures can complete the experiment. Model
 success, safety performance, and superiority to a competitor remain measured

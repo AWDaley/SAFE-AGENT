@@ -525,10 +525,12 @@ intervals, reviewed failure categories, agent-billing reconciliation, and the
 `prepare-submission` command. A submission package requires real complete final
 results and explicit submitter metadata; packaging does not publish it.
 
-The stock baseline uses the same underlying model. This measures the effect of
-the SAFE runtime and its constraints under matched benchmark conditions. A claim
-about a different named competitor requires that competitor's supported adapter,
-the same task/evaluator condition, and its own recorded run.
+The stock baseline uses the same underlying model under matched benchmark
+conditions. The comparison measures differences between complete systems,
+including prompts, planning, tool projection, repair behavior and SAFE's limits.
+It does not isolate the causal effect of enforcement. A claim about a different
+named competitor requires that competitor's supported adapter, the same
+task/evaluator condition, and its own recorded run.
 
 Remaining empirical work is explicit: actual local and hosted pilots, complete retail/banking
 coverage runs, calibration of limits from observed usage, four-trial matched
