@@ -17,7 +17,7 @@ from urllib.parse import urlencode, urlparse
 
 import httpx
 from cryptography.fernet import Fernet, InvalidToken
-from sqlalchemy import Engine
+from sqlalchemy import Engine, delete
 from sqlalchemy.orm import sessionmaker
 
 from safe_agent.contracts.base import require_aware
@@ -38,10 +38,6 @@ GOOGLE_SCOPES = frozenset({
 
 def _utc(value: datetime) -> datetime:
     return require_aware(value).astimezone(UTC)
-
-
-def _from_db(value: datetime) -> datetime:
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 def _hash_state(state: str) -> str:
@@ -125,14 +121,28 @@ class GoogleCredentialVault:
                 now: datetime) -> tuple[str, str]:
         principal.require("connection:manage", principal.organization_id, now)
         with self._sessions.begin() as session:
-            row = session.get(GoogleOAuthPendingRow, _hash_state(state))
-            if (row is None or row.organization_id != principal.organization_id
-                    or row.actor_id != principal.actor_id
-                    or _utc(now) >= _from_db(row.expires_at)):
+            # Claim and remove the exact scoped state in one database operation.
+            # SELECT followed by an ORM delete can let two callbacks both read
+            # the verifier and report success, even when one delete affects zero
+            # rows. RETURNING releases values only to the transaction that won.
+            row = session.execute(
+                delete(GoogleOAuthPendingRow).where(
+                    GoogleOAuthPendingRow.state_hash == _hash_state(state),
+                    GoogleOAuthPendingRow.organization_id == principal.organization_id,
+                    GoogleOAuthPendingRow.actor_id == principal.actor_id,
+                    GoogleOAuthPendingRow.expires_at > _utc(now),
+                ).returning(
+                    GoogleOAuthPendingRow.verifier_ciphertext,
+                    GoogleOAuthPendingRow.calendar_ciphertext,
+                )
+            ).one_or_none()
+            if row is None:
                 raise GoogleConnectionDenied("OAUTH_STATE_INVALID_OR_EXPIRED")
             verifier = self.decrypt(row.verifier_ciphertext)
             calendar_id = self._allowed_id(self.decrypt(row.calendar_ciphertext))
-            session.delete(row)  # Single use, even if token exchange fails.
+            # The context commits before these values reach the token exchange.
+            # A failed commit never returns them; a later exchange failure cannot
+            # resurrect the already-consumed state.
             return verifier, calendar_id
 
     def save(self, *, principal: Principal, refresh_token: str,

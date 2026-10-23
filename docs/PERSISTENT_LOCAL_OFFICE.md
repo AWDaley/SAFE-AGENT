@@ -1,6 +1,6 @@
 # Persistent offline local office
 
-This increment is a local development launcher, stacked on PR #37. It is not
+The local development launcher is included in the current application. It is not
 production deployment or permission to connect a live provider. It uses the real
 coordinated planner, durable result/consumption stores, policy gates, approval API,
 TAL-enforcing worker and private Unix-socket inference service. The inference
@@ -8,7 +8,7 @@ backend remains the exact offline mock and all business records are synthetic.
 
 ## Setup
 
-Use a checkout of `improvement/persistent-offline-launcher` in the supported
+Use the current reviewed application checkout in the supported
 CPython 3.12 / Linux x86_64 / glibc environment. Native Windows is not supported.
 Install the committed runtime profile into a NEW environment. The installer uses
 the network for dependency/source downloads; starting and using the local office
@@ -118,8 +118,12 @@ Only the socket lifetime journal may clean up a proven stale inference socket.
 The existing conservative admission policy remains in force, including four
 outstanding invocations per tenant. Successful mock results and uncertain calls
 can retain held capacity. Restart does not clear quotas or refund reservations.
-When blocked, inspect the recorded state; cancellation, reviewed retirement,
-replacement planning and operator billing reconciliation remain future work.
+When blocked, inspect the recorded state using the
+[operator recovery console](W4_OPERATOR_RECOVERY.md). Eligible pre-effect tasks
+can be [retired](TASK_RETIREMENT.md); replacement work requires a new task and
+fresh authority. [Independent accounting reconciliation](INFERENCE_ACCOUNTING_RECONCILIATION.md)
+can release proven settled capacity without recovering a model result or
+authorizing a business action. There is no general operator refund/reset command.
 
 ## Acceptance and limitations
 
@@ -137,10 +141,13 @@ the owning UID, so filesystem checks and cooperative locks are not a sandbox
 against that owner, root or malicious trusted code. Do not expose the API beyond
 loopback, use real customer data, modify workspace internals while running,
 combine it with old workers, or restore an old backup and blindly resume writes.
-Production PostgreSQL deployment, separate OS identities, secret rotation,
-rollback/backup reconciliation, vulnerability disposition, independent review
-and enforced merge requirements remain outstanding. No migration is added and
-no existing customer database is modified by this development work.
+Production PostgreSQL deployment, separate OS identities, workspace-secret
+rotation, vulnerability disposition, independent review and enforced merge
+requirements remain separate release work. Supported offline schema upgrades,
+authenticated backups/rollback and billing-keyring distribution are described in
+[workspace maintenance](WORKSPACE_MAINTENANCE.md); normal startup does not perform
+them automatically. Restoring a backup is not evidence that an external effect
+did not occur.
 
 **Live Google acceptance remains BLOCKED; hosted inference and production
-activation remain disabled. No PR is merged by this increment.**
+activation remain disabled.**

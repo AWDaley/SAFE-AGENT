@@ -124,9 +124,14 @@ class ReferenceBroker:
     def resolve(self, handle: str, *, scope: BrokerScope, kind: ResourceKind) -> str:
         """Trusted operation: returns a protected resource ID, never to the model."""
         record = self._records.get(handle)
+        return self._resolve_record(record, scope=scope, kind=kind, readback=False)
+
+    @staticmethod
+    def _resolve_record(record: _ReferenceRecord | None, *, scope: BrokerScope,
+                        kind: ResourceKind, readback: bool) -> str:
         if (
             record is None
-            or record.revoked
+            or (record.revoked and not readback)
             or record.organization_id != scope.organization_id
             or record.task_id != scope.task_id
             or record.initiator_id != scope.initiator_id
@@ -136,6 +141,23 @@ class ReferenceBroker:
         ):
             raise ReferenceDenied("reference scope denied")
         return record.resource_id
+
+    def trusted_resolve_readback(
+        self, handle: str, *, protected_records: tuple[dict[str, object], ...],
+        scope: BrokerScope, kind: ResourceKind,
+    ) -> str:
+        """Resolve an existing action's identity for READBACK ONLY after revocation.
+
+        The worker supplies its durable intent's original scope/time. A verified
+        revoked mapping can identify an already committed effect, but this method
+        never imports or reactivates it in the broker used for new dispatch.
+        """
+        matches = [entry for entry in protected_records if entry.get("handle") == handle]
+        if len(matches) != 1:
+            raise ReferenceDenied("reference scope denied")
+        return self._resolve_record(
+            self._verified_record(matches[0]), scope=scope, kind=kind, readback=True,
+        )
 
     def revoke(self, handle: str) -> None:
         record = self._records.get(handle)
@@ -161,21 +183,23 @@ class ReferenceBroker:
     def trusted_import(self, protected_records: tuple[dict[str, object], ...]) -> None:
         """Verify integrity before restoring privileged mappings after a restart."""
         for entry in protected_records:
-            if set(entry) != {"handle", "record", "mac"}:
-                raise ReferenceDenied("reference scope denied")
-            payload, mac, handle = entry["record"], entry["mac"], entry["handle"]
-            if not isinstance(payload, dict) or not isinstance(mac, str) or not isinstance(handle, str):
-                raise ReferenceDenied("reference scope denied")
-            expected = hmac.new(self._key, canonical_json(payload), hashlib.sha256).hexdigest()
-            if not hmac.compare_digest(expected, mac):
-                raise ReferenceDenied("reference scope denied")
-            record = _ReferenceRecord.model_validate_json(
-                canonical_json(payload).decode("utf-8")
-            )
-            if record.handle != handle:
-                raise ReferenceDenied("reference scope denied")
-            existing = self._records.get(handle)
+            record = self._verified_record(entry)
+            existing = self._records.get(record.handle)
             if existing is not None and existing != record:
                 raise ReferenceDenied("reference scope denied")
-            self._records[handle] = record
+            self._records[record.handle] = record
         self._serial = max(self._serial, len(self._records))
+
+    def _verified_record(self, entry: dict[str, object]) -> _ReferenceRecord:
+        if set(entry) != {"handle", "record", "mac"}:
+            raise ReferenceDenied("reference scope denied")
+        payload, mac, handle = entry["record"], entry["mac"], entry["handle"]
+        if not isinstance(payload, dict) or not isinstance(mac, str) or not isinstance(handle, str):
+            raise ReferenceDenied("reference scope denied")
+        expected = hmac.new(self._key, canonical_json(payload), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, mac):
+            raise ReferenceDenied("reference scope denied")
+        record = _ReferenceRecord.model_validate_json(canonical_json(payload).decode("utf-8"))
+        if record.handle != handle:
+            raise ReferenceDenied("reference scope denied")
+        return record
