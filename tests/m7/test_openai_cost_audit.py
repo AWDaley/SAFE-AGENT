@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from decimal import Inexact, Rounded, localcontext
 
 import pytest
 from fastapi.testclient import TestClient
@@ -101,6 +102,24 @@ def capture() -> dict[str, object]:
 
 def payload(value: dict[str, object] | None = None) -> str:
     return json.dumps(value or capture(), separators=(",", ":"), sort_keys=True)
+
+
+def exact_amount_payload(*tokens: str) -> str:
+    """Insert authored JSON number/string tokens without a Python float round trip."""
+    value = capture()
+    pages = value["pages"]
+    assert isinstance(pages, list)
+    first = pages[0]["response"]["data"][0]
+    template = first["results"][0]
+    first["results"] = [
+        {**template, "amount": {"value": f"exact_amount_{index}", "currency": "usd"}}
+        for index in range(len(tokens))
+    ]
+    pages[1]["response"]["data"][0]["results"] = []
+    result = payload(value)
+    for index, token in enumerate(tokens):
+        result = result.replace(json.dumps(f"exact_amount_{index}"), token)
+    return result
 
 
 def service() -> TestClient:
@@ -204,6 +223,105 @@ def test_openai_cost_precision_is_preserved_without_rounding():
     with pytest.raises(BillingSourceDenied):
         OpenAIOrganizationCostsAdapter().normalize_audit(
             payload(value), now=NOW + timedelta(minutes=2),
+        )
+
+
+@pytest.mark.parametrize("token,expected", [
+    ("9007199254740993", "9007199254740993"),
+    ("9007199254740993.123456789012", "9007199254740993.123456789012"),
+    ('"9007199254740993.123456789012"', "9007199254740993.123456789012"),
+    ("0.000000000001", "0.000000000001"),
+    ('"1e-12"', "0.000000000001"),
+    ("1.0000000000000000", "1"),
+    ('"1.0000000000000000"', "1"),
+])
+def test_exact_json_amounts_preserve_all_supported_decimal_digits(token, expected):
+    result = OpenAIOrganizationCostsAdapter().normalize_audit(
+        exact_amount_payload(token), now=NOW + timedelta(minutes=2),
+    )
+    assert result.total_usd_decimal == expected
+
+
+@pytest.mark.parametrize("tokens", [
+    ("1.0000000000000001",),
+    ('"1.0000000000000001"',),
+    ("9999999999999999.0000000000001",),
+    ('"9999999999999999.0000000000001"',),
+    ("1e-13",),
+    ("0.0000000000004", "0.0000000000006"),
+    ('"0.0000000000004"', '"0.0000000000006"'),
+    ("1e1000000000",),
+    ("1e-1000000000",),
+    ("9999999999999999.999999999999", "0.000000000001"),
+])
+def test_unsupported_input_precision_or_aggregate_size_is_never_rounded_into_range(tokens):
+    with pytest.raises(BillingSourceDenied):
+        OpenAIOrganizationCostsAdapter().normalize_audit(
+            exact_amount_payload(*tokens), now=NOW + timedelta(minutes=2),
+        )
+
+
+def test_cost_sum_does_not_depend_on_decimal_context_or_suppress_rounding_errors():
+    with localcontext() as context:
+        context.prec = 6
+        context.traps[Inexact] = True
+        context.traps[Rounded] = True
+        result = OpenAIOrganizationCostsAdapter().normalize_audit(
+            exact_amount_payload("1234567890123456.123456789012", "0.000000000001"),
+            now=NOW + timedelta(minutes=2),
+        )
+    assert result.total_usd_decimal == "1234567890123456.123456789013"
+
+
+def test_distinct_exact_amounts_never_share_rounded_audit_evidence():
+    adapter = OpenAIOrganizationCostsAdapter()
+    first = adapter.normalize_audit(
+        exact_amount_payload("9007199254740993.000000000001"),
+        now=NOW + timedelta(minutes=2),
+    )
+    second = adapter.normalize_audit(
+        exact_amount_payload("9007199254740993.000000000002"),
+        now=NOW + timedelta(minutes=2),
+    )
+    assert first.total_usd_decimal == "9007199254740993.000000000001"
+    assert second.total_usd_decimal == "9007199254740993.000000000002"
+    assert first.source_evidence_hash != second.source_evidence_hash
+
+
+@pytest.mark.parametrize("token", [
+    "NaN", "Infinity", "-Infinity", '"NaN"', '"Infinity"', '"-Infinity"',
+    "true", "false", "null", "[]", "{}", "-1", '"-0.000000000001"',
+])
+def test_invalid_or_nonfinite_cost_values_still_fail_closed(token):
+    with pytest.raises(BillingSourceDenied):
+        OpenAIOrganizationCostsAdapter().normalize_audit(
+            exact_amount_payload(token), now=NOW + timedelta(minutes=2),
+        )
+
+
+@pytest.mark.parametrize("field,value", [
+    ("fetched_at", "2026-10-14T13:00:00"),
+    ("fetched_at", START),
+    ("fetched_at", True),
+    ("start_time", str(START)),
+    ("start_time", float(START)),
+    ("start_time", True),
+    ("unexpected", "extra field"),
+])
+def test_exact_cost_parsing_preserves_strict_metadata_validation(field, value):
+    malformed = capture()
+    malformed[field] = value
+    with pytest.raises(BillingSourceDenied):
+        OpenAIOrganizationCostsAdapter().normalize_audit(
+            payload(malformed), now=NOW + timedelta(minutes=2),
+        )
+
+
+def test_duplicate_cost_keys_are_rejected_before_decimal_validation():
+    malformed = exact_amount_payload("1").replace('"value":1', '"value":1,"value":2')
+    with pytest.raises(BillingSourceDenied):
+        OpenAIOrganizationCostsAdapter().normalize_audit(
+            malformed, now=NOW + timedelta(minutes=2),
         )
 
 

@@ -62,6 +62,13 @@ Incomplete pagination, a missing/duplicated day, broken cursor chain, wrong
 currency, excessive decimal precision, a future capture, or a usage/response-shaped
 payload fails closed.
 
+JSON numeric amounts and decimal strings retain their exact decimal values.
+Each amount must fit 16 integer digits and 12 fractional decimal places after
+trailing zeroes are removed; unsupported input precision is rejected before
+summation, even when several such inputs would sum to a representable amount.
+Aggregation uses integer units of `10^-12` USD and is independent of the process's
+Decimal precision or rounding settings. The aggregate must fit the same bound.
+
 ## Signed result
 
 The signed audit records:

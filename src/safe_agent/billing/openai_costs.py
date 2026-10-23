@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, TypeAdapter, field_validator, model_validator
 
 from safe_agent.billing.audit_adapters import ProviderCostAuditAdapter
 from safe_agent.billing.verifier import BillingSourceDenied
@@ -20,6 +20,9 @@ from safe_agent.contracts.base import StrictModel, require_aware
 from safe_agent.contracts.provider_billing_audit import NormalizedProviderCostAudit
 
 _DAY = 86_400
+_USD_SCALE = 10 ** 12
+_MAX_USD_UNITS = 10 ** 28
+_JSON_DATETIME = TypeAdapter(datetime)
 
 
 def _unique(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -35,9 +38,56 @@ def _reject_constant(_: str) -> None:
     raise ValueError("invalid OpenAI cost numeric constant")
 
 
+def _cost_units(value: Decimal) -> int:
+    """Exact 10^-12 USD units, without arithmetic using the Decimal context."""
+    if not value.is_finite():
+        raise BillingSourceDenied()
+    if value.is_zero():
+        return 0
+    if value.is_signed():
+        raise BillingSourceDenied()
+    parts = value.as_tuple()
+    exponent = parts.exponent
+    if not isinstance(exponent, int):
+        raise BillingSourceDenied()
+    end = len(parts.digits)
+    while end > 1 and parts.digits[end - 1] == 0:
+        end -= 1
+        exponent += 1
+    # Check effective precision and size before expanding an exponent or
+    # constructing a large fixed-point string. Trailing zeroes are exact.
+    if exponent < -12 or end + exponent > 16:
+        raise BillingSourceDenied()
+    coefficient = 0
+    for digit in parts.digits[:end]:
+        coefficient = coefficient * 10 + digit
+    return coefficient * 10 ** (exponent + 12)
+
+
+def _units_string(units: int) -> str:
+    if not 0 <= units < _MAX_USD_UNITS:
+        raise BillingSourceDenied()
+    whole, fraction = divmod(units, _USD_SCALE)
+    return f"{whole}.{fraction:012d}".rstrip("0") if fraction else str(whole)
+
+
 class _Money(StrictModel):
     value: Decimal = Field(ge=0)
     currency: Literal["usd"]
+
+    @field_validator("value", mode="before")
+    @classmethod
+    def exact_amount(cls, value: object) -> Decimal:
+        if isinstance(value, Decimal):
+            amount = value
+        elif isinstance(value, str) or isinstance(value, int) and not isinstance(value, bool):
+            amount = Decimal(value)
+        else:
+            raise ValueError("OpenAI cost must have an exact decimal representation")
+        # Validate every input before aggregation: unsupported precision must
+        # not disappear because several rounded values happen to sum cleanly.
+        _cost_units(amount)
+        return amount
 
 
 class _CostResult(StrictModel):
@@ -128,23 +178,6 @@ class OpenAICostsCapture(StrictModel):
         return self
 
 
-def _decimal_string(value: Decimal) -> str:
-    try:
-        if not value.is_finite() or value < 0:
-            raise ValueError
-        normalized = format(value, "f")
-        whole, dot, fraction = normalized.partition(".")
-        fraction = fraction.rstrip("0")
-        if len(fraction) > 12:
-            raise ValueError("OpenAI cost precision exceeds audit contract")
-        result = whole + (dot + fraction if fraction else "")
-        if len(whole) > 16:
-            raise ValueError("OpenAI cost amount too large")
-        return result
-    except (InvalidOperation, ValueError):
-        raise BillingSourceDenied() from None
-
-
 class OpenAIOrganizationCostsAdapter(ProviderCostAuditAdapter):
     """Normalize a complete captured Costs API response into aggregate audit evidence."""
 
@@ -157,14 +190,22 @@ class OpenAIOrganizationCostsAdapter(ProviderCostAuditAdapter):
     ) -> NormalizedProviderCostAudit:
         current = require_aware(now).astimezone(UTC)
         try:
-            json.loads(
+            parsed = json.loads(
                 payload,
                 parse_float=Decimal,
                 parse_int=int,
                 object_pairs_hook=_unique,
                 parse_constant=_reject_constant,
             )
-            capture = OpenAICostsCapture.model_validate_json(payload)
+            if not isinstance(parsed, dict) or not isinstance(parsed.get("fetched_at"), str):
+                raise ValueError("OpenAI costs capture requires a JSON datetime string")
+            # Preserve strict JSON datetime semantics while retaining the exact
+            # Decimal values from the first parse. Reparsing numeric JSON through
+            # model_validate_json can first round those numbers to binary floats.
+            parsed["fetched_at"] = _JSON_DATETIME.validate_json(
+                json.dumps(parsed["fetched_at"]), strict=True,
+            )
+            capture = OpenAICostsCapture.model_validate(parsed)
             fetched = capture.fetched_at.astimezone(UTC)
             if fetched > current:
                 raise ValueError("future provider capture")
@@ -185,7 +226,7 @@ class OpenAIOrganizationCostsAdapter(ProviderCostAuditAdapter):
                         raise ValueError("OpenAI costs capture is incomplete")
 
             expected = capture.start_time
-            total = Decimal(0)
+            total_units = 0
             projects: set[str] = set()
             line_items: set[str] = set()
             results = 0
@@ -194,7 +235,9 @@ class OpenAIOrganizationCostsAdapter(ProviderCostAuditAdapter):
                     raise ValueError("OpenAI costs buckets are missing, duplicated or unordered")
                 expected = bucket.end_time
                 for item in bucket.results:
-                    total += item.amount.value
+                    total_units += _cost_units(item.amount.value)
+                    if total_units >= _MAX_USD_UNITS:
+                        raise BillingSourceDenied()
                     results += 1
                     if item.project_id is not None:
                         projects.add(item.project_id)
@@ -210,7 +253,7 @@ class OpenAIOrganizationCostsAdapter(ProviderCostAuditAdapter):
                 source_observed_at=fetched,
                 window_start=datetime.fromtimestamp(capture.start_time, UTC),
                 window_end=datetime.fromtimestamp(capture.end_time, UTC),
-                total_usd_decimal=_decimal_string(total),
+                total_usd_decimal=_units_string(total_units),
                 bucket_count=len(buckets),
                 result_count=results,
                 project_ids=tuple(sorted(projects)),

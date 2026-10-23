@@ -14,7 +14,7 @@ from secrets import token_hex
 
 from safe_agent.adapters.fake_calendar import FakeCalendarAdapter, FakeCalendarConflict
 from safe_agent.adapters.fake_tasks import FakeInternalTaskAdapter, FakeTaskConflict
-from safe_agent.broker import BrokerScope, ReferenceBroker, ResourceKind
+from safe_agent.broker import BrokerScope, ReferenceBroker, ReferenceDenied, ResourceKind
 from safe_agent.canonical import sha256
 from safe_agent.contracts.actions import CalendarCreateEvent
 from safe_agent.contracts.base import require_aware
@@ -63,6 +63,7 @@ class DispatchContext:
     projection: CalendarProjection | TaskListProjection
     snap: TaskSnapshot
     recorded_at: datetime
+    protected_references: tuple[dict[str, object], ...]
 
 
 class SyntheticRecoveryWorker:
@@ -117,7 +118,12 @@ class SyntheticRecoveryWorker:
         self, *, task_id: str | None = None, now: datetime,
         fault: FaultPoint | None = None,
     ) -> ExecutionReceipt | None:
-        """Claim at most one action. May raise InjectedCrash in test fault mode."""
+        """Claim at most one action. May raise InjectedCrash in test fault mode.
+
+        A superseded lease raises StateConflict: the old worker must not overwrite
+        its successor's receipt or escalation. The supervisor treats this as an
+        infrastructure error and leaves recovery to the current durable owner.
+        """
         now = require_aware(now)
         claim = self._repo.claim_action(worker_id=self._id, now=now, task_id=task_id)
         if claim is None:
@@ -133,6 +139,8 @@ class SyntheticRecoveryWorker:
         except KnownNoEffect:
             result = self._escalate(claim, now=now, reason="REVALIDATION_FAILED")
         except (FakeCalendarConflict, FakeTaskConflict, ProviderIntegrityError, StateConflict):
+            # This also fences escalation: a lost claim propagates StateConflict
+            # instead of recording the old worker's result against a new lease.
             result = self._escalate(claim, now=now, reason="SOURCE_CONFLICT_OR_INTEGRITY")
         except Exception:
             if claim.attempts >= self._max_attempts:
@@ -154,7 +162,7 @@ class SyntheticRecoveryWorker:
                      fault: FaultPoint | None) -> ExecutionReceipt:
         with self._repo.write_task(claim.task_id) as tx:
             task, manifest, snap = tx.task, tx.manifest, tx.snapshot
-            outbox = tx.read_outbox(claim.action_hash)
+            outbox = tx.require_outbox_claim(claim)
             if (claim.provider_kind != "synthetic"
                     or outbox.provider_kind != "synthetic"
                     or tx.session.get(GoogleTestOutboxBindingRow, claim.action_hash) is not None
@@ -204,14 +212,14 @@ class SyntheticRecoveryWorker:
                     raise StateConflict("task intent/preview mismatch")
             else:
                 raise StateConflict("unrecognized outbox operation")
-            protected = self._repo.load_protected_references(
-                claim.task_id, task.organization_id,
-            )
-            self._broker.trusted_import(protected)
+            # Readback needs the original scoped identity even if it has since
+            # been revoked. It must not reactivate that identity for new writes.
+            protected = tx.protected_references()
             # Recorded action time is for EXISTING-EFFECT READBACK ONLY.
             context = DispatchContext(
                 task=task, manifest=manifest, proposal=proposal,
                 projection=projection, snap=snap, recorded_at=outbox.created_at,
+                protected_references=protected,
             )
         if claim.operation == "calendar.create_event":
             assert isinstance(manifest, TaskManifest)
@@ -235,60 +243,80 @@ class SyntheticRecoveryWorker:
 
     def _allow_new_dispatch(self, claim: OutboxClaim, context: DispatchContext,
                             *, now: datetime) -> None:
+        """Commit final admission atomically with respect to supported revocation.
+
+        The LEASED -> DISPATCHING commit is the ordering point. Revocation that
+        wins this task lock prevents a new write. A later revocation cannot undo
+        the admitted attempt, but every recovery attempt must revalidate anew.
+        No provider I/O occurs while this SQL transaction holds its locks.
+        """
         task, manifest, projection, snap = (
             context.task, context.manifest, context.projection, context.snap,
         )
-        if (now >= task.deadline or now >= projection.expires_at or now < projection.fetched_at
-                or snap.external_effects >= manifest.budget.max_external_effects):
-            raise KnownNoEffect("expired task or projection")
-        if manifest.requires_approval:
-            with self._repo.write_task(claim.task_id) as tx:
+        with self._repo.write_task(claim.task_id, serialize_sqlite=True) as tx:
+            outbox = tx.require_outbox_claim(claim, now=now)
+            if (claim.provider_kind != "synthetic"
+                    or tx.session.get(GoogleTestOutboxBindingRow, claim.action_hash) is not None
+                    or tx.snapshot != snap or snap.phase is not OfficePhase.EXECUTING
+                    or snap.proposal_hash != claim.proposal_hash
+                    or tx.task != task or tx.manifest != manifest):
+                raise KnownNoEffect("dispatch task or outbox state changed")
+            if (now >= task.deadline or now >= projection.expires_at or now < projection.fetched_at
+                    or snap.external_effects >= manifest.budget.max_external_effects
+                    or snap.cycles_used > manifest.budget.max_cycles):
+                raise KnownNoEffect("expired task, projection or execution budget")
+            approval = tx.read_approval(snap.approval_id) if snap.approval_id is not None else None
+            if manifest.requires_approval:
                 if snap.approval_id is None:
                     raise KnownNoEffect("required approval missing")
-                approval = tx.read_approval(snap.approval_id)
                 if (approval is None or not approval.approved or approval.task_id != claim.task_id
                         or approval.manifest_hash != claim.manifest_hash
                         or approval.proposal_hash != claim.proposal_hash
                         or now >= approval.expires_at):
                     raise KnownNoEffect("approval expired or mismatched")
-        if claim.operation != "calendar.create_event":
-            return
-        assert isinstance(task, Task) and isinstance(manifest, TaskManifest)
-        assert isinstance(context.proposal, CalendarCreateEvent)
-        with self._repo.write_task(claim.task_id) as tx:
-            outbox = tx.read_outbox(claim.action_hash)
-            if (tx.snapshot != snap or tx.snapshot.phase is not OfficePhase.EXECUTING
-                    or outbox.status != "LEASED" or outbox.lease_owner != claim.worker_id
-                    or outbox.source_hash != claim.source_hash):
-                raise KnownNoEffect("TAL outbox state changed")
-            calendar_projection, simulation = tx.preview(context.proposal.simulation_ref)
-            coordinated = coordinated_execution_input(tx, context.proposal, calendar_projection)
-            if coordinated is not None and outbox.source_hash != coordinated.source_fingerprint:
-                raise KnownNoEffect("COORDINATED_OUTBOX_SOURCE_DENIED")
-            approval = (tx.read_approval(snap.approval_id)
-                        if snap.approval_id is not None else None)
-        checker = self._tal_dispatch
-        # The requirement belongs to the durable task, not the worker bootstrap.
-        # Existing-effect readback never enters this NEW-write check.
-        if coordinated is not None and type(checker) is not TrustedTALOfficeDispatchCheck:
-            raise KnownNoEffect("COORDINATED_TAL_REQUIRED")
-        if checker is None:
-            return  # Actual legacy fixture, not a coordinated invocation.
-        if type(checker) is not TrustedTALOfficeDispatchCheck:
-            raise KnownNoEffect("TAL_CHECKER_TYPE_DENIED")
-        try:
-            if coordinated is not None:
-                require_reviewed_tal_runtime()
-            # Calling the reviewed class method prevents an instance-level no-op
-            # callback from replacing the check. Hostile trusted code is not sandboxed.
-            TrustedTALOfficeDispatchCheck.require(
-                checker, action_hash=claim.action_hash,
-                task=task, manifest=manifest, proposal=context.proposal,
-                projection=calendar_projection, simulation=simulation,
-                snapshot=snap, approval=approval, now=now,
-            )
-        except TALOfficeDispatchDenied as error:
-            raise KnownNoEffect("TAL_OFFICE_RUNTIME_DENIED") from error
+            # This fresh, locked read is essential: the initial readback snapshot
+            # and an already populated broker are not current write authority.
+            protected = tx.protected_references(require_active=True)
+            required = {manifest.customer_ref}
+            if isinstance(manifest, TaskManifest):
+                required.add(manifest.calendar_ref)
+            if not required <= {str(entry["handle"]) for entry in protected}:
+                raise KnownNoEffect("current reference binding missing")
+            try:
+                self._broker.trusted_import(protected)
+                scope = self._scope(claim, context, now=now, committed=False)
+                self._broker.resolve(manifest.customer_ref, scope=scope, kind=ResourceKind.CUSTOMER)
+                if isinstance(manifest, TaskManifest):
+                    self._broker.resolve(manifest.calendar_ref, scope=scope, kind=ResourceKind.CALENDAR)
+            except ReferenceDenied as error:
+                raise KnownNoEffect("current reference scope denied") from error
+            if claim.operation == "calendar.create_event":
+                assert isinstance(task, Task) and isinstance(manifest, TaskManifest)
+                assert isinstance(context.proposal, CalendarCreateEvent)
+                calendar_projection, simulation = tx.preview(context.proposal.simulation_ref)
+                coordinated = coordinated_execution_input(tx, context.proposal, calendar_projection)
+                if coordinated is not None and outbox.source_hash != coordinated.source_fingerprint:
+                    raise KnownNoEffect("COORDINATED_OUTBOX_SOURCE_DENIED")
+                checker = self._tal_dispatch
+                # Durable provenance makes TAL mandatory, regardless of bootstrap.
+                if coordinated is not None and type(checker) is not TrustedTALOfficeDispatchCheck:
+                    raise KnownNoEffect("COORDINATED_TAL_REQUIRED")
+                if checker is not None:
+                    if type(checker) is not TrustedTALOfficeDispatchCheck:
+                        raise KnownNoEffect("TAL_CHECKER_TYPE_DENIED")
+                    try:
+                        if coordinated is not None:
+                            require_reviewed_tal_runtime()
+                        TrustedTALOfficeDispatchCheck.require(
+                            checker, action_hash=claim.action_hash,
+                            task=task, manifest=manifest, proposal=context.proposal,
+                            projection=calendar_projection, simulation=simulation,
+                            snapshot=snap, approval=approval, now=now,
+                        )
+                    except TALOfficeDispatchDenied as error:
+                        raise KnownNoEffect("TAL_OFFICE_RUNTIME_DENIED") from error
+            outbox.status = "DISPATCHING"
+            tx.session.flush()
 
     def _calendar_effect(self, claim: OutboxClaim, context: DispatchContext,
                          *, now: datetime, fault: FaultPoint | None) -> ExecutionReceipt:
@@ -296,11 +324,13 @@ class SyntheticRecoveryWorker:
         assert isinstance(manifest, TaskManifest)
         assert isinstance(proposal, CalendarCreateEvent)
         scope = self._scope(claim, context, now=now, committed=True)
-        calendar_id = self._broker.resolve(
-            manifest.calendar_ref, scope=scope, kind=ResourceKind.CALENDAR,
+        calendar_id = self._broker.trusted_resolve_readback(
+            manifest.calendar_ref, protected_records=context.protected_references,
+            scope=scope, kind=ResourceKind.CALENDAR,
         )
-        customer_id = self._broker.resolve(
-            manifest.customer_ref, scope=scope, kind=ResourceKind.CUSTOMER,
+        customer_id = self._broker.trusted_resolve_readback(
+            manifest.customer_ref, protected_records=context.protected_references,
+            scope=scope, kind=ResourceKind.CUSTOMER,
         )
         request_hash = sha256({
             "calendar_id": calendar_id, "organization_id": claim.organization_id,
@@ -316,19 +346,13 @@ class SyntheticRecoveryWorker:
         if found is None:
             if not self._calendar.supports_idempotency:
                 raise KnownNoEffect("cannot redispatch without provider idempotency")
-            self._allow_new_dispatch(claim, context, now=now)
-            self._broker.resolve(manifest.calendar_ref,
-                                 scope=self._scope(claim, context, now=now, committed=False),
-                                 kind=ResourceKind.CALENDAR)
-            self._broker.resolve(manifest.customer_ref,
-                                 scope=self._scope(claim, context, now=now, committed=False),
-                                 kind=ResourceKind.CUSTOMER)
             source = self._calendar.reader().snapshot(
                 calendar_id=calendar_id, organization_id=claim.organization_id,
             )
             if (source.calendar.source_revision != claim.source_revision
                     or source.source_hash != claim.source_hash):
                 raise KnownNoEffect("provider source changed before dispatch")
+            self._allow_new_dispatch(claim, context, now=now)
             if fault is FaultPoint.RATE_LIMIT:
                 self._repo.release_action_unknown(
                     claim, now=now, reason="SYNTHETIC_RATE_LIMIT",
@@ -372,8 +396,9 @@ class SyntheticRecoveryWorker:
         manifest, proposal = context.manifest, context.proposal
         assert isinstance(manifest, InternalTaskManifest)
         assert isinstance(proposal, InternalTaskCreateProposal)
-        customer_id = self._broker.resolve(
-            manifest.customer_ref, kind=ResourceKind.CUSTOMER,
+        customer_id = self._broker.trusted_resolve_readback(
+            manifest.customer_ref, protected_records=context.protected_references,
+            kind=ResourceKind.CUSTOMER,
             scope=self._scope(claim, context, now=now, committed=True),
         )
         request_hash = sha256({
@@ -389,15 +414,11 @@ class SyntheticRecoveryWorker:
         if found is None:
             if not self._tasks.supports_idempotency:
                 raise KnownNoEffect("task provider lacks idempotent redispatch")
-            self._allow_new_dispatch(claim, context, now=now)
-            self._broker.resolve(
-                manifest.customer_ref, kind=ResourceKind.CUSTOMER,
-                scope=self._scope(claim, context, now=now, committed=False),
-            )
             current = self._tasks.reader().snapshot(organization_id=claim.organization_id)
             if (current.revision != claim.source_revision
                     or current.source_hash != claim.source_hash):
                 raise KnownNoEffect("task-list revision changed")
+            self._allow_new_dispatch(claim, context, now=now)
             if fault is FaultPoint.RATE_LIMIT:
                 self._repo.release_action_unknown(
                     claim, now=now, reason="SYNTHETIC_RATE_LIMIT", delay=timedelta(seconds=15),
@@ -439,10 +460,8 @@ class SyntheticRecoveryWorker:
             outcome=ExecutionOutcome.COMMITTED, effect_ref=effect_ref,
             verification_ref="verification_" + verification_hash[7:39],
         )
-        with self._repo.write_task(claim.task_id) as tx:
-            row = tx.read_outbox(claim.action_hash)
-            if row.status != "LEASED" or row.lease_owner != claim.worker_id:
-                raise StateConflict("lease was lost before receipt commit")
+        with self._repo.write_task(claim.task_id, serialize_sqlite=True) as tx:
+            tx.require_outbox_claim(claim, statuses=("LEASED", "DISPATCHING"))
             if tx.snapshot.phase is not OfficePhase.EXECUTING:
                 raise StateConflict("not a pending execution")
             tx.write_execution_outcome(
@@ -465,10 +484,8 @@ class SyntheticRecoveryWorker:
             action_hash=claim.action_hash, manifest_hash=claim.manifest_hash,
             outcome=ExecutionOutcome.OUTCOME_UNKNOWN,
         )
-        with self._repo.write_task(claim.task_id) as tx:
-            row = tx.read_outbox(claim.action_hash)
-            if row.status != "LEASED" or row.lease_owner != claim.worker_id:
-                raise StateConflict("outbox lease not owned by worker")
+        with self._repo.write_task(claim.task_id, serialize_sqlite=True) as tx:
+            tx.require_outbox_claim(claim, statuses=("LEASED", "DISPATCHING"))
             if tx.snapshot.phase is not OfficePhase.EXECUTING:
                 raise StateConflict("unknown action cannot be escalated")
             tx.write_execution_outcome(
