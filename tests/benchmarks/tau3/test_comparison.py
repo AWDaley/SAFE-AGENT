@@ -176,6 +176,129 @@ def _invoice(path: Path, *, allocate=True):
     (path / "additional_costs.jsonl").write_text(json.dumps(row) + "\n")
 
 
+def _record_preflight(path: Path, *, tokens=2048, hash_bound=True, changes=None):
+    manifest = json.loads((path / "manifest.json").read_text())
+    preflight = {
+        "schema_version": "safe_agent.tau3_preflight.v1",
+        "kind": "benchmark_preflight",
+        "config_sha256": manifest["config_sha256"],
+        "run_id": manifest["run_id"],
+        "safe_revision": manifest["safe_revision"],
+        "configuration_validated": True,
+        "ready_for_attempt": True,
+        "safe_budget_applies": True,
+        "effective_safe_limits": {"episode_budget": {"max_output_tokens": tokens}},
+    }
+    preflight.update(changes or {})
+    manifest["preflight"] = preflight
+    manifest["preflight_sha256"] = content_hash(preflight) if hash_bound else None
+    _write(path / "manifest.json", manifest)
+
+
+@pytest.mark.parametrize("normalized", [False, True])
+def test_comparison_discloses_effective_agent_transport_differences(tmp_path, normalized):
+    overrides = {
+        "llm_args_agent": {"temperature": 0.0, "num_retries": 0, "max_tokens": 2048},
+        "episode_budget": {"max_output_tokens": 2048},
+    } if normalized else {}
+    safe = _fixture(tmp_path, "safe_agent", overrides=overrides)
+    stock = _fixture(tmp_path, "llm_agent", overrides=overrides)
+    _record_preflight(safe)
+    result = compare_saved_runs(safe, stock, bootstrap_samples=100)
+    conditions = result["system_specific_conditions"]
+    safe_controls = conditions["left"]["agent_transport_controls"]
+    stock_controls = conditions["right"]["agent_transport_controls"]
+    assert safe_controls["provider_num_retries"] == 0
+    assert safe_controls["max_output_tokens"] == 2048
+    assert stock_controls["provider_num_retries"] == (0 if normalized else 3)
+    assert stock_controls["max_output_tokens"] == (2048 if normalized else None)
+    comparability = result["agent_transport_comparability"]
+    assert comparability["agent_transport_controls_match"] is normalized
+    assert comparability["explicit_output_caps_match"] is normalized
+    assert comparability["provider_retry_limits_match"] is normalized
+    assert not comparability["actual_provider_attempts_measured"]
+    assert "Full-system comparison" in comparability["interpretation"]
+
+
+@pytest.mark.parametrize("unbound_preflight", [False, True])
+def test_legacy_safe_output_cap_is_unknown_without_recorded_evidence(tmp_path, unbound_preflight):
+    safe, stock = _fixture(tmp_path, "safe_agent"), _fixture(tmp_path, "llm_agent")
+    if unbound_preflight:
+        _record_preflight(safe, tokens=4096, hash_bound=False)
+    result = compare_saved_runs(safe, stock, bootstrap_samples=100)
+    controls = result["system_specific_conditions"]["left"]["agent_transport_controls"]
+    assert controls["max_output_tokens"] is None
+    assert controls["output_cap_basis"] == "legacy_runtime_default_not_established"
+    assert not result["agent_transport_comparability"]["explicit_output_caps_match"]
+
+
+def test_saved_preflight_preserves_the_recorded_runtime_default(tmp_path):
+    safe, stock = _fixture(tmp_path, "safe_agent"), _fixture(tmp_path, "llm_agent")
+    # Authored historical launch evidence: no cap in the raw configuration.
+    # Comparing it must not substitute the installed RuntimeLimits default.
+    _record_preflight(safe, tokens=4096)
+    result = compare_saved_runs(safe, stock, bootstrap_samples=100)
+    controls = result["system_specific_conditions"]["left"]["agent_transport_controls"]
+    assert controls["max_output_tokens"] == 4096
+    assert controls["output_cap_basis"] == "recorded_preflight_runtime_budget"
+
+
+def test_explicit_saved_output_cap_needs_no_new_preflight_fields(tmp_path):
+    safe = _fixture(tmp_path, "safe_agent", overrides={"episode_budget": {"max_output_tokens": 4096}})
+    stock = _fixture(tmp_path, "llm_agent")
+    result = compare_saved_runs(safe, stock, bootstrap_samples=100)
+    controls = result["system_specific_conditions"]["left"]["agent_transport_controls"]
+    assert controls["max_output_tokens"] == 4096
+    assert controls["output_cap_basis"] == "explicit_episode_budget"
+
+
+def test_output_alias_alone_does_not_establish_a_legacy_runtime_cap(tmp_path):
+    overrides = {"llm_args_agent": {"temperature": 0.0, "num_retries": 0, "max_tokens": 2048}}
+    safe = _fixture(tmp_path, "safe_agent", overrides=overrides)
+    stock = _fixture(tmp_path, "llm_agent", overrides=overrides)
+    result = compare_saved_runs(safe, stock, bootstrap_samples=100)
+    controls = result["system_specific_conditions"]["left"]["agent_transport_controls"]
+    assert controls["max_output_tokens"] is None
+    assert not result["agent_transport_comparability"]["agent_transport_controls_match"]
+
+
+@pytest.mark.parametrize("changes,error", [
+    ({"config_sha256": "e" * 64}, "PREFLIGHT_RUN_BINDING_MISMATCH"),
+    ({"run_id": "another-authored-run"}, "PREFLIGHT_RUN_BINDING_MISMATCH"),
+    ({"safe_revision": {"commit": "f" * 40}}, "PREFLIGHT_RUN_BINDING_MISMATCH"),
+    ({"ready_for_attempt": False}, "PREFLIGHT_RUN_BINDING_MISMATCH"),
+    ({"effective_safe_limits": {"episode_budget": {"max_output_tokens": False}}},
+     "PREFLIGHT_SAFE_OUTPUT_CAP_INVALID"),
+    ({"model_roles": {"agent": {"provider_num_retries": 3}}},
+     "PREFLIGHT_AGENT_CONTROLS_MISMATCH"),
+    ({"model_roles": {"agent": {"max_output_tokens": 4096}}},
+     "PREFLIGHT_AGENT_CONTROLS_MISMATCH"),
+])
+def test_comparison_rejects_stale_or_invalid_preflight_evidence(tmp_path, changes, error):
+    safe, stock = _fixture(tmp_path, "safe_agent"), _fixture(tmp_path, "llm_agent")
+    _record_preflight(safe, changes=changes)
+    with pytest.raises(ComparisonError, match=error):
+        compare_saved_runs(safe, stock, bootstrap_samples=100)
+
+
+def test_comparison_rejects_tampered_preflight_hash(tmp_path):
+    safe, stock = _fixture(tmp_path, "safe_agent"), _fixture(tmp_path, "llm_agent")
+    _record_preflight(safe)
+    _change(safe, "manifest.json", lambda value: value["preflight"]["effective_safe_limits"][
+        "episode_budget"
+    ].update(max_output_tokens=4096))
+    with pytest.raises(ComparisonError, match="PREFLIGHT_HASH_MISMATCH"):
+        compare_saved_runs(safe, stock, bootstrap_samples=100)
+
+
+def test_comparison_rejects_explicit_cap_disagreeing_with_saved_preflight(tmp_path):
+    safe = _fixture(tmp_path, "safe_agent", overrides={"episode_budget": {"max_output_tokens": 2048}})
+    stock = _fixture(tmp_path, "llm_agent")
+    _record_preflight(safe, tokens=4096)
+    with pytest.raises(ComparisonError, match="PREFLIGHT_SAFE_OUTPUT_CAP_MISMATCH"):
+        compare_saved_runs(safe, stock, bootstrap_samples=100)
+
+
 def _change(path, file, mutation):
     value = json.loads((path / file).read_text())
     mutation(value)

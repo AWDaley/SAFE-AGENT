@@ -10,6 +10,7 @@ The implementation fixtures have not produced a model-backed pilot or score.
 | --- | --- | --- | --- |
 | Hosted retail | `configs/benchmarks/tau3-dev.toml` | `configs/benchmarks/tau3-dev-baseline.toml` | `0` through `4` |
 | Hosted banking | `configs/benchmarks/tau3-bank-dev-safe.toml` | `configs/benchmarks/tau3-bank-dev-baseline.toml` | `task_001` through `task_005` |
+| Hosted banking, normalized agent controls | `configs/benchmarks/tau3-bank-dev-normalized-safe.toml` | `configs/benchmarks/tau3-bank-dev-normalized-baseline.toml` | `task_001` through `task_005` |
 | Local banking | `configs/benchmarks/tau3-bank-dev-local-safe.toml` | `configs/benchmarks/tau3-bank-dev-local-baseline.toml` | `task_001` through `task_005` |
 
 These are the first five tasks in each domain's pinned source order. Selection
@@ -17,6 +18,22 @@ uses IDs and source order, without choosing successful or easier outcomes.
 Each pilot declares one trial and the same IDs in `development_task_ids`. Within
 each pair, all configuration fields match except system, run ID, and output path.
 Five tasks are a wiring and feasibility pilot, not an effectiveness estimate.
+
+The separately named **normalized** banking pair explicitly supplies
+`llm_args_agent.num_retries=0` and `llm_args_agent.max_tokens=2048` for both agents.
+SAFE accepts these declarations only when retries are zero and the output cap
+exactly matches `episode_budget.max_output_tokens`. They cannot raise its hard
+limits. The original hosted templates retain the pinned stock defaults, including
+three provider retries and an unspecified stock output cap. Equal model names,
+simulation retries and raw argument hashes alone do not establish equal effective
+transport limits. Preflight and saved-run comparisons now report both limits.
+
+Use the normalized pair when equal agent retries and output caps are part of the
+intended experiment. This is still a comparison of whole systems: prompts, tool
+projection, planning, repairs and SAFE's reservation limits differ. A normalized
+pilot must be calibrated against a target that preserves the same model arguments;
+it cannot be mixed with the original stock-default final templates. No template
+change executes a pilot or grants a spending allowance.
 
 Choose the [hosted setup](TAU3_RUNTIME.md#preparing-a-hosted-pilot) for OpenAI,
 or the [local setup](TAU3_RUNTIME.md#preparing-a-local-development-pilot) for an
@@ -104,8 +121,9 @@ independent deployment or service attestation.
 
 Hosted profiles use `model_route="openai"`; local profiles use
 `model_route="local"` with an explicit `local_api_base` and raw model aliases
-without `/` or cloud tags. SAFE agent arguments are `temperature` and `seed`;
-harness user/stock arguments additionally support `num_retries` and `max_tokens`.
+without `/` or cloud tags. SAFE agent arguments are `temperature`, `seed`, and
+optional assertions `num_retries=0` and `max_tokens` equal to the runtime output
+cap. Harness user/stock arguments support `num_retries` and `max_tokens` directly.
 Local provider retries are fixed at zero. Credentials in model arguments,
 unvalidated endpoints, and mock replies cannot pass canonical preflight. Local
 mode is development-only and rejects any task selection with NL assertions
@@ -142,7 +160,8 @@ path. Those records cannot support canonical calibration or submission.
 | --- | --- | --- |
 | Official simulation wrapper | `max_retries=0` | `max_retries=0` |
 | SAFE provider backend | Automatic retries disabled | Automatic retries disabled |
-| Stock agent and user simulator | Pinned upstream uses `num_retries=3` when absent or null | Trusted route fixes provider retries at zero |
+| Stock agent | Original templates use pinned default `num_retries=3`; normalized banking explicitly uses zero | Trusted route fixes provider retries at zero |
+| User simulator | Pinned upstream uses `num_retries=3` when absent or null in both hosted conditions | Trusted route fixes provider retries at zero |
 | NL assertion judge | Pinned upstream provider-retry default | No selected task may require the judge |
 
 Preflight lists these roles separately. Retry settings are not measured call

@@ -51,3 +51,14 @@ jobs:
         run: |
           pytest --tb=short tests/m7/test_review_boundary_postgres.py --junitxml=review-postgres.xml
           python -c "import xml.etree.ElementTree as E; s=E.parse('review-postgres.xml').getroot().findall('testsuite'); assert s and sum(int(x.get('tests',0)) for x in s)>=19; assert all(int(x.get(k,0))==0 for x in s for k in ('skipped','errors','failures'))"
+      - name: Mandatory SQLite dispatch authority and one-use OAuth regressions
+        run: |
+          pytest --tb=short tests/m7/test_reference_dispatch.py tests/m5/test_oauth_atomic.py --junitxml=authority-sqlite.xml
+          python -c "import xml.etree.ElementTree as E; s=E.parse('authority-sqlite.xml').getroot().findall('testsuite'); assert s and sum(int(x.get('tests',0)) for x in s)>=33; assert all(int(x.get(k,0))==0 for x in s for k in ('skipped','errors','failures'))"
+      - name: Mandatory real PostgreSQL dispatch revocation and one-use OAuth races
+        env:
+          SAFE_AGENT_TEST_POSTGRES_REVIEW: '1'
+          SAFE_AGENT_TEST_POSTGRES_OAUTH: '1'
+        run: |
+          pytest --tb=short tests/m7/test_reference_dispatch_postgres.py tests/m5/test_oauth_atomic_postgres.py --junitxml=authority-postgres.xml
+          python -c "import xml.etree.ElementTree as E; s=E.parse('authority-postgres.xml').getroot().findall('testsuite'); assert s and sum(int(x.get('tests',0)) for x in s)>=32; assert all(int(x.get(k,0))==0 for x in s for k in ('skipped','errors','failures'))"

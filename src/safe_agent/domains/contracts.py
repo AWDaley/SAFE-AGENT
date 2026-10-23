@@ -95,6 +95,9 @@ class DomainDecision(StrictModel):
     allowed: bool
     reason_code: str
     effect: DomainEffect
+    # Dispatch/retry effects can include wrapper logging. Completion receipts
+    # must use the underlying operation's business effect instead.
+    business_effect: DomainEffect
     proposal_digest: Digest
     effective_tool_name: str
     requires_customer_confirmation: bool = False

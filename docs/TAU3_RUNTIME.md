@@ -213,9 +213,12 @@ price estimates or verified provider billing caps. No current prices are assumed
 
 Before a model-backed run, set the exact model IDs and arguments in a copied
 configuration, choose a new `run_id` and empty `output_dir`, and set your intended
-limits. The SAFE backends accept `temperature` and optional `seed` only.
-Other model-specific settings require an explicit backend implementation and a
-new frozen comparison condition.
+limits. The SAFE backends accept `temperature` and optional `seed`. To declare
+matched agent transport controls, SAFE also accepts `num_retries=0` and
+`max_tokens` equal to `episode_budget.max_output_tokens`; neither setting can
+change SAFE's retry policy or raise its output cap. Nonzero/null/boolean retries
+and conflicting output caps fail before dispatch. Other model-specific settings
+require an explicit backend implementation and a new frozen comparison condition.
 
 The [pilot workflow](TAU3_PILOTS.md) lists matching SAFE and stock templates for
 retail IDs `0`–`4` and banking IDs `task_001`–`task_005`. These fixed source-order

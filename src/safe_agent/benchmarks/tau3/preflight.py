@@ -22,6 +22,7 @@ from typing import Any
 from safe_agent.contracts.episode_inference import (
     EpisodeInferenceRequest,
     strict_json,
+    validate_episode_model_arguments,
     validate_local_api_base,
 )
 
@@ -47,8 +48,9 @@ def _runtime_configuration(config: BenchmarkConfig) -> dict[str, Any]:
     if any(getattr(episode_limits, name) > getattr(run_limits, name)
            for name in type(episode_limits).model_fields):
         raise ValueError("EPISODE_LIMIT_EXCEEDS_RUN_LIMIT")
-    if set(config.llm_args_agent) - {"temperature", "seed"}:
-        raise ValueError("UNSUPPORTED_EPISODE_MODEL_ARGUMENTS")
+    validate_episode_model_arguments(
+        config.llm_args_agent, max_output_tokens=episode.max_output_tokens
+    )
     now = datetime.now(UTC)
     request = EpisodeInferenceRequest(
         request_id="preflight_validation", episode_id="preflight_validation",
@@ -101,6 +103,12 @@ def _reported_retries(arguments: dict[str, Any], default: int) -> int | None:
         return default
     # Invalid model arguments block launch but must not echo arbitrary values.
     return value if type(value) is int and 0 <= value <= 20 else None
+
+
+def _reported_output_cap(arguments: dict[str, Any]) -> int | None:
+    value = arguments.get("max_tokens")
+    # None means no explicit cap was supplied, not an unlimited provider.
+    return value if type(value) is int and value > 0 else None
 
 
 def _openai_model(model: str) -> bool:
@@ -378,9 +386,19 @@ def preflight_run(config: BenchmarkConfig, *, tau_root: Path | None = None,
         roles: dict[str, dict[str, Any]] = {
             "agent": {"model": config.llm_agent, "provider": provider,
                       "provider_num_retries": 0 if config.system == "safe_agent" else
-                      _reported_retries(config.llm_args_agent, harness_retries)},
+                      _reported_retries(config.llm_args_agent, harness_retries),
+                      "max_output_tokens": (
+                          report.get("effective_safe_limits", {}).get("episode_budget", {}).get(
+                              "max_output_tokens"
+                          ) if config.system == "safe_agent" else
+                          _reported_output_cap(config.llm_args_agent)
+                      ),
+                      "output_cap_basis": "safe_runtime_budget" if config.system == "safe_agent"
+                      else "explicit_harness_argument_or_provider_default"},
             "user": {"model": config.llm_user, "provider": provider,
-                     "provider_num_retries": _reported_retries(config.llm_args_user, harness_retries)},
+                     "provider_num_retries": _reported_retries(config.llm_args_user, harness_retries),
+                     "max_output_tokens": _reported_output_cap(config.llm_args_user),
+                     "output_cap_basis": "explicit_harness_argument_or_provider_default"},
         }
         if inventory["selected_tasks_with_nl_assertions"]:
             roles["judge"] = {"model": judge, "provider": "openai",
@@ -390,6 +408,10 @@ def preflight_run(config: BenchmarkConfig, *, tau_root: Path | None = None,
         report["selected_tasks_requiring_hosted_judge"] = inventory["selected_tasks_with_nl_assertions"]
         report["provider_retry_note"] = (
             "Upstream num_retries is separate from simulation retries; it is not a measured call count"
+        )
+        report["output_cap_note"] = (
+            "A null max_output_tokens means no explicit validated cap is reported; "
+            "it does not establish the provider default or equal output limits"
         )
     except (ValueError, OSError, KeyError, TypeError):
         issues.append("PINNED_JUDGE_CONFIGURATION_UNAVAILABLE")

@@ -7,6 +7,7 @@ import hmac
 import json
 import math
 import re
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Annotated, Literal, TypeAlias
 
@@ -14,6 +15,28 @@ from pydantic import Field, JsonValue, SecretStr, TypeAdapter, field_validator, 
 
 from safe_agent.contracts.base import Digest, Identifier, StrictModel, require_aware
 from safe_agent.contracts.episodes import CorrelationId, EpisodeDomain, OperationName
+
+
+def validate_episode_model_arguments(
+    arguments: Mapping[str, object], *, max_output_tokens: int
+) -> None:
+    """Accept explicit matched controls without changing SAFE's hard limits.
+
+    The stock harness names its output cap ``max_tokens``. SAFE's authoritative
+    cap remains the runtime budget; an alias may only restate that exact value.
+    Explicit provider retries may only restate SAFE's zero-retry policy.
+    Temperature and seed are validated by the inference request contract.
+    """
+    if set(arguments) - {"temperature", "seed", "num_retries", "max_tokens"}:
+        raise ValueError("UNSUPPORTED_EPISODE_MODEL_ARGUMENTS")
+    if "num_retries" in arguments:
+        retries = arguments["num_retries"]
+        if type(retries) is not int or retries != 0:
+            raise ValueError("EPISODE_PROVIDER_RETRIES_MUST_BE_ZERO")
+    if "max_tokens" in arguments:
+        tokens = arguments["max_tokens"]
+        if type(tokens) is not int or tokens != max_output_tokens:
+            raise ValueError("EPISODE_OUTPUT_CAP_MUST_MATCH_RUNTIME_LIMIT")
 
 
 def wire_json(value: object) -> str:

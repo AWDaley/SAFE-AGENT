@@ -93,6 +93,12 @@ def test_matching_capability_is_launch_readiness_not_provider_access(launch, mon
     {"llm_args_agent": {"api_key": "must-not-appear-in-output"}},
     {"llm_args_agent": {"temperature": True}},
     {"llm_args_agent": {"seed": True}},
+    {"llm_args_agent": {"num_retries": 1}},
+    {"llm_args_agent": {"num_retries": None}},
+    {"llm_args_agent": {"num_retries": True}},
+    {"llm_args_agent": {"max_tokens": 4096}},
+    {"llm_args_agent": {"max_tokens": True}},
+    {"llm_args_agent": {"max_tokens": None}},
     {"llm_args_user": {"api_base": "https://private.invalid/must-not-appear-in-output"}},
     {"llm_args_user": {"num_retries": -1}},
 ])
@@ -116,6 +122,29 @@ def test_too_little_reserved_run_headroom_is_detected(launch):
     })
     result = preflight.preflight_run(config, tau_root=root, offline=True)
     assert "RUN_CANNOT_RESERVE_ONE_ATTEMPT_PER_CONVERSATION" in result["issues"]
+
+
+@pytest.mark.parametrize("system", ["safe_agent", "llm_agent"])
+def test_normalized_controls_report_same_effective_agent_limits(launch, system):
+    config, root, _ = launch
+    config = config.model_copy(update={
+        "system": system,
+        "llm_args_agent": {"temperature": 0.0, "num_retries": 0, "max_tokens": 2048},
+    })
+    result = preflight.preflight_run(config, tau_root=root, offline=True)
+    assert result["status"] == "configuration_validated"
+    assert result["model_roles"]["agent"]["provider_num_retries"] == 0
+    assert result["model_roles"]["agent"]["max_output_tokens"] == 2048
+    assert result["provider_requests"] == result["model_calls"] == 0
+
+
+def test_stock_default_output_cap_is_unknown_in_preflight(launch):
+    config, root, _ = launch
+    result = preflight.preflight_run(
+        config.model_copy(update={"system": "llm_agent"}), tau_root=root, offline=True,
+    )
+    assert result["model_roles"]["agent"]["provider_num_retries"] == 3
+    assert result["model_roles"]["agent"]["max_output_tokens"] is None
 
 
 def test_run_must_allow_the_initial_customer_turn_for_each_conversation(launch):

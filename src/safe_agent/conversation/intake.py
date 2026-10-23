@@ -1,7 +1,7 @@
 """Field-aware projections for the synthetic text benchmark.
 
-Known identity fields, resource identifiers, and recognized email/phone/SSN
-patterns are protected. This is not a universal PII detector: unclassified
+Known identity and payment-secret fields, resource identifiers, and recognized
+email/phone/SSN or explicitly labelled PIN/CVV patterns are protected. This is not a universal PII detector: unclassified
 synthetic free text remains visible and this limitation is recorded in the run
 profile. A bounded fallback may ground a new private scalar in an exact token
 from a host-supplied customer message. This does not prove identity, consent, or
@@ -23,6 +23,17 @@ _REFERENCE = re.compile(r"\[\[safe:[A-Za-z0-9_]+:[a-f0-9]{32}\]\]")
 _EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}(?![\w-]|\.[\w-])")
 _PHONE = re.compile(r"(?<!\w)(?:\+?1[ .-]?)?\(?\d{3}\)?[ .-]\d{3}[ .-]\d{4}(?!\w)")
 _SSN = re.compile(r"(?<!\d)\d{3}-\d{2}-\d{4}(?!\d)")
+# Field policy, not generic number redaction: amounts, years, counts and other
+# unlabelled numbers are not assumed to be credentials. Recognize the supported
+# native labels in customer prose and JSON-like/text tool presentations. Invalid
+# structured secret values are still opaque through private_kind below.
+_SECRET_LABEL = r"(?<!\w)(?P<label>(?:(?:current|old|new)[ _-]+)?pin|cvv)\b"
+_SECRET_VALUE = re.compile(
+    _SECRET_LABEL
+    + r"(?P<separator>[\"']?\s*(?:(?:is|was|to)\s+|[:=]\s*)?[\"']?)"
+    r"(?P<value>[0-9]{3,12})(?![\w+-]|\.[\w+-])",
+    re.IGNORECASE,
+)
 _BANK_HEADER = re.compile(r"^Found \d+ record\(s\) in '([A-Za-z_]+)':$")
 _BANK_RECORD = re.compile(r"^(\d+\. Record ID: )(.+)$")
 _BANK_FIELD = re.compile(r"^(   )([A-Za-z_]+)(: )(.*)$")
@@ -38,6 +49,8 @@ _BANK_RECORD_KINDS = {
     "bank_account_transaction_history": "transaction_id",
 }
 _PUBLIC_RESOURCE_KINDS = {"product_id", "item_id"}
+_SECRET_FIELDS = {"pin", "cvv"}
+_SECRET_KINDS = _SECRET_FIELDS | {"unclassified_payment_secret"}
 
 _ALIASES = {
     "email_address": "email", "phone_number": "phone", "mobile_number": "phone",
@@ -52,13 +65,14 @@ _ALIASES = {
     "credit_card_account_id": "account_id", "checking_account_id": "account_id",
     "source_account_id": "account_id", "destination_account_id": "account_id",
     "new_email": "email", "shipping_address": "address", "new_item_ids": "item_ids",
+    "current_pin": "pin", "old_pin": "pin", "new_pin": "pin",
 }
 _IDENTITY = {"email", "phone", "dob", "first_name", "last_name", "person_name", "zip", "ssn"}
 
 
 def private_kind(key: str) -> str | None:
     key = _ALIASES.get(key.lower(), key.lower())
-    if key in _IDENTITY or key == "address":
+    if key in _IDENTITY or key in _SECRET_FIELDS or key == "address":
         return key
     if key.endswith("_ids"):
         return key[:-1]
@@ -140,15 +154,33 @@ class ReferenceVault:
         return record
 
     def project_text(self, value: str, *, source: str, subject_id: str | None) -> str:
+        def replace_labelled_secret(text: str) -> str:
+            def replace(match: re.Match[str]) -> str:
+                kind = "cvv" if match["label"].casefold() == "cvv" else "pin"
+                token = self.reference(match["value"], kind=kind, source=source,
+                                       subject_id=subject_id)
+                return text[match.start():match.start("value")] + token
+            return _SECRET_VALUE.sub(replace, text)
+
+        # Establish secret provenance before ordinary text projection. Generic
+        # exact-token fallback is deliberately disabled for secret arguments.
+        result = self._outside_references(value, replace_labelled_secret)
         # Prefer the longest known value so an address does not partially leak.
-        known = sorted((record for record in self.records if isinstance(record["value"], str)
-                        and len(record["value"]) >= 3),
-                       key=lambda r: (len(r["value"]), r["subject_id"] == subject_id), reverse=True)
-        result = value
+        known = sorted((record for record in self.records
+                        if ((isinstance(record["value"], str) and len(record["value"]) >= 3)
+                            or (record["kind"] in _SECRET_KINDS
+                                and type(record["value"]) in (str, int)
+                                and str(record["value"])))),
+                       key=lambda r: (len(str(r["value"])), r["subject_id"] == subject_id), reverse=True)
         for record in known:
             def replace_known(text: str, current: dict[str, Any] = record) -> str:
                 token = current["reference"]
-                native = current["value"]
+                native = str(current["value"])
+                if current["kind"] in _SECRET_KINDS:
+                    # A short secret must not rewrite a larger unrelated ID,
+                    # decimal amount, hash or already-projected reference.
+                    pattern = self._scalar_pattern(native)
+                    return pattern.sub(lambda _: token, text)
                 # An old address can be a suffix of a new address. Replacing
                 # that substring would make a fabricated prefix + opaque handle
                 # instead of protecting the new complete email scalar.
@@ -169,6 +201,23 @@ class ReferenceVault:
                     match.group(), kind=current_kind, source=source, subject_id=subject_id), text)
             result = self._outside_references(result, replace_identity)
         return result
+
+    def project_customer_text(self, value: str, *, preceding_prompt: str,
+                              subject_id: str | None) -> str:
+        """Protect a bare code following an explicit secret prompt in host history.
+
+        Prompt text can conservatively trigger redaction, never execution
+        authority. If both PIN and CVV were requested, the ambiguous reference
+        cannot resolve into either field; the customer must identify the code.
+        """
+        scalar = re.fullmatch(r"\s*([0-9]{3,12})[.!]?\s*", value)
+        kinds = {"cvv" if match["label"].casefold() == "cvv" else "pin"
+                 for match in re.finditer(_SECRET_LABEL, preceding_prompt, re.IGNORECASE)}
+        if scalar is not None and kinds:
+            kind = next(iter(kinds)) if len(kinds) == 1 else "unclassified_payment_secret"
+            token = self.reference(scalar[1], kind=kind, source="customer", subject_id=subject_id)
+            return value[:scalar.start(1)] + token + value[scalar.end(1):]
+        return self.project_text(value, source="customer", subject_id=subject_id)
 
     @staticmethod
     def _outside_references(text: str, transform: Callable[[str], str]) -> str:
@@ -344,6 +393,8 @@ class ReferenceVault:
             key = "person_name"
         if isinstance(value, str) and _REFERENCE.fullmatch(value):
             record = self._record(value, now=now, subject_id=subject_id)
+            if record["kind"] == "unclassified_payment_secret":
+                raise ProjectionDenied("PRIVATE_SECRET_TYPE_REQUIRED")
             if operation not in record["operations"] or private_kind(key) != record["kind"]:
                 raise ProjectionDenied("PRIVATE_REFERENCE_KIND_OR_OPERATION_DENIED")
             return deepcopy(record["value"])
@@ -359,7 +410,7 @@ class ReferenceVault:
         if isinstance(value, str) and "[[safe:" in value:
             raise ProjectionDenied("EMBEDDED_PRIVATE_REFERENCE_DENIED")
         if private_kind(key) and value not in (None, ""):
-            if self._customer_scalar(value):
+            if private_kind(key) not in _SECRET_KINDS and self._customer_scalar(value):
                 kind = private_kind(key)
                 assert kind is not None
                 token = self.reference(value, kind=kind, source="customer",
@@ -377,8 +428,12 @@ class ReferenceVault:
             return False
         # Dots, signs, hyphens and @ remain token characters, avoiding partial
         # email addresses, account IDs, dates, ZIP+4 values or signed amounts.
-        pattern = re.compile(r"(?<![\w@.+-])" + re.escape(text) + r"(?![\w@+-]|\.[\w@+-])")
+        pattern = self._scalar_pattern(text)
         return any(pattern.search(message) is not None for message in self._customer_texts)
+
+    @staticmethod
+    def _scalar_pattern(text: str) -> re.Pattern[str]:
+        return re.compile(r"(?<![\w@.+-])" + re.escape(text) + r"(?![\w@+-]|\.[\w@+-])")
 
     def resolve_arguments(self, operation: str, arguments: dict[str, Any], *,
                           now: datetime, subject_id: str | None) -> dict[str, Any]:
@@ -412,8 +467,20 @@ class ReferenceVault:
 
     def render(self, text: str, *, now: datetime, subject_id: str | None,
                authenticated: bool) -> str:
+        # Credential references are for the trusted tool path, never for text
+        # interpolation. Reject literal echoes/guesses as well as references;
+        # ordinary unlabelled numeric answers remain valid.
+        if _SECRET_VALUE.search(text) or any(
+            record["kind"] in _SECRET_KINDS and type(record["value"]) in (str, int)
+            and str(record["value"]) and self._scalar_pattern(str(record["value"])).search(text)
+            for record in self.records
+        ):
+            raise ProjectionDenied("PRIVATE_SECRET_DISCLOSURE_DENIED")
+
         def replace(match: re.Match[str]) -> str:
             record = self._record(match.group(), now=now, subject_id=subject_id)
+            if record["kind"] in _SECRET_KINDS:
+                raise ProjectionDenied("PRIVATE_SECRET_DISCLOSURE_DENIED")
             if (record["source"] != "customer" and not authenticated
                     and record["kind"] not in _PUBLIC_RESOURCE_KINDS):
                 raise ProjectionDenied("RECIPIENT_NOT_AUTHENTICATED")

@@ -11,6 +11,12 @@ CONFIGS = Path(__file__).resolve().parents[3] / "configs" / "benchmarks"
 PILOTS = (
     (
         "banking_knowledge",
+        "tau3-bank-dev-normalized-safe.toml",
+        "tau3-bank-dev-normalized-baseline.toml",
+        ["task_001", "task_002", "task_003", "task_004", "task_005"],
+    ),
+    (
+        "banking_knowledge",
         "tau3-bank-dev-safe.toml",
         "tau3-bank-dev-baseline.toml",
         ["task_001", "task_002", "task_003", "task_004", "task_005"],
@@ -28,6 +34,23 @@ PILOTS = (
         ["task_001", "task_002", "task_003", "task_004", "task_005"],
     ),
 )
+
+
+def test_normalized_pilot_explicitly_matches_provider_retries_and_output_caps():
+    from safe_agent.benchmarks.tau3.comparison import _agent_transport_controls
+
+    configs = [load_config(CONFIGS / f"tau3-bank-dev-normalized-{role}.toml")
+               for role in ("safe", "baseline")]
+    for config in configs:
+        assert config.llm_args_agent == {
+            "temperature": 0.0, "num_retries": 0, "max_tokens": 2048,
+        }
+        controls = _agent_transport_controls(config)
+        assert controls["provider_num_retries"] == 0
+        assert controls["max_output_tokens"] == config.episode_budget["max_output_tokens"] == 2048
+    # The originally frozen stock-default condition stays separately named.
+    original = load_config(CONFIGS / "tau3-bank-dev-baseline.toml")
+    assert original.llm_args_agent == {"temperature": 0.0}
 
 
 @pytest.mark.parametrize("domain,safe_path,baseline_path,task_ids", PILOTS)

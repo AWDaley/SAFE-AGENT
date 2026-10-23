@@ -62,6 +62,21 @@ in SAFE-specific runtime limits are disclosed. The stock baseline keeps its
 own agent implementation. A comparison against a separately named commercial
 agent needs that agent's adapter and its own recorded experiment.
 
+`system_specific_conditions` includes each agent's provider retry limit and
+recorded output-token cap. For SAFE, a hash-bound preflight record supplies the
+effective runtime cap, including the default used at launch. Its run identity,
+configuration hash, runtime revision and any explicit configured cap must agree.
+Without that evidence, only an explicit saved `episode_budget.max_output_tokens`
+establishes the cap; an omitted legacy cap stays unknown. The reporter never
+substitutes the installed runtime's current defaults into historical results.
+An absent stock cap is also unknown. `agent_transport_comparability` reports
+retry and output-cap matches separately. The original hosted templates therefore show unmatched
+transport controls even though their raw model arguments match. The separately
+named normalized banking pilot fixes both agents at zero retries and 2048 output
+tokens. Matching those controls still leaves a full-system comparison, not a
+causal estimate of enforcement overhead. Old run configurations and hashes remain
+unchanged; the extra reporting fields do not rewrite saved artifacts.
+
 For the local development pair, use `artifacts/tau3/bank-dev-local-safe` and
 `artifacts/tau3/bank-dev-local-baseline` after actual runs. Those five-task
 exploratory results are separate from a full-domain hosted comparison. A declared

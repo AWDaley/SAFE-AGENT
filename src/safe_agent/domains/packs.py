@@ -300,9 +300,11 @@ class DomainPack:
         proposal = ToolProposal.model_validate(proposal.model_dump())
         effective = proposal.tool_name
         effect: DomainEffect = "control"
+        business_effect: DomainEffect = "control"
         try:
             cap, args = self._resolve(proposal, context)
             effective = cap.name
+            business_effect = cap.effect
             # The upstream dispatch wrapper can write its call log even for an
             # inner read. Its exact retry classification is therefore write.
             effect = "write" if proposal.tool_name == "call_discoverable_agent_tool" else cap.effect
@@ -320,6 +322,7 @@ class DomainPack:
                 allowed=False,
                 reason_code=reason,
                 effect=effect,
+                business_effect=business_effect,
                 proposal_digest=proposal.digest,
                 effective_tool_name=effective,
             )
@@ -406,6 +409,7 @@ class DomainPack:
                 else decision.reason_code
             ),
             effect=effect,
+            business_effect=business_effect,
             proposal_digest=proposal.digest,
             effective_tool_name=effective,
             tal_decision_hash=sha256(decision.model_dump(mode="json")),

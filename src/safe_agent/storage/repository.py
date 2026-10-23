@@ -99,6 +99,33 @@ class MissingTask(KeyError):
     pass
 
 
+def _protected_envelopes(
+    rows: list[ReferenceRow], task: TaskRow, *, require_active: bool = False,
+) -> tuple[dict[str, object], ...]:
+    """Check indexed metadata against signed envelopes; the broker verifies MACs."""
+    entries: list[dict[str, object]] = []
+    for row in rows:
+        entry = row.binding_json
+        record = entry.get("record") if isinstance(entry, dict) else None
+        if (not isinstance(entry, dict) or set(entry) != {"handle", "record", "mac"}
+                or not isinstance(record, dict)
+                or row.task_id != task.task_id
+                or row.organization_id != task.organization_id
+                or row.initiator_id != task.initiator_id
+                or entry["handle"] != row.handle or record.get("handle") != row.handle
+                or record.get("task_id") != task.task_id
+                or record.get("organization_id") != task.organization_id
+                or record.get("initiator_id") != task.initiator_id
+                or record.get("resource_kind") != row.kind
+                or type(record.get("revoked")) is not bool
+                or record["revoked"] != row.revoked):
+            raise StateConflict("protected reference metadata is inconsistent")
+        if require_active and row.revoked:
+            raise StateConflict("protected reference is revoked")
+        entries.append(entry)
+    return tuple(entries)
+
+
 @dataclass(frozen=True)
 class OutboxClaim:
     action_hash: str
@@ -437,6 +464,41 @@ class TaskTransaction:
             raise StateConflict("no outbox intent for task")
         return record
 
+    def require_outbox_claim(
+        self, claim: OutboxClaim, *, statuses: tuple[str, ...] = ("LEASED",),
+        now: datetime | None = None,
+    ) -> OutboxRow:
+        """Lock and fence the exact lease generation, including reused worker IDs."""
+        row = self.session.get(
+            OutboxRow, claim.action_hash, with_for_update=True, populate_existing=True,
+        )
+        if (row is None or row.task_id != self.row.task_id
+                or row.task_id != claim.task_id
+                or row.organization_id != self.row.organization_id
+                or row.organization_id != claim.organization_id
+                or row.manifest_hash != self.row.manifest_hash
+                or row.manifest_hash != claim.manifest_hash
+                or row.proposal_hash != claim.proposal_hash
+                or row.operation != claim.operation or row.provider_kind != claim.provider_kind
+                or row.source_revision != claim.source_revision or row.source_hash != claim.source_hash
+                or row.status not in statuses or row.lease_owner != claim.worker_id
+                or row.attempts != claim.attempts):
+            raise StateConflict("worker no longer owns exact outbox claim")
+        if now is not None:
+            expiry = row.lease_until
+            if expiry is not None and expiry.utcoffset() is None:
+                expiry = expiry.replace(tzinfo=UTC)
+            if expiry is None or require_aware(now) >= expiry:
+                raise StateConflict("outbox dispatch lease expired")
+        return row
+
+    def protected_references(self, *, require_active: bool = False) -> tuple[dict[str, object], ...]:
+        """Read locked reference rows under the task's revocation/dispatch lock."""
+        rows = self.session.scalars(select(ReferenceRow).where(
+            ReferenceRow.task_id == self.row.task_id,
+        ).order_by(ReferenceRow.handle).with_for_update()).all()
+        return _protected_envelopes(list(rows), self.row, require_active=require_active)
+
     def write_execution_outcome(self, action_hash: str, *, outcome: str,
                                 receipt_json: dict[str, object]) -> None:
         effect_id = "fake_action_" + action_hash[7:39]
@@ -682,8 +744,8 @@ class LedgerRepository:
     ) -> Iterator[TaskTransaction]:
         with self._sessions.begin() as session:
             if serialize_sqlite and self.engine.dialect.name == "sqlite":
-                # SQLite ignores FOR UPDATE. Admission's isolated file-backed
-                # tests explicitly acquire the writer before reading any rows.
+                # SQLite ignores FOR UPDATE. Acquire its writer before reading
+                # admission, revocation or receipt state, and hold through commit.
                 session.connection().exec_driver_sql("BEGIN IMMEDIATE")
             query = select(TaskRow).where(TaskRow.task_id == task_id).with_for_update()
             row = session.scalar(query)
@@ -711,7 +773,8 @@ class LedgerRepository:
             )
             choices = [
                 ~google_binding_exists,
-                OutboxRow.status.in_(("QUEUED", "OUTCOME_UNKNOWN", "RETRY_WAIT", "LEASED")),
+                OutboxRow.status.in_(("QUEUED", "OUTCOME_UNKNOWN", "RETRY_WAIT", "LEASED",
+                                     "DISPATCHING")),
                 OutboxRow.provider_kind == "synthetic",
                 OutboxRow.next_attempt_at <= tick,
                 or_(OutboxRow.lease_until.is_(None), OutboxRow.lease_until <= tick),
@@ -818,10 +881,8 @@ class LedgerRepository:
     def release_action_unknown(self, claim: OutboxClaim, *, now: datetime,
                                reason: str, delay: timedelta = timedelta(seconds=5)) -> None:
         """Uncertain effect remains uncompleted and must be reconciled."""
-        with self.write_task(claim.task_id) as tx:
-            row = tx.read_outbox(claim.action_hash)
-            if row.status != "LEASED" or row.lease_owner != claim.worker_id:
-                raise StateConflict("worker no longer owns outbox claim")
+        with self.write_task(claim.task_id, serialize_sqlite=True) as tx:
+            row = tx.require_outbox_claim(claim, statuses=("LEASED", "DISPATCHING"))
             receipt = ExecutionReceipt(
                 action_hash=claim.action_hash, manifest_hash=claim.manifest_hash,
                 outcome=ExecutionOutcome.OUTCOME_UNKNOWN,
@@ -1156,6 +1217,9 @@ class LedgerRepository:
                 if (persisted.phase is OfficePhase.NEEDS_REVIEW
                         and outbox.status != "NEEDS_REVIEW"):
                     raise ValueError("escalated outbox not marked for review")
+                if (persisted.phase is OfficePhase.EXECUTING and outbox.status not in {
+                        "QUEUED", "LEASED", "DISPATCHING", "RETRY_WAIT", "OUTCOME_UNKNOWN"}):
+                    raise ValueError("pending action outbox status invalid")
             elif outbox is not None:
                 raise ValueError("outbox exists before authority intent")
         return rebuilt
@@ -1166,7 +1230,10 @@ class LedgerRepository:
     def persist_protected_references(self, task_id: str, organization_id: str,
                                      initiator_id: str, records: tuple[dict[str, object], ...]) -> None:
         """Store HMAC-protected private mappings. NEVER return these via operator APIs."""
-        with self.write_task(task_id) as tx:
+        # Serialize with final worker admission, including SQLite's supported
+        # persistent local profile. Revocation may follow an admitted dispatch,
+        # but cannot race past the final check before that dispatch is committed.
+        with self.write_task(task_id, serialize_sqlite=True) as tx:
             if tx.row.organization_id != organization_id or tx.row.initiator_id != initiator_id:
                 raise StateConflict("reference principal/tenant mismatch")
             for entry in records:
@@ -1189,8 +1256,9 @@ class LedgerRepository:
                     ))
                 elif current.binding_json != entry:
                     # Only explicit revocation through the trusted broker may alter it.
-                    if (current.binding_json.get("record", {}).get("revoked") is False
-                            and binding.get("revoked") is True):
+                    previous = current.binding_json.get("record", {})
+                    if (previous.get("revoked") is False and binding.get("revoked") is True
+                            and binding == {**previous, "revoked": True}):
                         current.revoked = True
                         current.binding_json = entry
                     else:
@@ -1203,4 +1271,4 @@ class LedgerRepository:
                 raise MissingTask("unknown task")
             rows = session.scalars(select(ReferenceRow).where(
                 ReferenceRow.task_id == task_id).order_by(ReferenceRow.handle)).all()
-            return tuple(row.binding_json for row in rows)
+            return _protected_envelopes(list(rows), task)

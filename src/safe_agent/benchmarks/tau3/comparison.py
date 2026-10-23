@@ -80,6 +80,148 @@ class ComparisonError(ValueError):
     """A fixed failure code; never include private transcript or credential text."""
 
 
+def _verified_preflight(
+    manifest: dict[str, Any] | None, config: BenchmarkConfig
+) -> dict[str, Any] | None:
+    """Use recorded launch evidence only when its saved binding is valid.
+
+    Older manifests may omit preflight evidence or its hash. Unbound evidence
+    does not establish an effective runtime default. A supplied binding must
+    validate even when the explicit run configuration would otherwise suffice.
+    """
+    if manifest is None:
+        return None
+    preflight = manifest.get("preflight")
+    digest = manifest.get("preflight_sha256")
+    if preflight is None:
+        _require(digest is None, "PREFLIGHT_HASH_MISMATCH")
+        return None
+    _require(isinstance(preflight, dict), "PREFLIGHT_METADATA_INVALID")
+    if digest is None:
+        return None
+    _require(digest == content_hash(preflight), "PREFLIGHT_HASH_MISMATCH")
+    _require(
+        preflight.get("schema_version") == "safe_agent.tau3_preflight.v1"
+        and preflight.get("kind") == "benchmark_preflight"
+        and preflight.get("config_sha256") == manifest["config_sha256"]
+        and preflight.get("run_id") == config.run_id
+        and preflight.get("safe_revision") == manifest["safe_revision"]
+        and preflight.get("configuration_validated") is True
+        and preflight.get("ready_for_attempt") is True,
+        "PREFLIGHT_RUN_BINDING_MISMATCH",
+    )
+    return preflight
+
+
+def _agent_transport_controls(
+    config: BenchmarkConfig, *, manifest: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Recorded declarations for the frozen benchmark, not measured attempts.
+
+    The pinned tau2/config.py has DEFAULT_MAX_RETRIES = 3; llm_utils.py
+    applies it when num_retries is absent or null. The source manifest is
+    verified when saved runs are loaded. SAFE's revision is separately recorded;
+    never substitute the installed RuntimeLimits defaults for its saved evidence.
+    """
+    preflight = _verified_preflight(manifest, config)
+    if config.system == "safe_agent":
+        from safe_agent.contracts.episode_inference import validate_episode_model_arguments
+
+        tokens = config.episode_budget.get("max_output_tokens")
+        if "max_output_tokens" in config.episode_budget:
+            _require(type(tokens) is int and tokens > 0, "INVALID_SAFE_TRANSPORT_CONTROLS")
+        basis = ("explicit_episode_budget" if tokens is not None
+                 else "legacy_runtime_default_not_established")
+        if preflight is not None:
+            limits = preflight.get("effective_safe_limits")
+            episode = limits.get("episode_budget") if isinstance(limits, dict) else None
+            recorded = episode.get("max_output_tokens") if isinstance(episode, dict) else None
+            _require(
+                preflight.get("safe_budget_applies") is True
+                and type(recorded) is int and recorded > 0,
+                "PREFLIGHT_SAFE_OUTPUT_CAP_INVALID",
+            )
+            _require(tokens is None or tokens == recorded, "PREFLIGHT_SAFE_OUTPUT_CAP_MISMATCH")
+            tokens = recorded
+            basis = "recorded_preflight_runtime_budget"
+        alias = config.llm_args_agent.get("max_tokens")
+        if "max_tokens" in config.llm_args_agent:
+            _require(type(alias) is int and alias > 0, "INVALID_SAFE_TRANSPORT_CONTROLS")
+        try:
+            # An alias alone does not establish the historical runtime budget.
+            # Its shape is still checked; equality is checked when a cap is known.
+            validate_episode_model_arguments(
+                config.llm_args_agent,
+                max_output_tokens=(tokens if isinstance(tokens, int)
+                                   else alias if isinstance(alias, int) else 0),
+            )
+        except (ValueError, TypeError):
+            raise ComparisonError("INVALID_SAFE_TRANSPORT_CONTROLS") from None
+        controls = {
+            "provider_num_retries": 0,
+            "max_output_tokens": tokens,
+            "output_cap_basis": basis,
+        }
+        _check_preflight_transport(preflight, controls)
+        return controls
+    _, arguments = harness_model_settings(config, "agent")
+    retries = arguments.get("num_retries")
+    retries = 3 if retries is None else retries
+    tokens = arguments.get("max_tokens")
+    if type(retries) is not int or not 0 <= retries <= 20:
+        raise ComparisonError("INVALID_STOCK_TRANSPORT_CONTROLS")
+    if tokens is not None and (type(tokens) is not int or tokens <= 0):
+        raise ComparisonError("INVALID_STOCK_TRANSPORT_CONTROLS")
+    controls = {
+        "provider_num_retries": retries,
+        "max_output_tokens": tokens,
+        "output_cap_basis": "explicit_harness_argument" if tokens is not None
+        else "provider_default_not_established",
+    }
+    _check_preflight_transport(preflight, controls)
+    return controls
+
+
+def _check_preflight_transport(
+    preflight: dict[str, Any] | None, controls: dict[str, Any]
+) -> None:
+    if preflight is None or "model_roles" not in preflight:
+        return
+    roles = preflight["model_roles"]
+    agent = roles.get("agent") if isinstance(roles, dict) else None
+    if not isinstance(agent, dict):
+        raise ComparisonError("PREFLIGHT_AGENT_CONTROLS_INVALID")
+    # Earlier preflight records did not contain output caps. When a control is
+    # present, do not silently replace conflicting saved evidence.
+    for name in ("provider_num_retries", "max_output_tokens"):
+        if name in agent:
+            _require(
+                type(agent[name]) is type(controls[name]) and agent[name] == controls[name],
+                "PREFLIGHT_AGENT_CONTROLS_MISMATCH",
+            )
+
+
+def _transport_comparability(controls: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    left, right = controls["left"], controls["right"]
+    retry_match = left["provider_num_retries"] == right["provider_num_retries"]
+    output_match = (
+        left["max_output_tokens"] is not None
+        and right["max_output_tokens"] is not None
+        and left["max_output_tokens"] == right["max_output_tokens"]
+    )
+    return {
+        "provider_retry_limits_match": retry_match,
+        "explicit_output_caps_match": output_match,
+        "agent_transport_controls_match": retry_match and output_match,
+        "actual_provider_attempts_measured": False,
+        "interpretation": (
+            "Full-system comparison. Equal declared retries and output caps do not "
+            "isolate enforcement overhead: prompts, planning, tool projection, "
+            "repair behavior and SAFE budgets remain system-specific."
+        ),
+    }
+
+
 class FailureAnnotation(BoundaryModel):
     run_id: str = Field(min_length=1, max_length=200)
     task_id: str = Field(min_length=1, max_length=200)
@@ -712,6 +854,10 @@ def _compare(
 ) -> dict[str, Any]:
     left, right = _load(left_path), _load(right_path)
     _match(left, right)
+    transport_controls = {
+        side: _agent_transport_controls(run.config, manifest=run.manifest)
+        for side, run in (("left", left), ("right", right))
+    }
     tasks = left.manifest["inventory"]["selected_task_ids"]
     joined = [
         {"task_id": task, "left": _task_view(left, task), "right": _task_view(right, task)}
@@ -744,6 +890,7 @@ def _compare(
         "domain": left.config.domain,
         "stage": left.config.stage,
         "matched_metadata_valid": True,
+        "agent_transport_comparability": _transport_comparability(transport_controls),
         "shared_condition": {
             "model_route": left.config.model_route,
             "local_api_base": left.config.local_api_base,
@@ -791,6 +938,7 @@ def _compare(
             side: {
                 "episode_budget_sha256": content_hash(run.config.episode_budget),
                 "run_budget_sha256": content_hash(run.config.run_budget),
+                "agent_transport_controls": transport_controls[side],
             }
             for side, run in (("left", left), ("right", right))
         },

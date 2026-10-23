@@ -36,6 +36,7 @@ from safe_agent.contracts.episode_inference import (
     MessageCandidate,
     ToolCandidate,
     strict_json,
+    validate_episode_model_arguments,
     wire_digest,
     wire_json,
 )
@@ -78,6 +79,9 @@ from safe_agent.storage.episode_runtime import (
 )
 from safe_agent.storage.episodes import EpisodeStore
 from safe_agent.storage.models import Base
+
+PRIVACY_PROFILE = "synthetic_benchmark_field_policy_v2"
+COMPLETION_PROFILE = "tau3-business-effect-receipts-v2"
 
 
 class RuntimeLimits(StrictModel):
@@ -131,13 +135,15 @@ class EpisodeRuntime:
         )
         self._seed: int | None = None
         self._admission_evaluator = admission_evaluator
-        if set(context.model_args) - {"temperature", "seed"}:
-            raise ValueError("UNSUPPORTED_EPISODE_MODEL_ARGUMENTS")
+        validate_episode_model_arguments(context.model_args,
+                                         max_output_tokens=self.limits.max_output_tokens)
         if not context.run_id:
             raise ValueError("INVALID_EPISODE_RUN_ID")
         self.run_id = context.run_id if context.run_id[0].isalpha() else "run_" + context.run_id
         config_hash = wire_digest({"profile": "tau3-v1.0.1-episode-v1",
                                    "context_retention_profile": CONTEXT_RETENTION_PROFILE,
+                                   "privacy_profile": PRIVACY_PROFILE,
+                                   "completion_profile": COMPLETION_PROFILE,
                                    "domain": context.domain, "model": context.model,
                                    "model_args": context.model_args,
                                    "episode_limits": self.limits.model_dump(),
@@ -181,6 +187,8 @@ class EpisodeRuntime:
     def _policy_hash(domain: str, policy: str, tools: list[dict[str, Any]]) -> str:
         return wire_digest({"domain": domain, "policy": policy, "tools": tools,
                             "admission_profile": "tau3-v1.0.1-encoded-rules-v1",
+                            "privacy_profile": PRIVACY_PROFILE,
+                            "completion_profile": COMPLETION_PROFILE,
                             "context_retention_profile": CONTEXT_RETENTION_PROFILE})
 
     def _owned_episode(self, episode_id: str) -> EpisodeView:
@@ -305,7 +313,9 @@ class EpisodeRuntime:
                 if success:
                     data["successful_calls"][pending["call_id"]] = {
                         "tool_name": pending["effective_tool_name"],
-                        "effect": "business_write" if pending["effect"] == "write" else pending["effect"],
+                        "effect": ("business_write" if pending["business_effect"] == "write"
+                                   else pending["business_effect"]),
+                        "dispatch_effect": pending["effect"],
                         "result_hash": wire_digest(result),
                     }
                 message = message.model_copy(update={"tool_name": pending["tool_name"]})
@@ -331,6 +341,7 @@ class EpisodeRuntime:
         calls: dict[str, tuple[int, dict[str, Any]]] = {}
         matched_calls: dict[int, int] = {}
         observations: list[ObservedResult] = []
+        preceding_prompt = ""
         for index, raw in enumerate(data["history"]):
             item = dict(raw)
             source = "customer" if item["role"] == "user" else "tool"
@@ -355,8 +366,17 @@ class EpisodeRuntime:
             else:
                 if item["role"] == "assistant" and item.get("call_id") and item.get("tool_name"):
                     calls[item["call_id"]] = index, dict(raw)
-                item["content"] = vault.project_text(item.get("content") or "", source=source,
-                                                       subject_id=ctx.subject_id)
+                if item["role"] == "user":
+                    item["content"] = vault.project_customer_text(
+                        item.get("content") or "", preceding_prompt=preceding_prompt,
+                        subject_id=ctx.subject_id,
+                    )
+                    preceding_prompt = ""
+                else:
+                    item["content"] = vault.project_text(item.get("content") or "", source=source,
+                                                           subject_id=ctx.subject_id)
+                    if not item.get("call_id"):
+                        preceding_prompt = raw.get("content") or ""
                 if item.get("arguments"):
                     item["arguments"] = vault.project(item["arguments"], source="tool",
                                                         subject_id=ctx.subject_id)
@@ -493,7 +513,8 @@ class EpisodeRuntime:
             "unlocked_tool_definitions": definitions, "user_tool_grants": grants,
             "retrieval_documents": [project_document(document) for document in evidence.required_documents],
             "retrieval_inventory": dict(evidence.inventory),
-            "privacy_profile": "synthetic_benchmark_field_policy_v1",
+            "privacy_profile": PRIVACY_PROFILE,
+            "completion_profile": COMPLETION_PROFILE,
             "semantic_policy_verified": False,
             "feedback": feedback,
             "conversation": [selected[index] for index in sorted(selected)],
@@ -652,6 +673,7 @@ class EpisodeRuntime:
         data["pending_call"] = {"call_id": call.call_id, "tool_name": proposal.tool_name,
                                   "proposal": proposal.model_dump(mode="json"),
                                   "effect": decision.effect,
+                                  "business_effect": decision.business_effect,
                                   "effective_tool_name": decision.effective_tool_name,
                                   "tal_decision_hash": decision.tal_decision_hash}
         data["pending_consent"] = None

@@ -410,6 +410,7 @@ def test_read_dispatch_can_log_and_is_not_replayed_during_unknown_write():
         arguments='{"user_id":"user_1"}',
     )
     assert pack.admit(p, ctx).effect == "write"
+    assert pack.admit(p, ctx).business_effect == "read"
     unresolved = ctx.model_copy(update={"unresolved_write": True})
     assert pack.admit(p, unresolved).reason_code == "DOMAIN_RECONCILIATION_REQUIRED"
 

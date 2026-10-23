@@ -49,6 +49,13 @@ for retry purposes even if its inner operation reads, because the official
 wrapper can record the call in benchmark state. The hidden evaluator's read-log
 allowlist is never consulted.
 
+Admission records `effect` (dispatch/retry classification) separately from
+`business_effect` (the underlying operation's catalog effect). A successful
+wrapped read retains write retry protection but produces a read receipt; it
+cannot satisfy the mutation-completion renderer. A correlated successful
+business write still produces a mutation receipt. These classifications do not
+prove the semantic correctness of a natural-language completion claim.
+
 The checked-in private catalog contains only public tool signatures/decorators.
 Regenerate it with `scripts/generate_tau_domain_catalog.py /path/to/pinned/tau`;
 `--check` verifies reproducibility. The generator reads exactly three named
