@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import os
 import stat
 import subprocess
@@ -18,6 +19,7 @@ from safe_agent.billing import SyntheticBillingSourceRecord
 from safe_agent.billing.uds_verifier import BillingVerifierUDSTransport
 from safe_agent.canonical import canonical_json
 from safe_agent.contracts.billing_verification import VerifiedBillingAttestation
+from safe_agent.contracts.provider_billing_audit import VerifiedProviderCostAudit
 
 HOST = "billing.example.com"
 ISSUER = "independent_offline_billing_ed25519_v1"
@@ -128,7 +130,53 @@ def main() -> None:
                 raise RuntimeError("billing verifier response binding mismatch")
             if len(public_key) != 32:
                 raise RuntimeError("unexpected Ed25519 public key size")
+
+            today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+            start = int((today - timedelta(days=1)).timestamp())
+            cost_capture = {
+                "schema_version": "safe_agent.openai_costs_capture.v1",
+                "provider": "openai",
+                "endpoint": "/v1/organization/costs",
+                "start_time": start,
+                "end_time": start + 86400,
+                "bucket_width": "1d",
+                "group_by": ["project_id", "line_item"],
+                "fetched_at": (datetime.now(UTC) - timedelta(seconds=1)).isoformat(),
+                "pages": [{
+                    "request_page": None,
+                    "response": {
+                        "object": "page",
+                        "data": [{
+                            "object": "bucket",
+                            "start_time": start,
+                            "end_time": start + 86400,
+                            "results": [{
+                                "object": "organization.costs.result",
+                                "amount": {"value": 0.06, "currency": "usd"},
+                                "line_item": "Text models",
+                                "project_id": "proj_smoke",
+                            }],
+                        }],
+                        "has_more": False,
+                        "next_page": None,
+                    },
+                }],
+            }
+            audit = transport.audit_provider_costs(json.dumps(cost_capture))
+            checked_audit = VerifiedProviderCostAudit.model_validate_json(
+                audit.model_dump_json(),
+            )
+            audit_payload = canonical_json(
+                checked_audit.model_dump(mode="json", exclude={"signature"}),
+            )
+            private_obj.public_key().verify(
+                bytes.fromhex(checked_audit.signature), audit_payload,
+            )
+            if (checked_audit.audit.total_usd_decimal != "0.06"
+                    or checked_audit.audit.request_reconciliation_supported is not False):
+                raise RuntimeError("aggregate cost audit boundary mismatch")
             print("ASYMMETRIC_BILLING_VERIFIER_UDS=PASS")
+            print("OPENAI_AGGREGATE_COST_AUDIT=PASS")
             print("DATABASE_ACCESS=NONE; BUSINESS_EFFECTS=0; LIVE_BILLING_SOURCE=DISABLED")
         finally:
             proc.terminate()

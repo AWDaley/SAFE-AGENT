@@ -16,11 +16,17 @@ The fake provider itself is persisted to SQL using `safe_fake_provider_state` an
 | --- | --- | --- |
 | `QUEUED` | Intent durably recorded, no dispatch lease | First worker may claim and validate |
 | `LEASED` | Worker owns bounded dispatch lease | No concurrent claim before expiry |
+| `DISPATCHING` | Final admission committed against current authority | Admitted attempt may run; after lease expiry, reconcile and require fresh authority for any new write |
 | `OUTCOME_UNKNOWN` | Write response/readback uncertain; `EXECUTING` task remains unverified | Reconcile via provider action-key lookup; bounded checks |
 | `VERIFIED` | Readback matches pinned proposal; receipt and event persisted | No further dispatch |
 | `NEEDS_REVIEW` | Preconditions fail or attempts exhausted | Human investigation / new authorized task, never silent retry |
 
 M4 preserves M3's `OfficePhase` wire values: uncertain actions remain **`EXECUTING`** with an `OUTCOME_UNKNOWN` execution/outbox record rather than silently becoming `COMPLETED`. This preserves the frozen M2/M3 schema exports. Operator status is available through the existing authenticated API at `GET /v1/tasks/{task_id}/execution`, subject to the task's organization and `task:read` permission. The response contains no private IDs or bindings. The ledger continues to replay task state deterministically; terminal outcomes must also match their outbox status and stored execution receipt.
+
+Final admission now serializes with persisted reference revocation, and result
+transactions fence the full lease generation through commit. See
+[Protected reference revocation and synthetic dispatch](REFERENCE_REVOCATION_AND_DISPATCH.md)
+for ordering, readback after revocation, and upgrade/rollback requirements.
 
 ## Fault injection and verification matrix
 
