@@ -1,8 +1,10 @@
 # Coordinated offline runtime profile and preflight
 
-This increment is stacked on PR #34 at `3f41686558933f6f3b23b28335c5755d70bf6aee`.
-It improves installation and diagnostics, not business capabilities. It does not
-complete W0 governance, W5 application startup, W7 isolation or production approval.
+This profile is the supported dependency environment for the current offline
+office application. It provides installation and diagnostics; the
+[persistent local launcher](PERSISTENT_LOCAL_OFFICE.md) supplies application
+startup. Neither the profile nor the launcher establishes production approval or
+an operating-system sandbox.
 
 ## Why a separate profile
 
@@ -27,7 +29,7 @@ Ubuntu 24.04. There is no native Windows, macOS, ARM or musl compatibility claim
 This is also consistent with the existing private Unix-socket inference path.
 Use an isolated development environment. No customer credentials are needed.
 
-From a checkout of this branch, with Python 3.12 available:
+From the reviewed application checkout, with Python 3.12 available:
 
 ```sh
 python3.12 scripts/install_coordinated_runtime.py
@@ -118,6 +120,8 @@ Earlier legacy workflows may still use historical fixture installation inputs;
 only the dedicated runtime job certifies this new combined lock. Migrating all
 legacy CI profiles is not silently claimed complete.
 
-**No application server launcher, cancellation/retirement workflow, real model
-connection, live Google access, independent approval, branch protection or merge
-is added. Live acceptance remains BLOCKED and production remains unauthorized.**
+The profile itself grants no business authority. Application startup,
+[task retirement](TASK_RETIREMENT.md) and
+[workspace maintenance](WORKSPACE_MAINTENANCE.md) have separate controls and
+runbooks. **Live Google acceptance remains BLOCKED and production remains
+unauthorized.**

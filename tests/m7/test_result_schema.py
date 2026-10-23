@@ -59,7 +59,7 @@ def test_forward_migration_keeps_legacy_success_non_reusable(tmp_path: Path, mon
     with repo._sessions() as db:
         assert db.scalars(select(ResultRow)).all() == []
     with engine.connect() as db:
-        assert db.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0014_billing_verifier_identity"
+        assert db.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0016_episode_inference"
     repo.close()
 
 

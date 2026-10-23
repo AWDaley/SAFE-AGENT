@@ -56,6 +56,6 @@ def test_w4_upgrade_preserves_w3_result_bytes_holds_and_history(tmp_path: Path):
             assert db.scalars(select(CoordinatedPlanningInputRow)).all() == []
             assert db.scalars(select(CoordinatedPlanningConsumptionRow)).all() == []
         with repo.engine.connect() as db:
-            assert db.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0014_billing_verifier_identity"
+            assert db.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0016_episode_inference"
     finally:
         repo.close()

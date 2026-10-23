@@ -33,6 +33,7 @@ from safe_agent.local_office.workspace import (
     create_layout,
     finish_layout,
     load_manifest,
+    require_office_migration_source,
     secret,
     write_new,
 )
@@ -102,8 +103,7 @@ def initialize(root: Path, migrations: Path) -> WorkspaceManifest:
         raise LocalOfficeBlocked("MIGRATION_SOURCE_REQUIRED")
     config = Config()
     config.set_main_option("script_location", str(migrations).replace("%", "%%"))
-    if ScriptDirectory.from_config(config).get_heads() != [HEAD]:
-        raise LocalOfficeBlocked("MIGRATION_SOURCE_MISMATCH")
+    require_office_migration_source(ScriptDirectory.from_config(config))
     source = seed_source()
     if source.organization_id != ORGANIZATION:
         raise LocalOfficeBlocked("SYNTHETIC_SOURCE_MISMATCH")

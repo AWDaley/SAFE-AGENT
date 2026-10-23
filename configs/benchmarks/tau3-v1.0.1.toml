@@ -1,0 +1,52 @@
+# Frozen English-text τ³ v1.0.1. Inspect is offline; run invokes configured models.
+# Monetary fields are conservative reservation allowances, not invoice estimates.
+# $10 run allowance / $0.10 per-attempt hold permits only 100 SAFE model attempts
+# across 97 conversations (~1.03 each). Pilot-calibrate before a coverage run;
+# this example can exhaust its allowance before most conversations complete.
+schema_version = 1
+tau_commit = "fc0055dc4e0a316c3f83133267fbd6faaa770992"
+tau_root = "../tau2-bench-v1.0.1"
+domain = "banking_knowledge"
+system = "safe_agent"
+stage = "coverage"
+run_id = "tau3-bank-coverage"
+output_dir = "artifacts/tau3/bank-coverage"
+task_split_name = "base"
+num_trials = 1
+seed = 300
+max_steps = 200
+max_errors = 10
+max_concurrency = 1
+max_retries = 0
+retrieval_config = "bm25"
+llm_agent = "gpt-4.1-2025-04-14"
+llm_user = "gpt-4.1-2025-04-14"
+development_task_ids = []
+runtime_factory = "safe_agent.orchestration.episode_runtime:runtime_factory"
+
+[llm_args_agent]
+temperature = 0.0
+
+[llm_args_user]
+temperature = 0.0
+
+[episode_budget]
+max_turns = 200
+max_model_calls = 200
+max_tool_calls = 200
+max_tokens = 2000000
+max_cost_microusd = 10000000
+deadline_seconds = 3600
+max_prompt_bytes = 131072
+max_output_tokens = 2048
+max_attempt_cost_microusd = 100000
+max_schema_repairs = 1
+
+# These hard limits govern SAFE's runtime. Stock/user/judge costs are external.
+[run_budget]
+max_turns = 100000
+max_model_calls = 100000
+max_tool_calls = 100000
+max_tokens = 1000000000
+max_cost_microusd = 10000000
+deadline_seconds = 604800

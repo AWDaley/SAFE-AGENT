@@ -1,0 +1,131 @@
+name: Frozen tau3 text benchmark acceptance
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+
+# This workflow runs authored/offline fixtures only. It never starts the hosted
+# agent, user simulator, or judge, and does not receive provider credentials.
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: '1'
+  LITELLM_LOCAL_MODEL_COST_MAP: 'True'
+  HF_HUB_OFFLINE: '1'
+  TRANSFORMERS_OFFLINE: '1'
+  OPENAI_API_KEY: ''
+  ANTHROPIC_API_KEY: ''
+  AZURE_API_KEY: ''
+  GEMINI_API_KEY: ''
+  GOOGLE_API_KEY: ''
+  AWS_ACCESS_KEY_ID: ''
+  AWS_SECRET_ACCESS_KEY: ''
+  SAFE_AGENT_EPISODE_PROVIDER_API_KEY: ''
+  TAU3_SOURCE_ROOT: ${{ github.workspace }}/vendor/tau3
+  TAU2_DATA_DIR: ${{ github.workspace }}/vendor/tau3/data
+  PYTHONPATH: ${{ github.workspace }}/vendor/tau3/src
+
+jobs:
+  offline-integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: sierra-research/tau2-bench
+          ref: fc0055dc4e0a316c3f83133267fbd6faaa770992
+          path: vendor/tau3
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Install the separate pinned benchmark environment
+        run: |
+          python -m pip install -r requirements-tau3.lock
+          python -m pip install --no-deps -e .
+          python -m pip check
+      - name: Require real reviewed TAL and the complete frozen source inventory
+        run: |
+          python scripts/check_tau3_environment.py --tau-root "$TAU3_SOURCE_ROOT"
+          python scripts/generate_tau_domain_catalog.py "$TAU3_SOURCE_ROOT" --check
+      - name: Full source lint and typing
+        run: |
+          ruff check src tests scripts docker/episode_service_probe.py migrations/versions/0015_benchmark_episodes.py migrations/versions/0016_episode_inference.py
+          mypy src/safe_agent
+      - name: Authored episode, domain, and real harness fixtures without model calls
+        run: |
+          python -m pytest tests/episodes tests/domains tests/benchmarks/tau3 --ignore=tests/episodes/test_episode_postgres.py --junitxml=tau3-offline.xml
+          python -c "import xml.etree.ElementTree as E; s=E.parse('tau3-offline.xml').getroot().findall('testsuite'); assert s and sum(int(x.get('tests',0)) for x in s)>0; assert all(int(x.get(k,0))==0 for x in s for k in ('skipped','errors','failures'))"
+
+  postgres-acceptance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16.6@sha256:557fea37a744d5f4c8faab304b0a90858b53ab119735a88c131fd19dab802f36
+        env:
+          POSTGRES_USER: safe_episode_ci
+          POSTGRES_PASSWORD: disposable_episode_ci_only
+          POSTGRES_DB: safe_episode_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U safe_episode_ci -d safe_episode_ci"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+    env:
+      SAFE_AGENT_DATABASE_URL: postgresql+psycopg://safe_episode_ci:disposable_episode_ci_only@localhost:5432/safe_episode_ci
+      SAFE_AGENT_TEST_POSTGRES_EPISODES: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: sierra-research/tau2-bench
+          ref: fc0055dc4e0a316c3f83133267fbd6faaa770992
+          path: vendor/tau3
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Install the pinned benchmark environment including PostgreSQL driver
+        run: |
+          python -m pip install -r requirements-tau3.lock
+          python -m pip install --no-deps -e .
+          python -m pip check
+      - name: Require reviewed TAL and frozen benchmark source
+        run: python scripts/check_tau3_environment.py --tau-root "$TAU3_SOURCE_ROOT"
+      - name: Apply office baseline then additive episode migrations on real PostgreSQL
+        run: |
+          python -m alembic upgrade 0014_billing_verifier_identity
+          python -m alembic upgrade 0015_benchmark_episodes
+          python -m alembic upgrade 0016_episode_inference
+          python -m alembic upgrade head
+      - name: Mandatory real PostgreSQL triggers, concurrency, and recovery checks
+        run: |
+          python -m pytest tests/episodes/test_episode_postgres.py --junitxml=tau3-postgres.xml
+          python -c "import xml.etree.ElementTree as E; s=E.parse('tau3-postgres.xml').getroot().findall('testsuite'); assert s and sum(int(x.get('tests',0)) for x in s)>=8; assert all(int(x.get(k,0))==0 for x in s for k in ('skipped','errors','failures'))"
+
+  container-isolation-probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Build the allowlisted model-only image without benchmark material
+        run: |
+          docker version
+          python scripts/episode_service_container.py prepare-context --output "$RUNNER_TEMP/episode-service-build"
+          docker build --pull --tag safe-episode-model:ci "$RUNNER_TEMP/episode-service-build"
+      - name: Mandatory attempted-read probe in the actual network-disabled service
+        run: |
+          SAFE_EPISODE_IMAGE_ID="$(docker image inspect --format '{{.Id}}' safe-episode-model:ci)"
+          python scripts/episode_service_container.py probe --image "$SAFE_EPISODE_IMAGE_ID" --output tau3-container-isolation.json

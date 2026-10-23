@@ -1,5 +1,9 @@
 .venv/
 .venv-coordinated/
+.venv-office/
+.venv-tau3/
+.pytest-tmp/
+artifacts/tau3/
 __pycache__/
 .pytest_cache/
 .mypy_cache/

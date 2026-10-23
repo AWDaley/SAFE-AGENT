@@ -94,8 +94,8 @@ class TrustedTALOfficeAuditMirror:
             elif snap.phase is OfficePhase.EXECUTING and status == "OUTCOME_UNKNOWN":
                 kind = upstream.OfficeJournalKind.OUTCOME_UNKNOWN
                 reason = "SAFE_OUTCOME_UNRESOLVED"
-            elif snap.phase is OfficePhase.EXECUTING and status in {"QUEUED", "LEASED"}:
-                # No new evidence since TAL admission. A lease alone proves no outcome.
+            elif snap.phase is OfficePhase.EXECUTING and status in {"QUEUED", "LEASED", "DISPATCHING"}:
+                # Admission and a lease prove no provider outcome.
                 return str(tal_state.state.value)
             else:
                 raise TALOfficeAuditSyncError("TAL_SAFE_OUTBOX_STATE_CONFLICT")

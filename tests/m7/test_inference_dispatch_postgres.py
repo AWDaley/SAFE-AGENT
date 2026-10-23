@@ -78,7 +78,7 @@ def advance(conn, bound, previous, state, *, at, reason=None, proposal=None):
 
 def test_postgres_migrated_head_composite_bindings_and_triggers_are_present(connection):
     assert connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all() == [
-        "0014_billing_verifier_identity",
+        "0016_episode_inference",
     ]
     triggers = set(connection.execute(text(
         "SELECT tgname FROM pg_trigger WHERE NOT tgisinternal"
