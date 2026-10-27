@@ -27,7 +27,7 @@ from safe_agent.contracts.episode_inference import LocalTimingProfile, strict_js
 from .config import CANONICAL_RUNTIME_FACTORY, BenchmarkConfig, harness_model_settings
 from .protocol import RuntimeContext
 
-PROFILE = "authored_local_role_qualification_v1"
+PROFILE = "authored_local_role_qualification_v2"
 HISTORY_TIERS = (0, 8, 32)
 MAX_MODEL_ATTEMPTS = 48
 MAX_TRACE_BYTES = 4_194_304
@@ -39,6 +39,10 @@ _CUSTOMER_VOICE = re.compile(
 _SERVICE_VOICE = re.compile(
     r"\b(?:how can i (?:help|assist)|i can (?:help|assist) you|"
     r"please (?:provide|confirm) your|verify your identity|your banking needs)\b", re.I,
+)
+_CLARIFICATION_REQUEST = re.compile(
+    r"(?:^|[.!;]\s*)(?:(?:please|could you(?: please)?|would you(?: please)?)\s+)?"
+    r"(?:let me know|tell me|specify|indicate)\s+(?:which|whether|your preference)\b", re.I,
 )
 
 
@@ -127,7 +131,8 @@ def check_agent_response(case: str, text: str, calls: list[str],
     if _CUSTOMER_VOICE.search(text):
         issues.append("CUSTOMER_ROLE_LANGUAGE")
     if case == "clarification" and not (
-        "?" in text and "fee" in lower and "interest" in lower and not calls
+        ("?" in text or _CLARIFICATION_REQUEST.search(text))
+        and "fee" in lower and "interest" in lower and not calls
     ):
         issues.append("CLARIFICATION_NOT_GROUNDED_IN_REQUEST")
     if case == "retained_preference" and not ("fee" in lower and "?" not in text and not calls):
@@ -158,7 +163,7 @@ def check_user_response(case: str, text: str, calls: list[dict[str, Any]]) -> li
             issues.append("USER_PREFERENCE_LOST")
         if case == "customer_request" and not re.search(r"checking|account", lower):
             issues.append("USER_REQUEST_LOST")
-        if case == "withhold_consent" and not re.search(r"\bno\b|not|don't|do not|decline", lower):
+        if case == "withhold_consent" and not re.search(r"\b(?:no|not|don['’]t|do not|decline)\b", lower):
             issues.append("USER_CONSENT_CONSTRAINT_LOST")
     return issues
 

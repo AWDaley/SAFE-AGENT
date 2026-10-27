@@ -62,10 +62,33 @@ def test_customer_checks_preserve_role_constraints_and_native_tool_arguments():
     assert q.check_user_response("withhold_consent", "No, please leave it alone.", []) == []
     assert "USER_CONSENT_CONSTRAINT_LOST" in q.check_user_response(
         "withhold_consent", "Yes, please proceed.", [])
+    assert q.check_user_response("withhold_consent", "Please don’t change my account details.", []) == []
+    assert "USER_CONSENT_CONSTRAINT_LOST" in q.check_user_response(
+        "withhold_consent", "Yes, please make another change.", [])
     assert q.check_user_response("native_tool", "", [
         {"name": "qualification_add", "arguments": {"a": 2, "b": 3}},
     ]) == []
     assert q.check_user_response("native_tool", "The answer is 5.", [])
+
+
+@pytest.mark.parametrize("text", [
+    "Please let me know which matters more: fees or interest, and I will recommend a product accordingly.",
+    "Tell me whether fees or interest matter more to you.",
+    "Could you please indicate your preference between fees and interest.",
+])
+def test_clarification_can_be_an_imperative_request_without_question_punctuation(text):
+    assert q.check_agent_response("clarification", text, [], []) == []
+
+
+@pytest.mark.parametrize("text", [
+    "Fees and interest both matter when comparing accounts.",
+    "I know which matters more: fees or interest.",
+    "Do not tell me whether fees or interest matter more.",
+    "Please let me know which branch you use.",
+])
+def test_clarification_still_requires_a_relevant_request(text):
+    assert "CLARIFICATION_NOT_GROUNDED_IN_REQUEST" in q.check_agent_response(
+        "clarification", text, [], [])
 
 
 def test_missing_and_uncertain_requests_never_become_a_pass_or_zero_score():
