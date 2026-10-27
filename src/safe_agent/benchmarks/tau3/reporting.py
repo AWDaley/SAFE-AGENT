@@ -14,6 +14,7 @@ from pydantic import Field
 from safe_agent.contracts.episode_inference import validate_local_api_base
 
 from . import TAU_COMMIT
+from .execution import load_episode_index, public_execution, validate_episode_index
 from .protocol import BoundaryModel
 from .runner import _write_json
 
@@ -344,6 +345,8 @@ def summarize_saved_results(
     manifest: dict[str, Any],
     simulations: list[dict[str, Any]],
     additional_costs: list[dict[str, Any]] | None = None,
+    *,
+    episode_index: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if manifest.get("tau_commit") != TAU_COMMIT:
         raise ValueError("Results belong to a different benchmark revision")
@@ -353,6 +356,12 @@ def summarize_saved_results(
     if len(scheduled) != len(set(scheduled)):
         raise ValueError("Manifest contains duplicate scheduled task/trial pairs")
     expected = set(scheduled)
+    if episode_index is not None:
+        validate_episode_index(episode_index, manifest, simulations)
+    execution = public_execution(episode_index) if episode_index is not None else None
+    execution_rows = {
+        (row["task_id"], row["trial"]): row for row in (execution or {}).get("pairs", [])
+    }
     by_pair: dict[tuple[str, int | None], list[dict[str, Any]]] = defaultdict(list)
     for simulation in simulations:
         by_pair[(str(simulation["task_id"]), simulation.get("trial"))].append(simulation)
@@ -394,8 +403,9 @@ def summarize_saved_results(
     task_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in eligible:
         task_groups[str(row["task_id"])].append(row)
-    valid_metric_input = (
-        not duplicate_pairs and not unexpected and not any(_reward(row) is None for row in eligible)
+    valid_metric_input = not duplicate_pairs and not unexpected and all(
+        type(_reward(row)) in {int, float} and math.isfinite(_reward(row))
+        and 0 <= _reward(row) <= 1 for row in eligible
     )
     metric_values: dict[str, float] = {}
     if valid_metric_input and task_groups:
@@ -430,11 +440,25 @@ def summarize_saved_results(
         "system": manifest["system"],
         "tau_commit": TAU_COMMIT,
         "report_basis": "recorded rewards only; no fresh judging",
+        "run_status": manifest.get("status", "not_recorded"),
+        "execution": execution,
+        "episode_attribution": {
+            "available": episode_index is not None,
+            "basis": "explicit task/trial binding with raw result hashes" if episode_index is not None
+            else "no bound episode index; missing outcomes are not inferred to be unstarted",
+        },
         "model_route_provenance": _route_provenance(manifest),
         "coverage": {
             "scheduled": len(scheduled),
             "recorded_attempts": len(simulations),
             "attempted_pairs": len(set(by_pair) & expected),
+            "started_pairs": execution["started"] if execution is not None else None,
+            "not_run_pairs": [
+                (row["task_id"], row["trial"]) for row in execution["pairs"] if row["state"] == "not_run"
+            ] if execution is not None else None,
+            "started_without_recorded_outcome_pairs": [
+                (row["task_id"], row["trial"]) for row in execution["pairs"] if row["state"] in {"running", "interrupted"}
+            ] if execution is not None else None,
             "terminal": sum(bool(row.get("termination_reason")) for row in simulations),
             "graded": len(graded),
             "ungraded": len(ungraded),
@@ -443,6 +467,18 @@ def summarize_saved_results(
             "unexpected_pairs": unexpected,
             "duplicate_pairs": duplicate_pairs,
             "matrix_complete": not (missing or unexpected or duplicate_pairs),
+            "grading_complete": not (missing or unexpected or duplicate_pairs or infra or ungraded)
+            and all(bool(row.get("termination_reason")) for row in simulations),
+        },
+        "official_score": {
+            "available": bool(valid_metric_input and eligible),
+            "avg_reward": sum(_reward(row) for row in eligible) / len(eligible)
+            if valid_metric_input and eligible else None,
+            "pass_hat_ks": metric_values if valid_metric_input and eligible else None,
+            "basis": "saved eligible rewards using the pinned estimator; raw upstream metrics are preserved separately",
+            "unavailable_reason": "no_eligible_graded_outcomes" if not eligible
+            else "invalid_metric_input" if not valid_metric_input else None,
+            "full_schedule_graded": not (missing or unexpected or duplicate_pairs or infra or ungraded),
         },
         "saved_reward_metrics": {
             "method": "mirror of pinned pass_hat_k; authoritative metrics remain upstream",
@@ -460,6 +496,25 @@ def summarize_saved_results(
             "pass_hat_ks": operational_metrics,
         },
         "termination_counts": dict(termination_counts),
+        "pairs": [
+            {
+                "task_id": task_id, "trial": trial,
+                "state": execution_rows[(task_id, trial)]["state"] if execution_rows
+                else "recorded" if by_pair.get((task_id, trial)) else "unrecorded_status_unknown",
+                "recorded_outcomes": len(by_pair.get((task_id, trial), [])),
+                "graded_outcomes": sum(_reward(row) is not None for row in by_pair.get((task_id, trial), [])),
+                "termination_reason": by_pair[(task_id, trial)][0].get("termination_reason")
+                if len(by_pair.get((task_id, trial), [])) == 1 else None,
+                "official_duration_seconds": by_pair[(task_id, trial)][0].get("duration")
+                if len(by_pair.get((task_id, trial), [])) == 1
+                and by_pair[(task_id, trial)][0].get("termination_reason") != "infrastructure_error" else None,
+                "duration_basis": "not_retained_in_infrastructure_placeholder"
+                if len(by_pair.get((task_id, trial), [])) == 1
+                and by_pair[(task_id, trial)][0].get("termination_reason") == "infrastructure_error"
+                else "upstream_recorded_duration",
+            }
+            for task_id, trial in scheduled
+        ],
         "safe_inference_recorded_usage": {
             **dict(safe_inference),
             "sources": dict(usage_sources),
@@ -482,7 +537,11 @@ def report_saved_run(run_dir: Path) -> dict[str, Any]:
         if costs_path.exists()
         else []
     )
-    report = summarize_saved_results(manifest, results.get("simulations", []), costs)
+    simulations = results.get("simulations", [])
+    report = summarize_saved_results(
+        manifest, simulations, costs,
+        episode_index=load_episode_index(run_dir, manifest, simulations),
+    )
     official_path = run_dir / "official_metrics.json"
     report["official_metrics"] = (
         json.loads(official_path.read_text()) if official_path.exists() else None

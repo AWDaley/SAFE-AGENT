@@ -1,12 +1,14 @@
 """Read-only, aggregate diagnostics from private durable episode evidence.
 
-No native arguments, messages, identifiers, hashes, reviewer identities, or
-exception bodies leave this module. Reading a receipt proves recorded evidence
+No native arguments, messages, runtime IDs, hashes, reviewer identities, or
+exception bodies leave this module. Optional task/trial IDs come only from an
+explicit bound execution index. Reading a receipt proves recorded evidence
 presence, not the semantic correctness of the underlying authorization.
 """
 
 from __future__ import annotations
 
+import json
 import math
 import sqlite3
 from collections import Counter
@@ -21,6 +23,7 @@ from pydantic import Field, TypeAdapter, field_validator
 from safe_agent.canonical import sha256
 from safe_agent.contracts.base import Digest, Identifier, StrictModel, require_aware
 from safe_agent.contracts.episode_inference import (
+    INFERENCE_FAILURE_REASONS,
     EpisodeInferenceReply,
     EpisodeInferenceRequest,
     parse_candidate,
@@ -39,6 +42,7 @@ from safe_agent.contracts.episodes import (
 )
 from safe_agent.evidence.episodes import replay_episode, require_budget
 
+from .execution import load_episode_index
 from .runner import _write_json
 
 _TABLES = (
@@ -89,6 +93,7 @@ _REASONS = frozenset(
     STOP_REQUIRES_FINISH_INTENT RESPONSE_EVIDENCE_NOT_FOUND SUCCESS_REQUIRES_TOOL_RESULT
     SUCCESS_REQUIRES_MUTATION_RESULT CRITICAL_CLAIM_REQUIRES_SUCCESS_TEMPLATE
     EPISODE_INFERENCE_SCHEMA_REJECTED
+    REPEATED_REPAIR_WITHOUT_PROGRESS REPAIR_ALLOWANCE_EXHAUSTED
     """.split()
 )
 
@@ -119,10 +124,24 @@ class _Totals:
     denials: Counter[str] = field(default_factory=Counter)
     repairs: Counter[str] = field(default_factory=Counter)
     failures: Counter[str] = field(default_factory=Counter)
+    candidates: Counter[str] = field(default_factory=Counter)
+    uncertainty_reasons: Counter[str] = field(default_factory=Counter)
+    maxima: Counter[str] = field(default_factory=Counter)
     inference_seconds: list[float] = field(default_factory=list)
     tool_seconds: list[float] = field(default_factory=list)
+    episode_seconds: list[float] = field(default_factory=list)
     # Private join keys are used only to bind reviewed annotations, never exported.
     reviewable: dict[tuple[str, int], str] = field(default_factory=dict)
+
+
+def _merge_totals(target: _Totals, source: _Totals) -> None:
+    for name in ("counts", "states", "attempts", "sources", "denials", "repairs", "failures", "candidates", "uncertainty_reasons"):
+        getattr(target, name).update(getattr(source, name))
+    for name in ("inference_seconds", "tool_seconds", "episode_seconds"):
+        getattr(target, name).extend(getattr(source, name))
+    for name, value in source.maxima.items():
+        target.maxima[name] = max(target.maxima[name], value)
+    target.reviewable.update(source.reviewable)
 
 
 def _require(condition: bool) -> None:
@@ -288,6 +307,9 @@ def _inference_diagnostics(
     )
     totals.failures["inference_reservation_set_mismatch"] += len(set(reservations) ^ set(reserved))
     totals.failures["inference_result_set_mismatch"] += len(set(results) ^ set(finished))
+    known_reasons = {sha256(reason): reason for reason in INFERENCE_FAILURE_REASONS | {"HARNESS_STOP_PENDING_MODEL"}}
+    for event in uncertain.values():
+        totals.uncertainty_reasons[known_reasons.get(event.payload.get("reason_hash") or "", "UNKNOWN_OR_LEGACY_REASON")] += 1
     for request_id, event in reserved.items():
         try:
             row = reservations[request_id]
@@ -315,7 +337,10 @@ def _inference_diagnostics(
             _require(results[request_id]["result_hash"] == event.payload["result_hash"])
         except _INVALID:
             totals.failures["inference_result_binding_invalid"] += 1
-    for request_id, row in attempts.items():
+    repeated: Counter[str] = Counter()
+    previous_message = None
+    consecutive = 0
+    for request_id, row in sorted(attempts.items(), key=lambda item: reserved[item[0]].sequence if item[0] in reserved else -1):
         totals.counts["model_attempts_checked"] += 1
         try:
             request = EpisodeInferenceRequest.model_validate_json(row["request_json"])
@@ -355,6 +380,16 @@ def _inference_diagnostics(
             totals.failures["model_attempt_binding_invalid"] += 1
             continue
         totals.attempts[status] += 1
+        omitted = request.projected_context.get("omitted_history_messages")
+        if type(omitted) is int and omitted >= 0:
+            totals.counts["requests_with_history_omission_metadata"] += 1
+            totals.counts["requests_omitting_history"] += omitted > 0
+            totals.counts["sum_omitted_history_messages_across_requests"] += omitted
+        else:
+            totals.counts["requests_without_history_omission_metadata"] += 1
+        feedback = request.projected_context.get("feedback")
+        if isinstance(feedback, (dict, list)):
+            totals.counts["requests_with_repair_feedback"] += bool(feedback)
         if reply is not None:
             totals.counts["model_known_replies"] += 1
             totals.counts["model_known_reply_without_finish"] += request_id not in finished
@@ -362,11 +397,29 @@ def _inference_diagnostics(
             totals.counts["output_tokens"] += reply.output_tokens
             totals.sources[reply.usage_source] += 1
             try:
-                parse_candidate(reply.output_json)
+                candidate = parse_candidate(reply.output_json)
             except _INVALID:
                 totals.counts["model_schema_rejected"] += 1
+                previous_message, consecutive = None, 0
             else:
                 totals.counts["model_schema_accepted"] += 1
+                totals.candidates[candidate.kind] += 1
+                if candidate.kind == "message":
+                    totals.candidates["message_purpose_" + candidate.purpose] += 1
+                    digest = wire_digest(candidate.text)
+                    repeated[digest] += 1
+                    consecutive = consecutive + 1 if digest == previous_message else 1
+                    previous_message = digest
+                    totals.maxima["identical_accepted_message_candidates_in_one_episode"] = max(
+                        totals.maxima["identical_accepted_message_candidates_in_one_episode"], repeated[digest]
+                    )
+                    totals.maxima["consecutive_identical_accepted_message_candidates"] = max(
+                        totals.maxima["consecutive_identical_accepted_message_candidates"], consecutive
+                    )
+                else:
+                    previous_message, consecutive = None, 0
+        else:
+            previous_message, consecutive = None, 0
 
 
 def _context_diagnostics(db: sqlite3.Connection, episode_id: str, totals: _Totals) -> None:
@@ -512,6 +565,8 @@ def _report(totals: _Totals, annotations: Path | None, filtered: bool) -> dict[s
             "repair_feedback_by_reason": dict(sorted(totals.repairs.items())),
             "unclassified_diagnostic_entries": n["diagnostic_entries_unclassified"],
             "scope": "persisted private-context diagnostics; interrupted unsaved diagnostics may be absent",
+            "repair_is_domain_denial": False,
+            "repair_is_proof_of_unsafe_action_prevented": False,
         },
         "model_attempts": {
             "reserved": n["model_reserved"],
@@ -522,6 +577,8 @@ def _report(totals: _Totals, annotations: Path | None, filtered: bool) -> dict[s
             "verified_attempts_by_state": dict(sorted(totals.attempts.items())),
             "reservations_without_attempt_row": n["model_reservation_without_attempt"],
             "known_replies": n["model_known_replies"],
+            "attempts_with_unknown_usage": n["model_attempt_records"] - n["model_known_replies"],
+            "usage_complete_for_reserved_attempts": n["model_reserved"] == n["model_known_replies"] and not failures,
             "known_replies_without_journal_finish": n["model_known_reply_without_finish"],
             "schema_accepted_replies": n["model_schema_accepted"],
             "schema_rejected_replies": n["model_schema_rejected"],
@@ -532,10 +589,30 @@ def _report(totals: _Totals, annotations: Path | None, filtered: bool) -> dict[s
             "lifetime_reserved_cost_microusd": n["held_cost_microusd"],
             "reserved_cost_is_actual_spend": False,
             "actual_billed_cost_usd": None,
+            "uncertainty_by_fixed_reason": dict(sorted(totals.uncertainty_reasons.items())),
+        },
+        "behavioral_diagnostics": {
+            "schema_accepted_candidates": dict(sorted(totals.candidates.items())),
+            "max_identical_message_candidates_in_one_episode": totals.maxima["identical_accepted_message_candidates_in_one_episode"],
+            "max_consecutive_identical_message_candidates": totals.maxima["consecutive_identical_accepted_message_candidates"],
+            "requests_with_history_omission_metadata": n["requests_with_history_omission_metadata"],
+            "requests_without_history_omission_metadata": n["requests_without_history_omission_metadata"],
+            "requests_omitting_history": n["requests_omitting_history"],
+            "sum_omitted_history_messages_across_requests": n["sum_omitted_history_messages_across_requests"],
+            "requests_with_repair_feedback": n["requests_with_repair_feedback"],
+            "role_mismatch_count": None,
+            "role_adherence_assessed": False,
+            "no_progress_terminations": {
+                name: totals.repairs[name] for name in (
+                    "REPEATED_REPAIR_WITHOUT_PROGRESS", "REPAIR_ALLOWANCE_EXHAUSTED"
+                )
+            },
+            "interpretation": "schema acceptance and repetition describe structure only; role adherence, progress and repair false positives require separate review",
         },
         "latency_seconds": {
             "inference_reservation_to_finish": _distribution(totals.inference_seconds),
             "tool_prepare_to_result": _distribution(totals.tool_seconds),
+            "episode_creation_to_last_journal_event": _distribution(totals.episode_seconds),
             "inference_without_endpoint": n["model_unfinished"],
             "tools_without_endpoint": n["tool_pending"],
             "method": "matched verified event timestamps; nearest-rank percentiles; incomplete pairs excluded",
@@ -559,9 +636,23 @@ def diagnose_database(
     *,
     run_id: str | None = None,
     annotations: Path | None = None,
+    run_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Inspect durable state without locking for writes, replaying actions, or judging."""
     totals = _Totals()
+    episode_index = None
+    if run_dir is not None:
+        try:
+            manifest = json.loads((run_dir / "manifest.json").read_text())
+            result_path = run_dir / "results.json"
+            simulations = json.loads(result_path.read_text())["simulations"] if result_path.exists() else []
+            if run_id is not None and run_id != manifest["run_id"]:
+                raise ValueError
+            run_id = manifest["run_id"]
+            episode_index = load_episode_index(run_dir, manifest, simulations)
+        except (OSError, TypeError, ValueError, KeyError):
+            raise DiagnosticsError("DIAGNOSTICS_EPISODE_INDEX_INVALID") from None
+    per_episode: dict[str, _Totals] = {}
     if run_id is not None:
         try:
             _IDENTIFIER_ADAPTER.validate_python(run_id)
@@ -611,12 +702,16 @@ def diagnose_database(
                 except _INVALID:
                     totals.failures["episode_replay_invalid"] += 1
                     continue
-                totals.counts["episodes_verified"] += 1
-                totals.states[view.state.value] += 1
+                local = _Totals()
+                local.counts["episodes_verified"] = 1
+                local.states[view.state.value] += 1
+                local.episode_seconds.append((view.updated_at - view.created_at).total_seconds())
                 verified.setdefault(view.run_id, []).append(view)
-                _tool_diagnostics(db, view, events, totals)
-                _inference_diagnostics(db, view, events, totals)
-                _context_diagnostics(db, view.episode_id, totals)
+                _tool_diagnostics(db, view, events, local)
+                _inference_diagnostics(db, view, events, local)
+                _context_diagnostics(db, view.episode_id, local)
+                _merge_totals(totals, local)
+                per_episode[view.episode_id] = local
             for row in run_rows:
                 try:
                     spec = RunSpec.model_validate_json(row["spec_json"])
@@ -665,7 +760,37 @@ def diagnose_database(
         raise DiagnosticsError("DIAGNOSTICS_DATABASE_NOT_FOUND") from None
     except (sqlite3.Error, OSError):
         raise DiagnosticsError("DIAGNOSTICS_DATABASE_UNREADABLE") from None
-    return _report(totals, annotations, run_id is not None)
+    report = _report(totals, annotations, run_id is not None)
+    report["task_attribution"] = {
+        "available": episode_index is not None,
+        "basis": "explicit hash-bound task/trial-to-episode index; never inferred from serial order",
+        "bound_runtime_episodes": sum(row["episode_id"] is not None for row in episode_index["rows"]) if episode_index is not None else None,
+        "verified_bound_episodes": sum(row["episode_id"] in per_episode for row in episode_index["rows"]) if episode_index is not None else None,
+    }
+    report["tasks"] = [
+        _task_diagnostics(row, per_episode.get(row["episode_id"])) for row in episode_index["rows"]
+    ] if episode_index is not None else None
+    return report
+
+
+def _task_diagnostics(row: dict[str, Any], totals: _Totals | None) -> dict[str, Any]:
+    result = {
+        "task_id": row["task_id"], "trial": row["trial"],
+        "execution_state": row["state"], "graded": row["graded"],
+        "termination_reason": row["termination_reason"],
+        "episode_binding_available": row["episode_id"] is not None,
+        "runtime_journal_verified": totals is not None,
+        "adapter_counters": dict(row["counters"]),
+        "episode_elapsed_to_last_journal_event_seconds": None,
+        "runtime": None,
+    }
+    if totals is not None:
+        summary = _report(totals, None, True)
+        result["episode_elapsed_to_last_journal_event_seconds"] = totals.episode_seconds[0]
+        result["runtime"] = {
+            key: summary[key] for key in ("model_attempts", "tool_calls", "denials", "behavioral_diagnostics", "integrity")
+        }
+    return result
 
 
 def report_diagnostics(
@@ -674,8 +799,9 @@ def report_diagnostics(
     output: Path | None = None,
     run_id: str | None = None,
     annotations: Path | None = None,
+    run_dir: Path | None = None,
 ) -> dict[str, Any]:
-    report = diagnose_database(database, run_id=run_id, annotations=annotations)
+    report = diagnose_database(database, run_id=run_id, annotations=annotations, run_dir=run_dir)
     if output is not None:
         target = output.resolve()
         if target == database.resolve() or (annotations and target == annotations.resolve()):
@@ -685,6 +811,8 @@ def report_diagnostics(
             "manifest.json",
             "official_metrics.json",
             "additional_costs.jsonl",
+            "episode-index.json",
+            "progress.json",
         }:
             raise DiagnosticsError("DIAGNOSTICS_OUTPUT_IS_BENCHMARK_EVIDENCE")
         if str(target) in {

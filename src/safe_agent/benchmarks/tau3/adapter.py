@@ -7,7 +7,7 @@ import json
 import re
 import uuid
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from .protocol import Decision, EpisodeRuntimeProtocol, Message, Observation, ToolSpec
 
@@ -56,6 +56,8 @@ class AdapterState:
     consumed_results: dict[str, str] = field(default_factory=dict)
     seen_observations: set[str] = field(default_factory=set)
     stopped: bool = False
+    progress: dict[str, int] = field(default_factory=dict)
+    last_message_digest: str | None = None
 
 
 def _visible_messages(raw: Any, *, history: bool, pending: dict[str, str]) -> list[Message]:
@@ -143,6 +145,7 @@ class SafeTauAgent:
         domain: str,
         runtime: EpisodeRuntimeProtocol,
         episode_id: str | None = None,
+        lifecycle: Callable[[str, str, dict[str, int]], None] | None = None,
     ):
         self.domain = domain
         self.domain_policy = domain_policy
@@ -155,6 +158,11 @@ class SafeTauAgent:
                 "Episode IDs must begin with a letter and contain safe identifier characters"
             )
         self._episode_id = episode_id
+        self._lifecycle = lifecycle
+
+    def _emit(self, event: str, state: AdapterState) -> None:
+        if self._lifecycle is not None:
+            self._lifecycle(event, state.episode_id, dict(state.progress))
 
     def get_init_state(self, message_history: list[Any] | None = None) -> AdapterState:
         episode_id = self._episode_id or "ep_" + uuid.uuid4().hex
@@ -174,6 +182,10 @@ class SafeTauAgent:
                         raise AdapterProtocolError("History contains an unmatched tool result")
                     pending.pop(message.call_id)
                     consumed[message.call_id] = _digest(message.model_dump())
+        if self._lifecycle is not None:
+            # Bind before runtime initialization, so initialization errors also
+            # retain the intended join without copying the privileged Task.
+            self._lifecycle("episode_bound", episode_id, {})
         state = self.runtime.start_episode(
             episode_id=episode_id,
             domain=self.domain,
@@ -181,13 +193,15 @@ class SafeTauAgent:
             tools=[ToolSpec.model_validate_json(spec.model_dump_json()) for spec in self.specs],
             history=history,
         )
-        return AdapterState(
+        adapter_state = AdapterState(
             episode_id=episode_id,
             runtime_state=state,
             pending=pending,
             seen_call_ids=seen_calls,
             consumed_results=consumed,
         )
+        self._emit("episode_initialized", adapter_state)
+        return adapter_state
 
     def next_decision(self, message: Any, state: AdapterState) -> Decision:
         if state.stopped:
@@ -222,6 +236,12 @@ class SafeTauAgent:
                 assert item.call_id is not None
                 state.pending.pop(item.call_id)
                 state.consumed_results[item.call_id] = _digest(item.model_dump())
+        for role, counter in (("user", "observed_user_messages"), ("tool", "observed_tool_results")):
+            state.progress[counter] = state.progress.get(counter, 0) + sum(item.role == role for item in visible)
+        if any(item.role == "tool" for item in visible):
+            state.progress["messages_since_tool_result"] = 0
+        state.progress["runtime_steps_started"] = state.progress.get("runtime_steps_started", 0) + 1
+        self._emit("runtime_step_started", state)
         decision, runtime_state = self.runtime.step(observation, state.runtime_state)
         if not isinstance(decision, Decision):
             raise AdapterProtocolError("EpisodeRuntime must return a strict Decision")
@@ -277,6 +297,22 @@ class SafeTauAgent:
                 usage=decision.usage,
                 raw_data={"safe_stop": decision.stop, "safe_episode_id": state.episode_id},
             )
+        if decision.kind == "tool":
+            state.progress["tool_outputs"] = state.progress.get("tool_outputs", 0) + 1
+            state.last_message_digest = None
+            state.progress["consecutive_identical_messages"] = 0
+            self._emit("tool_output", state)
+        else:
+            digest = _digest(decision.content)
+            repeated = state.progress.get("consecutive_identical_messages", 0) + 1 if digest == state.last_message_digest else 1
+            state.last_message_digest = digest
+            state.progress["consecutive_identical_messages"] = repeated
+            state.progress["max_consecutive_identical_messages"] = max(repeated, state.progress.get("max_consecutive_identical_messages", 0))
+            state.progress["message_outputs"] = state.progress.get("message_outputs", 0) + 1
+            since_tool = state.progress.get("messages_since_tool_result", 0) + 1
+            state.progress["messages_since_tool_result"] = since_tool
+            state.progress["max_messages_since_tool_result"] = max(since_tool, state.progress.get("max_messages_since_tool_result", 0))
+            self._emit("message_output", state)
         return output, state
 
     @classmethod
@@ -291,9 +327,11 @@ class SafeTauAgent:
     def stop(self, message: Any = None, state: AdapterState | None = None) -> None:
         if state is not None:
             state.stopped = True
+            self._emit("cleanup_started", state)
             close_episode = getattr(self.runtime, "close_episode", None)
             if close_episode is not None:
                 close_episode(state.runtime_state, reason="harness_stop")
+            self._emit("cleanup_finished", state)
 
 
 def official_agent_class() -> type[SafeTauAgent]:

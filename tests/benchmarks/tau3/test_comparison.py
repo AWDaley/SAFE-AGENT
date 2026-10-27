@@ -262,6 +262,92 @@ def test_output_alias_alone_does_not_establish_a_legacy_runtime_cap(tmp_path):
     assert not result["agent_transport_comparability"]["agent_transport_controls_match"]
 
 
+def test_legacy_timing_is_unknown_even_when_current_runtime_defaults_exist(tmp_path, monkeypatch):
+    from safe_agent.benchmarks.tau3 import config as config_module
+
+    def no_current_defaults(config):
+        raise AssertionError("Historical comparisons must not use current runtime timing defaults")
+
+    monkeypatch.setattr(config_module, "effective_inference_timing", no_current_defaults)
+    safe, stock = _fixture(tmp_path, "safe_agent"), _fixture(tmp_path, "llm_agent")
+    result = compare_saved_runs(safe, stock, bootstrap_samples=100)
+    for side in ("left", "right"):
+        timing = result["system_specific_conditions"][side]["agent_transport_controls"]["inference_timing"]
+        assert timing["agent_provider_timeout_seconds"] is None
+        assert timing["user_provider_timeout_seconds"] is None
+        assert timing["basis"] == "historical_defaults_not_recorded"
+    assert result["agent_transport_comparability"]["provider_and_user_timing_match"] is None
+    assert result["agent_transport_comparability"]["agent_transport_and_timing_match"] is None
+
+
+def test_hash_bound_preflight_preserves_historical_timing_values(tmp_path):
+    safe, stock = _fixture(tmp_path, "safe_agent"), _fixture(tmp_path, "llm_agent")
+    _record_preflight(safe, changes={"effective_inference_timing": {
+        "provider_timeout_seconds": 31.0, "transport_timeout_seconds": 33.0,
+        "request_timeout_seconds": 35.0, "harness_provider_timeout_seconds": None,
+        "absolute_local_deadline_enforced": False,
+    }})
+    result = compare_saved_runs(safe, stock, bootstrap_samples=100)
+    timing = result["system_specific_conditions"]["left"]["agent_transport_controls"]["inference_timing"]
+    assert timing["agent_provider_timeout_seconds"] == 31.0
+    assert timing["safe_transport_timeout_seconds"] == 33.0
+    assert timing["safe_request_timeout_seconds"] == 35.0
+    assert timing["user_provider_timeout_seconds"] is None
+    assert timing["basis"] == "hash_bound_saved_preflight"
+    assert result["agent_transport_comparability"]["provider_and_user_timing_match"] is None
+
+
+def test_explicit_local_timing_matches_provider_and_user_without_claiming_identical_safe_budgets():
+    from safe_agent.benchmarks.tau3.comparison import (
+        _agent_transport_controls,
+        _transport_comparability,
+    )
+
+    common = {
+        "model_route": "local", "local_api_base": "http://127.0.0.1:8080/v1",
+        "llm_agent": "authored-local", "llm_user": "authored-local",
+        "llm_args_agent": {"temperature": 0.0, "max_tokens": 64, "num_retries": 0},
+        "episode_budget": {"max_output_tokens": 64},
+        "local_timing": {"provider_timeout_seconds": 70, "transport_timeout_seconds": 80,
+                         "request_timeout_seconds": 90},
+    }
+    safe = BenchmarkConfig(system="safe_agent", **common)
+    stock = BenchmarkConfig(system="llm_agent", **common)
+    controls = {"left": _agent_transport_controls(safe), "right": _agent_transport_controls(stock)}
+    report = _transport_comparability(controls)
+    assert report["provider_and_user_timing_match"]
+    assert report["agent_transport_and_timing_match"]
+    assert report["safe_only_deadlines_remain_system_specific"]
+    assert controls["left"]["inference_timing"]["safe_request_timeout_seconds"] == 90
+    assert controls["right"]["inference_timing"]["safe_request_timeout_seconds"] is None
+
+
+def test_bound_preflight_cannot_override_explicit_local_timing():
+    from safe_agent.benchmarks.tau3.comparison import _agent_transport_controls
+
+    config = BenchmarkConfig(
+        model_route="local", local_api_base="http://127.0.0.1:8080/v1",
+        episode_budget={"max_output_tokens": 64},
+        local_timing={"provider_timeout_seconds": 70, "transport_timeout_seconds": 80,
+                      "request_timeout_seconds": 90},
+    )
+    manifest = {"config": config.model_dump(), "config_sha256": content_hash(config.model_dump()),
+                "safe_revision": {"commit": "a" * 40}}
+    preflight = {
+        "schema_version": "safe_agent.tau3_preflight.v1", "kind": "benchmark_preflight",
+        "config_sha256": manifest["config_sha256"], "run_id": config.run_id,
+        "safe_revision": manifest["safe_revision"], "configuration_validated": True,
+        "ready_for_attempt": True, "safe_budget_applies": True,
+        "effective_safe_limits": {"episode_budget": {"max_output_tokens": 64}},
+        "effective_inference_timing": {"provider_timeout_seconds": 60, "transport_timeout_seconds": 80,
+            "request_timeout_seconds": 90, "harness_provider_timeout_seconds": 70,
+            "absolute_local_deadline_enforced": True},
+    }
+    manifest.update(preflight=preflight, preflight_sha256=content_hash(preflight))
+    with pytest.raises(ComparisonError, match="PREFLIGHT_TIMING_MISMATCH"):
+        _agent_transport_controls(config, manifest=manifest)
+
+
 @pytest.mark.parametrize("changes,error", [
     ({"config_sha256": "e" * 64}, "PREFLIGHT_RUN_BINDING_MISMATCH"),
     ({"run_id": "another-authored-run"}, "PREFLIGHT_RUN_BINDING_MISMATCH"),

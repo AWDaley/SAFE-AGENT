@@ -7,11 +7,12 @@ import importlib
 import importlib.metadata
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from . import TAU_COMMIT
 from .adapter import official_agent_class
@@ -65,6 +66,7 @@ def register_safe_agent(
     *,
     output_dir: Path,
     runtime_factory: RuntimeFactory | None = None,
+    lifecycle: Callable[[str, str, dict[str, int]], None] | None = None,
 ) -> str:
     from tau2.registry import registry  # type: ignore[import-untyped]
 
@@ -92,12 +94,14 @@ def register_safe_agent(
             episode_budget=config.episode_budget,
             run_budget=config.run_budget,
             output_dir=str(output_dir),
+            local_timing=config.local_timing,
         )
         return agent_class(
             tools=tools,
             domain_policy=domain_policy,
             domain=config.domain,
             runtime=factory(context),
+            lifecycle=lifecycle,
         )
 
     registry.register_agent_factory(create_agent, registration_name, metadata={"solo_mode": False})
@@ -176,13 +180,28 @@ def run_official(
     *,
     tau_root: Path | None = None,
     runtime_factory: RuntimeFactory | None = None,
+    qualification_evidence: dict[str, Any] | None = None,
 ) -> Path:
     """Execute an explicit official run. This function may make billed model calls.
 
     Inspection and manifest preparation happen before any agent is constructed.
     No retry, filtering, automatic review, or rejudging is added by this wrapper.
+    The explicit development infrastructure-stop setting selects a SAFE serial
+    schedule around the pinned per-task runner; the default batch path is unchanged.
     """
     root = tau_root or (Path(config.tau_root) if config.tau_root else None)
+    if qualification_evidence is not None:
+        expected_keys = {"report_sha256", "review_sha256", "condition_sha256", "review_is_independent_attestation"}
+        if (
+            set(qualification_evidence) != expected_keys
+            or any(not isinstance(qualification_evidence.get(name), str)
+                   or re.fullmatch(r"[0-9a-f]{64}", qualification_evidence[name]) is None
+                   for name in ("report_sha256", "review_sha256"))
+            or not isinstance(qualification_evidence.get("condition_sha256"), str)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", qualification_evidence["condition_sha256"]) is None
+            or qualification_evidence["review_is_independent_attestation"] is not False
+        ):
+            raise ValueError("QUALIFICATION_GATE_METADATA_INVALID")
     if runtime_factory is not None and config.stage != "development":
         raise ValueError("Injected runtime factories are restricted to labelled development runs")
     inventory = inspect_benchmark(config, root)
@@ -260,8 +279,15 @@ def run_official(
             "hardware, electricity, or server operating costs"
         )
     manifest_path = output_dir / "manifest.json"
+    episode_index = None
     previous_umask = os.umask(0o077)
     try:
+        if qualification_evidence is not None:
+            # CLI validation has already bound these digests to the requested
+            # condition. Persist the reviewed fixed metadata before constructing
+            # any official agent; no reviewer identity or review prose is copied.
+            manifest["qualification_gate"] = dict(qualification_evidence)
+            _write_json(output_dir / "qualification-gate.json", qualification_evidence)
         _write_json(manifest_path, manifest)
         prepare_official_import(root)
         from tau2.config import (  # type: ignore[import-untyped]
@@ -275,10 +301,19 @@ def run_official(
             package: importlib.metadata.version(package)
             for package in ("tervoro-safe-agent", "tau2", "pydantic", "litellm", "rank-bm25")
         }
+        if config.stop_after_infrastructure_errors is not None:
+            from .execution import SCHEDULER, EpisodeIndex
+
+            episode_index = EpisodeIndex(output_dir, manifest)
+            manifest["scheduler"] = SCHEDULER
+            manifest["stop_after_infrastructure_errors"] = config.stop_after_infrastructure_errors
+        else:
+            manifest["scheduler"] = "pinned_upstream_batch"
         agent_name: str = config.system
         if config.system == "safe_agent":
             agent_name = register_safe_agent(
-                config, output_dir=output_dir, runtime_factory=runtime_factory
+                config, output_dir=output_dir, runtime_factory=runtime_factory,
+                lifecycle=episode_index.lifecycle if episode_index is not None else None,
             )
         official_config = text_run_config(config, agent_name=agent_name, output_dir=output_dir)
         manifest["official_config"] = official_config.model_dump(mode="json")
@@ -289,7 +324,16 @@ def run_official(
         from .local_harness import harness_transport
 
         with harness_transport(config):
-            results = run_domain(official_config)
+            if episode_index is None:
+                results = run_domain(official_config)
+            else:
+                from .execution import run_controlled
+
+                assert config.stop_after_infrastructure_errors is not None
+                results = run_controlled(
+                    official_config, output_dir=output_dir, index=episode_index,
+                    error_limit=config.stop_after_infrastructure_errors,
+                )
         # run_domain saves its own unchanged Results. Store official metric
         # output as well; this reads saved rewards and never invokes a judge.
         from tau2.metrics.agent_metrics import compute_metrics  # type: ignore[import-untyped]
@@ -299,12 +343,22 @@ def run_official(
             name: hashlib.sha256((output_dir / name).read_bytes()).hexdigest()
             for name in ("results.json", "official_metrics.json")
         }
-        manifest["status"] = "complete"
+        if episode_index is None:
+            manifest["status"] = "complete"
+        else:
+            manifest.update(episode_index.manifest_fields())
     except BaseException as exc:
         manifest["status"] = (
             "interrupted" if isinstance(exc, (KeyboardInterrupt, SystemExit)) else "failed"
         )
         manifest["error_type"] = type(exc).__name__
+        if episode_index is not None:
+            episode_index.finalize(
+                manifest["status"],
+                "keyboard_interrupt" if isinstance(exc, KeyboardInterrupt)
+                else "system_exit" if isinstance(exc, SystemExit) else "runner_failure",
+            )
+            manifest.update(episode_index.manifest_fields())
         raise
     finally:
         try:
