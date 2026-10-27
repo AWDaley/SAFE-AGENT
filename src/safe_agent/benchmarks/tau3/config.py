@@ -8,7 +8,7 @@ from typing import Literal, Self
 
 from pydantic import Field, JsonValue, model_validator
 
-from safe_agent.contracts.episode_inference import validate_local_api_base
+from safe_agent.contracts.episode_inference import LocalTimingProfile, validate_local_api_base
 
 from . import TAU_COMMIT
 from .protocol import BoundaryModel
@@ -43,6 +43,10 @@ class BenchmarkConfig(BoundaryModel):
     retrieval_config_kwargs: dict[str, JsonValue] = Field(default_factory=dict)
     model_route: Literal["openai", "local"] = "openai"
     local_api_base: str | None = None
+    local_timing: LocalTimingProfile | None = Field(default=None, exclude_if=lambda value: value is None)
+    stop_after_infrastructure_errors: int | None = Field(
+        default=None, gt=0, exclude_if=lambda value: value is None,
+    )
     llm_agent: str = "gpt-4.1-2025-04-14"
     llm_args_agent: dict[str, JsonValue] = Field(default_factory=_model_defaults)
     llm_user: str = "gpt-4.1-2025-04-14"
@@ -54,6 +58,8 @@ class BenchmarkConfig(BoundaryModel):
 
     @model_validator(mode="after")
     def validate_scope(self) -> Self:
+        if self.stop_after_infrastructure_errors is not None and self.stage != "development":
+            raise ValueError("INFRASTRUCTURE_STOP_LIMIT_REQUIRES_DEVELOPMENT_STAGE")
         if self.task_ids is not None:
             if not self.task_ids or len(self.task_ids) != len(set(self.task_ids)):
                 raise ValueError("task_ids must be a nonempty set of unique IDs")
@@ -76,7 +82,7 @@ class BenchmarkConfig(BoundaryModel):
             validate_local_api_base(self.local_api_base)
             if self.stage != "development":
                 raise ValueError("The local route currently supports development pilots only")
-        elif self.local_api_base is not None:
+        elif self.local_api_base is not None or self.local_timing is not None:
             raise ValueError("The hosted route does not accept a local_api_base")
         return self
 
@@ -101,8 +107,30 @@ def harness_model_settings(
             api_key="safe-local-no-key",
             num_retries=0,
         )
+        if config.local_timing is not None:
+            arguments["timeout"] = config.local_timing.provider_timeout_seconds
         model = "openai/" + model
     return model, arguments
+
+
+def effective_inference_timing(config: BenchmarkConfig) -> dict[str, JsonValue]:
+    """Declared effective timing, without inference or guessed SDK defaults."""
+    profile = config.local_timing
+    if profile is not None:
+        profile = LocalTimingProfile.model_validate(profile.model_dump())
+        if config.model_route != "local" or config.stage != "development":
+            raise ValueError("LOCAL_TIMING_REQUIRES_LOCAL_DEVELOPMENT_ROUTE")
+    return {
+        "basis": "explicit_local_profile" if profile is not None else "legacy_fixed_defaults",
+        "profile": profile.model_dump(mode="json") if profile is not None else None,
+        "provider_timeout_seconds": profile.provider_timeout_seconds if profile is not None else 60.0,
+        "transport_timeout_seconds": profile.transport_timeout_seconds if profile is not None else 60.0,
+        "request_timeout_seconds": profile.request_timeout_seconds if profile is not None else 90.0,
+        "harness_provider_timeout_seconds": profile.provider_timeout_seconds if profile is not None else None,
+        "max_inference_seconds": 120,
+        "absolute_local_deadline_enforced": profile is not None,
+        "simulation_timeout_seconds": config.timeout,
+    }
 
 
 def load_config(path: str | Path) -> BenchmarkConfig:

@@ -15,6 +15,7 @@ import math
 import os
 import re
 import sys
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -27,7 +28,7 @@ from safe_agent.contracts.episode_inference import (
 )
 
 from . import TAU_COMMIT, TAU_RELEASE
-from .config import CANONICAL_RUNTIME_FACTORY, BenchmarkConfig
+from .config import CANONICAL_RUNTIME_FACTORY, BenchmarkConfig, effective_inference_timing
 from .inventory import content_hash, inspect_benchmark, reservation_headroom
 
 
@@ -48,6 +49,10 @@ def _runtime_configuration(config: BenchmarkConfig) -> dict[str, Any]:
     if any(getattr(episode_limits, name) > getattr(run_limits, name)
            for name in type(episode_limits).model_fields):
         raise ValueError("EPISODE_LIMIT_EXCEEDS_RUN_LIMIT")
+    if config.local_timing is not None and (
+        min(episode.deadline_seconds, run.deadline_seconds) < config.local_timing.request_timeout_seconds
+    ):
+        raise ValueError("EPISODE_CANNOT_FIT_LOCAL_REQUEST_LIFETIME")
     validate_episode_model_arguments(
         config.llm_args_agent, max_output_tokens=episode.max_output_tokens
     )
@@ -127,15 +132,22 @@ def _local_model(model: str) -> bool:
     )
 
 
-def _probe_local_models(config: BenchmarkConfig) -> dict[str, Any]:
+def _probe_local_models(config: BenchmarkConfig, *, timeout_seconds: float = 5.0) -> dict[str, Any]:
     """Bounded local metadata request; no key lookup, model load, or generation."""
     import httpx
 
+    from safe_agent.inference.deadline_http import DeadlineBudget, DeadlineHTTPTransport
+
+    if (type(timeout_seconds) not in (int, float) or not math.isfinite(timeout_seconds)
+            or not 0 < timeout_seconds <= 5):
+        raise ValueError("LOCAL_METADATA_TIMEOUT_INVALID")
     if config.local_api_base is None:
         raise ValueError("LOCAL_API_BASE_REQUIRED")
     base = validate_local_api_base(config.local_api_base)
     payload = bytearray()
-    with httpx.Client(trust_env=False, follow_redirects=False, timeout=5.0) as client:
+    transport = DeadlineHTTPTransport(DeadlineBudget(time.monotonic() + timeout_seconds))
+    with httpx.Client(transport=transport, trust_env=False, follow_redirects=False,
+                      timeout=timeout_seconds) as client:
         with client.stream("GET", base + "/models", headers={
             "Authorization": "Bearer safe-local-no-key", "Accept-Encoding": "identity",
         }) as response:
@@ -246,13 +258,15 @@ def _probe_service(config: BenchmarkConfig) -> dict[str, Any]:
         raise ValueError("DISPATCH_KEY_PATH_DENIED")
     authenticator = EpisodeDispatchAuthenticator(_secret_from_file(key_path))
     backend = (
-        local_openai_backend_capabilities(model=config.llm_agent, base_url=config.local_api_base)
+        local_openai_backend_capabilities(model=config.llm_agent, base_url=config.local_api_base,
+                                          local_timing=config.local_timing)
         if config.model_route == "local" and config.local_api_base is not None
         else openai_backend_capabilities(model=config.llm_agent)
     )
     response = EpisodeUnixTransport(socket_path, timeout_seconds=5).capabilities(
         authenticator,
         expected=EpisodeServiceCapabilities(backend=backend),
+        absolute_timeout_seconds=5.0 if config.model_route == "local" else None,
     )
     return {"verified": True, "configuration": response.reply.capabilities.model_dump(mode="json"),
             "proof_sha256": content_hash(response.model_dump(mode="json")),
@@ -286,6 +300,11 @@ def preflight_run(config: BenchmarkConfig, *, tau_root: Path | None = None,
         report["config_sha256"] = content_hash(config.model_dump())
     except (ValueError, TypeError):
         issues.append("CONFIGURATION_MUST_BE_FINITE_JSON")
+        return report
+    try:
+        report["effective_inference_timing"] = effective_inference_timing(config)
+    except (ValueError, TypeError, AttributeError):
+        issues.append("LOCAL_TIMING_PROFILE_INVALID")
         return report
     root = tau_root or (Path(config.tau_root) if config.tau_root else None)
     try:
@@ -400,6 +419,12 @@ def preflight_run(config: BenchmarkConfig, *, tau_root: Path | None = None,
                      "max_output_tokens": _reported_output_cap(config.llm_args_user),
                      "output_cap_basis": "explicit_harness_argument_or_provider_default"},
         }
+        for role, settings in roles.items():
+            settings["provider_timeout_seconds"] = (
+                config.local_timing.provider_timeout_seconds if config.local_timing is not None
+                else 60.0 if role == "agent" and config.system == "safe_agent" else None
+            )
+            settings["absolute_local_deadline_enforced"] = config.local_timing is not None
         if inventory["selected_tasks_with_nl_assertions"]:
             roles["judge"] = {"model": judge, "provider": "openai",
                               "provider_num_retries": default_retries, "model_args": judge_args}

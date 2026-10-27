@@ -81,7 +81,8 @@ from safe_agent.storage.episodes import EpisodeStore
 from safe_agent.storage.models import Base
 
 PRIVACY_PROFILE = "synthetic_benchmark_field_policy_v2"
-COMPLETION_PROFILE = "tau3-business-effect-receipts-v2"
+COMPLETION_PROFILE = "tau3-business-effect-receipts-v3"
+PROGRESS_PROFILE = "bounded-identical-repair-v1"
 
 
 class RuntimeLimits(StrictModel):
@@ -123,6 +124,9 @@ class EpisodeRuntime:
         # Frozen Pydantic records may still contain caller-owned mutable dicts.
         context = RuntimeContext.model_validate_json(context.model_dump_json())
         self.context = context
+        if (isinstance(transport, EpisodeUnixTransport)
+                and transport.local_timing != context.local_timing):
+            raise ValueError("LOCAL_TIMING_TRANSPORT_MISMATCH")
         self.clock = clock
         self.limits = RuntimeLimits.model_validate(context.episode_budget)
         self.run_limits = RunLimits.model_validate(context.run_budget)
@@ -144,10 +148,13 @@ class EpisodeRuntime:
                                    "context_retention_profile": CONTEXT_RETENTION_PROFILE,
                                    "privacy_profile": PRIVACY_PROFILE,
                                    "completion_profile": COMPLETION_PROFILE,
+                                   "progress_profile": PROGRESS_PROFILE,
                                    "domain": context.domain, "model": context.model,
                                    "model_args": context.model_args,
                                    "episode_limits": self.limits.model_dump(),
-                                   "run_limits": self.run_limits.model_dump()})
+                                   "run_limits": self.run_limits.model_dump(),
+                                   **({"local_timing": context.local_timing.model_dump()}
+                                      if context.local_timing is not None else {})})
         now = clock()
         try:
             existing = self.episodes.get_run(self.run_id)
@@ -189,6 +196,7 @@ class EpisodeRuntime:
                             "admission_profile": "tau3-v1.0.1-encoded-rules-v1",
                             "privacy_profile": PRIVACY_PROFILE,
                             "completion_profile": COMPLETION_PROFILE,
+                            "progress_profile": PROGRESS_PROFILE,
                             "context_retention_profile": CONTEXT_RETENTION_PROFILE})
 
     def _owned_episode(self, episode_id: str) -> EpisodeView:
@@ -579,6 +587,15 @@ class EpisodeRuntime:
                feedback: str | None) -> ToolCandidate | MessageCandidate:
         projected = self._project(data, ctx, feedback)
         now = self.clock()
+        episode_deadline = min(datetime.fromisoformat(data["deadline"]), self.run_spec.deadline)
+        profile = self.context.local_timing
+        request_seconds = profile.request_timeout_seconds if profile is not None else 90
+        request_deadline = now + timedelta(seconds=request_seconds)
+        if profile is not None and request_deadline > episode_deadline:
+            # No reservation or provider dispatch starts when the configured
+            # finite request cannot fit. Do not silently shorten this condition.
+            raise EpisodeInferenceDenied("EPISODE_INFERENCE_LIFETIME_INSUFFICIENT",
+                reason_code="EPISODE_INFERENCE_LIFETIME_INSUFFICIENT")
         temperature = self.context.model_args.get("temperature", 0.0)
         seed = self._seed if self._seed is not None else self.context.model_args.get("seed")
         if (type(temperature) not in {int, float} or
@@ -590,8 +607,7 @@ class EpisodeRuntime:
             observation_hash=ctx.observation_hash, projected_context=projected,
             max_output_tokens=self.limits.max_output_tokens,
             temperature=float(cast(float, temperature)), seed=cast(int | None, seed),
-            issued_at=now, deadline=min(now + timedelta(seconds=90),
-                                       datetime.fromisoformat(data["deadline"])),
+            issued_at=now, deadline=min(request_deadline, episode_deadline),
         )
         # UTF-8 byte bound plus a fixed system/schema allowance. These are held
         # units, not exact provider token usage or independently verified dollars.
@@ -620,14 +636,16 @@ class EpisodeRuntime:
                                      "reserved_cost_microusd": self.limits.max_attempt_cost_microusd})
         return candidate
 
-    def _message(self, data: dict[str, Any], text: str, *, stop: bool = False) -> Decision:
+    def _message(self, data: dict[str, Any], text: str, *, stop: bool = False,
+                 failed: bool = False) -> Decision:
         message_id = "response_" + uuid4().hex
         self.episodes.record_response(data["episode_id"], message_id, wire_digest(text),
                                       awaiting_customer=not stop, now=self.clock())
         data["history"].append(Message(role="assistant", content=text,
                                          message_id=message_id).model_dump(mode="json"))
         if stop:
-            self.episodes.finish(data["episode_id"], EpisodeState.FINISHED, self.clock())
+            self.episodes.finish(data["episode_id"],
+                                 EpisodeState.FAILED if failed else EpisodeState.FINISHED, self.clock())
         return Decision(kind="message", content=text, stop=stop)
 
     def _tool(self, proposal: ToolProposal, ctx: DomainContext,
@@ -712,9 +730,28 @@ class EpisodeRuntime:
                 if isinstance(result, Decision):
                     return result
         feedback: str | None = None
+        rejected: set[str] = set()
         for _ in range(self.limits.max_schema_repairs + 1):
             try:
                 candidate = self._infer(data, ctx, feedback)
+                # Only compare rejected proposals within this one observation.
+                # A repeated question after a new customer turn can be valid.
+                candidate_binding = wire_digest({
+                    "candidate": candidate.model_dump(mode="json"),
+                    "observation": ctx.observation_hash,
+                    "context": self._domain_context(data).model_dump(
+                        mode="json", exclude={"state_version"}),
+                    "receipts": data["successful_calls"],
+                })
+                if candidate_binding in rejected:
+                    data["diagnostics"].append({"code": "REPEATED_REPAIR_WITHOUT_PROGRESS",
+                                                "repair": True})
+                    return self._message(
+                        data, "I could not produce a valid next step after the correction. "
+                        "I am ending this attempt without claiming any action succeeded.",
+                        stop=True, failed=True,
+                    )
+                rejected.add(candidate_binding)
                 if isinstance(candidate, ToolCandidate):
                     arguments = self._vault(data).resolve_arguments(
                         candidate.tool_name, candidate.arguments, now=self.clock(),
@@ -740,8 +777,10 @@ class EpisodeRuntime:
             except (ProjectionDenied, ResponseDenied) as exc:
                 feedback = str(exc)
             data["diagnostics"].append({"code": feedback, "repair": True})
-        return self._message(data, "I need more information before I can continue. "
-                             "Could you clarify what you would like me to do?")
+        data["diagnostics"].append({"code": "REPAIR_ALLOWANCE_EXHAUSTED", "repair": True})
+        return self._message(data, "I could not produce a valid next step within this attempt. "
+                             "I am stopping without claiming any action succeeded.",
+                             stop=True, failed=True)
 
     def step(self, observation: Observation, state: Any) -> tuple[Decision, dict[str, Any]]:
         if (not isinstance(state, dict) or set(state) != {"episode_id", "version"}
@@ -822,7 +861,8 @@ def runtime_factory(context: RuntimeContext) -> EpisodeRuntime:
                            connect_args={"timeout": 30})
     EpisodeRuntime.create_fixture_schema(engine)
     key = _secret_from_file(Path(os.environ["SAFE_EPISODE_DISPATCH_KEY_FILE"]))
-    transport = EpisodeUnixTransport(Path(os.environ["SAFE_EPISODE_SOCKET"]))
+    transport = EpisodeUnixTransport(Path(os.environ["SAFE_EPISODE_SOCKET"]),
+                                     local_timing=context.local_timing)
     return EpisodeRuntime(context, engine=engine, transport=transport,
                           authenticator=EpisodeDispatchAuthenticator(key))
 

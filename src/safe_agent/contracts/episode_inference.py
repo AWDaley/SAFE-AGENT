@@ -104,11 +104,53 @@ def validate_local_api_base(value: str) -> str:
     return value
 
 
+class LocalTimingProfile(StrictModel):
+    """One explicit local condition; absent profiles keep the legacy timing.
+
+    The three clocks start at request admission. Separate margins leave time
+    for the sidecar reply and the host's durable receipt. This is a finite
+    workload allowance, not a claim that a particular model can meet it.
+    """
+
+    schema_version: Literal["safe_agent.local_timing.v1"] = "safe_agent.local_timing.v1"
+    provider_timeout_seconds: float = Field(gt=0, le=120, allow_inf_nan=False)
+    transport_timeout_seconds: float = Field(gt=0, le=120, allow_inf_nan=False)
+    request_timeout_seconds: float = Field(gt=0, le=120, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def ordered_deadlines(self) -> "LocalTimingProfile":
+        if not (self.provider_timeout_seconds < self.transport_timeout_seconds
+                < self.request_timeout_seconds):
+            raise ValueError("LOCAL_TIMING_REQUIRES_PROVIDER_BEFORE_TRANSPORT_BEFORE_REQUEST")
+        return self
+
+
+# These are diagnostic labels, never exception text supplied by a provider.
+# Hashing one of these labels in an existing uncertain journal event preserves
+# the durable evidence format and lets reporting recover only a fixed category.
+INFERENCE_FAILURE_REASONS = frozenset({
+    "EPISODE_INFERENCE_OUTCOME_UNCERTAIN", "EPISODE_MODEL_TRANSPORT_TIMEOUT",
+    "EPISODE_MODEL_TRANSPORT_UNAVAILABLE", "EPISODE_MODEL_REPLY_INVALID",
+    "EPISODE_INFERENCE_REPLY_LATE", "EPISODE_INFERENCE_LIFETIME_INSUFFICIENT",
+    "EPISODE_CALLER_DISCONNECTED", "LOCAL_MODEL_RESPONSE_DEADLINE_EXCEEDED",
+    "LOCAL_MODEL_CONNECT_FAILED", "LOCAL_MODEL_RESPONSE_INVALID",
+    "LOCAL_MODEL_RESPONSE_LIMIT_EXCEEDED", "LOCAL_MODEL_REQUEST_CANCELLED",
+})
+
+
+def inference_failure_reason(error: BaseException) -> str:
+    reason = getattr(error, "reason_code", None)
+    return reason if isinstance(reason, str) and reason in INFERENCE_FAILURE_REASONS else (
+        "EPISODE_INFERENCE_OUTCOME_UNCERTAIN"
+    )
+
+
 class EpisodeBackendRoute(StrictModel):
     """Explicit service selection, separate from ambient provider settings."""
 
     kind: Literal["hosted_openai", "local_openai"] = "hosted_openai"
     local_api_base: str | None = None
+    local_timing: LocalTimingProfile | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def coherent_route(self) -> "EpisodeBackendRoute":
@@ -116,7 +158,7 @@ class EpisodeBackendRoute(StrictModel):
             if self.local_api_base is None:
                 raise ValueError("LOCAL_MODEL_API_BASE_REQUIRED")
             validate_local_api_base(self.local_api_base)
-        elif self.local_api_base is not None:
+        elif self.local_api_base is not None or self.local_timing is not None:
             raise ValueError("HOSTED_MODEL_LOCAL_API_BASE_DENIED")
         return self
 
@@ -176,9 +218,15 @@ class EpisodeBackendCapabilities(StrictModel):
     response_format: Literal["json_object", "scripted_fixture"]
     candidate_schema_hash: Digest
     system_instruction_hash: Digest
+    local_timing: LocalTimingProfile | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def coherent_profile(self) -> "EpisodeBackendCapabilities":
+        if self.local_timing is not None and (
+            self.profile != "local_openai_chat_v1"
+            or self.timeout_seconds != self.local_timing.provider_timeout_seconds
+        ):
+            raise ValueError("LOCAL_TIMING_CAPABILITY_MISMATCH")
         if self.profile == "openai_chat_v1":
             if (self.provider_origin != "https://api.openai.com/v1"
                     or self.response_format != "json_object"):
