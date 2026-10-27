@@ -6,6 +6,10 @@ while preserving SAFE's authorization and recovery boundaries. A fixture pass,
 schema-valid response, or authored qualification pass is not a τ³ capability or
 safety score.
 
+See [the implementation results](TAU3_LOCAL_RELIABILITY_RESULTS.md) for the actual
+validation and stopped local qualification. The selected model condition did not
+pass its retrieval gate, so no new official benchmark run followed.
+
 ## Recorded starting point
 
 The original attempt used SAFE commit
