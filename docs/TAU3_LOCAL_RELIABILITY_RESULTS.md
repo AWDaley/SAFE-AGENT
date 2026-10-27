@@ -2,7 +2,8 @@
 
 ## Outcome
 
-The improvement is implemented and published for review. The new live qualification
+The improvement is implemented and published in draft
+[PR #47](https://github.com/AWDaley/SAFE-AGENT/pull/47). The new live qualification
 correctly stopped the selected Qwen2.5-3B model condition on a retrieval failure,
 before any new official benchmark run. There is **no new τ³ capability score**.
 The implementation and execution protocol are in
@@ -58,7 +59,16 @@ budget-lineage check also passed.
 
 Real PostgreSQL and Docker isolation acceptance were not available locally.
 Their mandatory CI workflows remain unchanged. The results above describe local
-validation; current remote CI results are tracked in the draft pull request.
+validation; current remote CI results are tracked in
+[PR #47](https://github.com/AWDaley/SAFE-AGENT/pull/47).
+
+The first publication CI run at `63706d9` found one optional-dependency typing
+issue in seven office workflows: the benchmark-only `loguru` import was missing
+from the existing module-specific Mypy allowance. That allowance now includes
+`loguru`. Runtime code, dependency pins, and workflow gates are unchanged. The
+same initial run passed all eight real benchmark PostgreSQL cases and the actual
+container isolation probe; the latter recorded six denied read attempts and zero
+provider calls or dispatches. Final-head results are recorded on the PR.
 
 ## Real local qualification
 
