@@ -2,13 +2,13 @@
 
 ## Outcome
 
-The improvement is implemented and committed locally. The new live qualification
+The improvement is implemented and published for review. The new live qualification
 correctly stopped the selected Qwen2.5-3B model condition on a retrieval failure,
 before any new official benchmark run. There is **no new τ³ capability score**.
 The implementation and execution protocol are in
 [TAU3_LOCAL_RELIABILITY.md](TAU3_LOCAL_RELIABILITY.md).
 
-The local branch is `improvement/tau3-local-reliability`, based on
+The implementation branch is `improvement/tau3-local-reliability`, based on
 `7bbf3e867d509421acda57bf27d1973f6ccca44a`, the head of the existing draft
 [PR #45](https://github.com/AWDaley/SAFE-AGENT/pull/45) when work began.
 The exact code revision used for the second live qualification is
@@ -57,8 +57,8 @@ The installed doctor, eight synthetic demos, M5 offline release gate, and M7
 budget-lineage check also passed.
 
 Real PostgreSQL and Docker isolation acceptance were not available locally.
-Their mandatory CI workflows remain unchanged. No remote CI run for this new
-branch is claimed because publication was blocked.
+Their mandatory CI workflows remain unchanged. The results above describe local
+validation; current remote CI results are tracked in the draft pull request.
 
 ## Real local qualification
 
@@ -150,13 +150,30 @@ unnecessary data collection. It must pass the full 24-probe schedule and semanti
 review before the staged official runs resume. The frozen benchmark and current
 failed evidence remain unchanged.
 
-Automatic approval review rejected the attempted GitHub push. Its stated reason
-was that the short instruction “Implement” did not establish explicit permission
-to transmit this implementation to the external repository. No remote branch,
-PR, merge, or deployment was created by this implementation task.
+Automatic approval review initially rejected the GitHub push because the short
+instruction “Implement” did not establish explicit permission to publish to the
+external repository. The user subsequently approved the concrete push and draft
+PR request with “Yes push”. The
+[implementation branch](https://github.com/AWDaley/SAFE-AGENT/tree/improvement/tau3-local-reliability)
+is now published for draft review against `feature/tau3-text-runtime`.
 
-The concrete pending action is to push `improvement/tau3-local-reliability` to
-`AWDaley/SAFE-AGENT` and open a draft PR targeting `feature/tau3-text-runtime`.
-That would publish the prepared source, tests, and documentation for review and
-allow the retained CI gates to run. It requires the user's explicit approval
-under the automatic review decision.
+Local Git had no HTTPS credential, so the connected GitHub account published the
+same ordered commit trees. Each returned tree SHA was verified against its exact
+local counterpart. GitHub assigned different commit IDs because this route
+creates new commit metadata; the original source commit and tree are recorded in
+each published commit message. The qualification evidence retains its original
+local revision identifiers, with the following verified publication mapping.
+
+| Original local commit | Published equivalent | Change |
+| --- | --- | --- |
+| `45113ec` | `f6f7360` | Role and completion checks |
+| `1e77d65` | `759a547` | Deadlines, cancellation, and repair termination |
+| `cc018e8` | `624f02d` | Scheduling, attribution, and reporting |
+| `aea053b` | `c278b93` | Qualification and launch gates |
+| `b918d24` | `d22c37d` | Qualification-check correction; exact code used in attempt 2 |
+| `af82c04` | `ae874d4` | Local validation and qualification results |
+
+The final mapped tree is `e2b7083fac0cb12e0864d5c2e7109113c4c66126`.
+This publication-record update changes documentation only. Review and CI status
+are maintained on the draft PR. Publication does not approve the failed model
+condition for further benchmark execution.
