@@ -330,6 +330,12 @@ directory for an explicit new experiment; retain interrupted schedules and outco
 
 ## Preparing a local development pilot
 
+The first local attempt and the new normalized reliability condition are
+documented in [TAU3_LOCAL_RELIABILITY.md](TAU3_LOCAL_RELIABILITY.md). Follow that
+runbook for explicit coordinated timing, bounded live qualification, semantic
+review, and stopping after the first infrastructure failure. The original
+templates and legacy timing below remain available for reproducibility.
+
 The local option sends the SAFE agent and official user simulator to a local
 OpenAI-compatible service; its paired stock run uses the same service and model.
 The supplied banking pair selects `task_001`–`task_005`, exactly as the hosted
@@ -532,7 +538,10 @@ It does not isolate the causal effect of enforcement. A claim about a different
 named competitor requires that competitor's supported adapter, the same
 task/evaluator condition, and its own recorded run.
 
-Remaining empirical work is explicit: actual local and hosted pilots, complete retail/banking
+The first local pilot attempted five tasks but graded none; its evidence and
+follow-up are in [the reliability runbook](TAU3_LOCAL_RELIABILITY.md). Remaining
+empirical work includes a successfully qualified and graded local pilot, hosted
+pilots, complete retail/banking
 coverage runs, calibration of limits from observed usage, four-trial matched
 banking evaluation, reviewed false-refusal/policy outcomes, and provider-billing
 reconciliation. No leaderboard submission or production rollout is part of the

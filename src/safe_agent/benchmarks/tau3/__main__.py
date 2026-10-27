@@ -37,6 +37,16 @@ def main(argv: list[str] | None = None) -> int:
             command.add_argument("--offline", action="store_true",
                                  help="Check configuration without reading keys or contacting a socket")
             command.add_argument("--output", type=Path)
+        elif name == "run":
+            command.add_argument("--qualification-report", type=Path,
+                                 help="Require a matching passed local qualification report")
+            command.add_argument("--qualification-review", type=Path,
+                                 help="Separate attributed semantic review of the qualification traces")
+    qualification = commands.add_parser("qualify", help="Run bounded authored local model checks")
+    qualification.add_argument("--config", required=True, type=Path)
+    qualification.add_argument("--tau-root", type=Path)
+    qualification.add_argument("--output-dir", required=True, type=Path)
+    qualification.add_argument("--max-seconds", type=float, default=3600.0)
     calibration = commands.add_parser("calibrate", help="Read-only reservation analysis of a saved pilot")
     calibration.add_argument("--run-dir", required=True, type=Path)
     calibration.add_argument("--target-config", required=True, type=Path)
@@ -111,7 +121,8 @@ def main(argv: list[str] | None = None) -> int:
         output = args.output or (args.run_dir / "diagnostics.json" if args.run_dir else None)
         try:
             result = report_diagnostics(
-                database, output=output, run_id=args.run_id, annotations=args.annotations
+                database, output=output, run_id=args.run_id, annotations=args.annotations,
+                run_dir=args.run_dir,
             )
         except DiagnosticsError as exc:
             print(
@@ -140,6 +151,27 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if result["status"] == "ready" else 2
         from .preflight import PreflightError, preflight_run
 
+        if args.command == "qualify":
+            from .qualification import QualificationError, run_qualification
+
+            try:
+                result = run_qualification(
+                    config, args.output_dir, tau_root=args.tau_root,
+                    max_seconds=args.max_seconds,
+                    progress=lambda event: print(json.dumps(event, sort_keys=True), flush=True),
+                )
+            except PreflightError as exc:
+                print(json.dumps(exc.report, indent=2, sort_keys=True))
+                return 2
+            except (QualificationError, OSError) as exc:
+                reason = str(exc) if isinstance(exc, QualificationError) else "QUALIFICATION_IO_FAILED"
+                print(json.dumps({"kind": "authored_local_qualification", "status": "blocked",
+                                  "reason": reason}))
+                return 2
+            print(json.dumps({key: value for key, value in result.items()
+                              if key not in {"preflight", "probes", "schedule"}},
+                             indent=2, sort_keys=True))
+            return 0 if result["status"] == "automated_checks_passed" else 2
         if args.command == "preflight":
             result = preflight_run(config, tau_root=args.tau_root, offline=args.offline)
             if args.output:
@@ -151,12 +183,35 @@ def main(argv: list[str] | None = None) -> int:
                     return 2
             print(json.dumps(result, indent=2, sort_keys=True))
             return 0 if result["status"] in {"ready_for_attempt", "configuration_validated"} else 2
+        qualification_evidence = None
+        if args.qualification_report or args.qualification_review:
+            from .qualification import QualificationError, require_qualification
+
+            try:
+                if args.qualification_report is None:
+                    raise QualificationError("QUALIFICATION_REPORT_REQUIRED")
+                qualification_evidence = require_qualification(
+                    config, args.qualification_report, args.qualification_review,
+                )
+            except QualificationError as exc:
+                print(json.dumps({"status": "blocked", "reason": str(exc)}))
+                return 2
         try:
-            output = run_official(config, tau_root=args.tau_root)
+            output = run_official(config, tau_root=args.tau_root,
+                                  qualification_evidence=qualification_evidence)
         except PreflightError as exc:
             print(json.dumps(exc.report, indent=2, sort_keys=True))
             return 2
         result = report_saved_run(output)
+        # Preserve legacy launcher semantics. Opt-in controlled development runs
+        # distinguish stopped/ungraded experiments from complete graded execution.
+        if config.stop_after_infrastructure_errors is not None:
+            manifest = json.loads((output / "manifest.json").read_text())
+            coverage = result.get("coverage", {})
+            if (manifest["status"] != "complete" or coverage.get("ungraded", 0)
+                    or coverage.get("infrastructure_failures", 0)):
+                print(json.dumps(result, indent=2, sort_keys=True))
+                return 2
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 

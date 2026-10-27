@@ -1,7 +1,10 @@
 # τ³ implementation handoff
 
 This change implements a runnable, isolated benchmark profile and its offline
-acceptance gates. A model-backed τ³ score has not been produced. The original
+acceptance gates. The first real local pilot on 2026-10-27 attempted five banking
+tasks and recorded five infrastructure errors, with no graded tasks or eligible
+capability score. The evidence and subsequent implementation are documented in
+[the local reliability improvement](TAU3_LOCAL_RELIABILITY.md). The original
 plan includes empirical milestones that require configured model access and
 measured usage; passing authored fixtures does not complete those milestones.
 
@@ -61,7 +64,9 @@ and recorded comparisons.
    source and trajectory directories. Set `LITELLM_MODE=PRODUCTION` and run
    preflight without inference. Local readiness also checks a bounded model list;
    neither route's readiness proves inference quality or actual execution location.
-3. Run the declared small pilots, retain their task IDs as development exposure,
+3. For the local improvement condition, pass the separate authored live
+   qualification and attributed semantic review first. Then run the declared
+   small pilots, retain their task IDs as development exposure,
    inspect actual failures, and use `calibrate` on the real saved SAFE evidence.
    Review its cap-increases-only proposal before changing finite limits; missing
    or censored evidence cannot support a proposal. No template records a completed run.

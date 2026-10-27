@@ -1,0 +1,69 @@
+# Frozen English-text τ³ v1.0.1; normalized local reliability condition.
+# New condition after the 2026-10-27 pilot; no completed score is implied.
+# Qualify both roles and review traces before launching this schedule.
+# Same first-five source-order banking selection as the hosted pilot. These tasks
+# have no NL assertions in the pinned inventory; local preflight checks this.
+# Running this pilot creates development exposure. Download weights separately.
+# Finite monetary reservation units are unchanged from the hosted templates;
+# they are not local API prices, hardware costs, or a provider invoice.
+schema_version = 1
+tau_commit = "fc0055dc4e0a316c3f83133267fbd6faaa770992"
+tau_root = "../tau2-bench-v1.0.1"
+domain = "banking_knowledge"
+system = "llm_agent"
+stage = "development"
+run_id = "tau3-bank-dev-local-normalized-baseline"
+output_dir = "artifacts/tau3/bank-dev-local-normalized-baseline"
+task_split_name = "base"
+num_trials = 1
+num_tasks = 5
+task_ids = ["task_001", "task_002", "task_003", "task_004", "task_005"]
+seed = 300
+max_steps = 200
+max_errors = 10
+max_concurrency = 1
+max_retries = 0
+stop_after_infrastructure_errors = 1
+retrieval_config = "bm25"
+model_route = "local"
+local_api_base = "http://127.0.0.1:11434/v1"
+llm_agent = "qwen2.5:3b"
+llm_user = "qwen2.5:3b"
+development_task_ids = ["task_001", "task_002", "task_003", "task_004", "task_005", "task_074"]
+runtime_factory = "safe_agent.orchestration.episode_runtime:runtime_factory"
+
+[local_timing]
+provider_timeout_seconds = 90.0
+transport_timeout_seconds = 105.0
+request_timeout_seconds = 115.0
+
+[llm_args_agent]
+temperature = 0.0
+num_retries = 0
+max_tokens = 2048
+
+[llm_args_user]
+temperature = 0.0
+num_retries = 0
+max_tokens = 2048
+
+[episode_budget]
+max_turns = 200
+max_model_calls = 200
+max_tool_calls = 200
+max_tokens = 2000000
+max_cost_microusd = 10000000
+deadline_seconds = 3600
+max_prompt_bytes = 131072
+max_output_tokens = 2048
+max_attempt_cost_microusd = 100000
+max_schema_repairs = 1
+
+# These SAFE-only limits are ignored by the stock agent.
+[run_budget]
+max_turns = 100000
+max_model_calls = 100000
+max_tool_calls = 100000
+max_tokens = 1000000000
+max_cost_microusd = 10000000
+deadline_seconds = 604800
