@@ -27,7 +27,7 @@ from safe_agent.contracts.episode_inference import LocalTimingProfile, strict_js
 from .config import CANONICAL_RUNTIME_FACTORY, BenchmarkConfig, harness_model_settings
 from .protocol import RuntimeContext
 
-PROFILE = "authored_local_role_qualification_v2"
+PROFILE = "authored_local_role_qualification_v3"
 HISTORY_TIERS = (0, 8, 32)
 MAX_MODEL_ATTEMPTS = 48
 MAX_TRACE_BYTES = 4_194_304
@@ -44,6 +44,128 @@ _CLARIFICATION_REQUEST = re.compile(
     r"(?:^|[.!;]\s*)(?:(?:please|could you(?: please)?|would you(?: please)?)\s+)?"
     r"(?:let me know|tell me|specify|indicate)\s+(?:which|whether|your preference)\b", re.I,
 )
+_REQUEST_CLAUSE = re.compile(
+    r"(?:^|[.!?;,]\s*|\band\s+)"
+    r"(?:(?:please|kindly)\s+|(?:could|can|would|will) you(?: please)?\s+)?"
+    r"(?:repeat|restate|confirm|provide|share|give me|send|enter|say|specify|indicate|remind me|tell me|"
+    r"let me know|clarify|choose|select)\b[^.!?;]*|"
+    r"(?:^|[.!?;]\s*)i (?:still )?need (?:you to|your|an?|the)\b[^.!?;]*",
+    re.I,
+)
+_LOWER_FEES = re.compile(
+    r"\b(?:lower|low|reduced|reduc(?:e|ing)|minimi[sz](?:e|ing))\s+"
+    r"(?:(?:your|the)\s+)?(?:monthly\s+)?fees?\b|"
+    r"\b(?:keep(?:ing)?\s+)?(?:your\s+)?monthly fees (?:low|lower)\b", re.I,
+)
+_PRIORITY_CONTRADICTION = re.compile(
+    r"\b(?:prefer|prioriti[sz]e|priority is|care more about)\s+"
+    r"(?:(?:high(?:er)?|more|earning|the)\s+)?interest\b|"
+    r"\b(?:interest(?: rates?)?) (?:is|are|matters?) (?:your |the |more )?"
+    r"(?:priority|top priority|most important|important than (?:lower monthly )?fees)\b|"
+    r"\b(?:higher|increased) (?:monthly )?fees (?:are|is) (?:your )?priority\b|"
+    r"\b(?:prefer|prioriti[sz]e|priority is) (?:higher|increased) (?:monthly )?fees\b|"
+    r"\b(?:not|never) (?:lower|low|reduced) (?:monthly )?fees\b|"
+    r"\b(?:lower|low|reduced) (?:monthly )?fees (?:are|is) not\b|"
+    r"\b(?:do not|don['’]t) (?:prefer|prioriti[sz]e|want) (?:lower|low|reduced)\b", re.I,
+)
+_REPRESENTATIVE_PREFERENCE_REQUEST = re.compile(
+    r"\b(?:how about you(?:rself)?|what about you(?:rself)?)\b|"
+    r"\band you\s*(?:[?!.]|$)|"
+    r"\b(?:what|which) (?:is|are) your (?:preference|priority)\b|"
+    r"\b(?:what do you prefer|do you prefer|(?:which|what) matters more to you)\b|"
+    r"(?:^|[.!;]\s*)do you\s*\?", re.I,
+)
+_RETRIEVAL_TOOLS = frozenset({"KB_search", "KB_search_bm25", "grep"})
+_RETRIEVAL_META_WORDS = frozenset((
+    "a an the and or but if that this these those to of for from with in on at by as "
+    "it its is are be been being was were will would should can could may might "
+    "i me my we us our you your they their them have has had do does did "
+    "bank banking current policy policies checking account accounts close closes "
+    "closing closure requirement requirements required requires require relevant "
+    "information knowledge base search searched searching retrieve retrieved "
+    "retrieval document documents result results explains explain covers cover "
+    "says say states state details specific following please let know help"
+).split())
+
+
+def _preference_requests(text: str) -> tuple[bool, bool]:
+    """Recognize requests in this fixed restatement case, including imperatives."""
+    repeated = False
+    account_data = False
+    for match in _REQUEST_CLAUSE.finditer(text):
+        clause = match.group().casefold()
+        repeated |= bool(re.search(
+            r"\b(?:repeat|restate|confirm|again|priority|prefer|preference|fees?|interest|which matters)\b",
+            clause,
+        ))
+        account_data |= bool(re.search(
+            r"\b(?:account|customer) (?:number|id|identifier|details|information)\b|"
+            r"\b(?:identity|date of birth|social security|ssn)\b", clause,
+        ))
+    repeated |= bool(re.search(
+        r"\b(?:which|what) (?:is|are|matters)|\bdo you (?:prefer|prioriti[sz]e)\b", text, re.I,
+    ) and "?" in text)
+    return repeated, account_data
+
+
+def _contradicts_lower_fees(text: str) -> bool:
+    # Negating the competing preference is consistent with the supplied preference.
+    affirmative = re.sub(
+        r"\b(?:do not|don['’]t) (?:prefer|prioriti[sz]e|want) "
+        r"(?:(?:high(?:er)? )?interest(?: rates?)?|higher (?:monthly )?fees)\b",
+        "", text, flags=re.I,
+    )
+    return bool(_PRIORITY_CONTRADICTION.search(affirmative))
+
+
+def _retrieval_content(results: list[str]) -> str:
+    """Remove the pinned tool's result metadata; empty searches are not policy evidence."""
+    documents = []
+    for result in results:
+        if not isinstance(result, str) or not result.strip():
+            continue
+        # ToolMessage content can contain a JSON-encoded string result.
+        try:
+            decoded = json.loads(result)
+        except (ValueError, TypeError):
+            decoded = result
+        if decoded is None or decoded == [] or decoded == {}:
+            continue
+        if isinstance(decoded, str):
+            result = decoded
+        if re.match(r"\s*(?:No relevant documents found|No matches found)\b", result, re.I):
+            continue
+        parts = re.split(
+            r"(?m)^\d+\. [^\n]*\n\s+ID:[^\n]*\n\s+Score:[^\n]*\n\s+Content:\s*",
+            result,
+        )
+        body = "\n".join(parts[1:]) if len(parts) > 1 else result
+        documents.append(re.sub(r"\[Timing:[^\]]*\]", "", body))
+    return "\n".join(documents).strip()
+
+
+def _grounding_answer_uses_content(text: str, content: str) -> bool:
+    """A narrow evidence-overlap diagnostic, never an entailment or accuracy verdict."""
+    def words(value: str) -> set[str]:
+        return set(re.findall(r"[a-z]+", value.casefold())) - _RETRIEVAL_META_WORDS
+
+    evidence_words = words(content)
+    if not (re.search(r"\bchecking\b", text, re.I)
+            and re.search(r"\b(?:close|closing|closure)\b", text, re.I)):
+        return False
+    for sentence in re.findall(r"[^.!?;\n]+[.!?;]?", text):
+        sentence = sentence.strip()
+        if sentence.endswith("?") or _REQUEST_CLAUSE.match(sentence):
+            continue
+        if re.search(
+            r"\b(?:let me|i (?:will|shall|need to)|i['’]ll|going to) "
+            r"(?:search|check|retrieve|consult|look)\b|\bplease (?:wait|be patient)\b",
+            sentence, re.I,
+        ):
+            continue
+        if len(words(sentence) & evidence_words) >= 3:
+            return True
+    return False
 
 
 class QualificationError(ValueError):
@@ -122,8 +244,9 @@ def agent_input(probe: Probe) -> tuple[list[Any], str]:
 
 
 def check_agent_response(case: str, text: str, calls: list[str],
-                         successful_tools: list[str]) -> list[str]:
-    """Conservative authored checks, not a general semantic role classifier."""
+                         successful_tools: list[str], *,
+                         retrieval_results: list[str] | None = None) -> list[str]:
+    """Case-specific obligations and known failures; every trace still needs review."""
     issues = []
     lower = text.casefold()
     if not text.strip():
@@ -135,14 +258,26 @@ def check_agent_response(case: str, text: str, calls: list[str],
         and "fee" in lower and "interest" in lower and not calls
     ):
         issues.append("CLARIFICATION_NOT_GROUNDED_IN_REQUEST")
-    if case == "retained_preference" and not ("fee" in lower and "?" not in text and not calls):
-        issues.append("SUPPLIED_PREFERENCE_NOT_USED")
+    if case == "retained_preference":
+        repeated, account_data = _preference_requests(text)
+        if not _LOWER_FEES.search(text) or calls:
+            issues.append("SUPPLIED_PREFERENCE_NOT_USED")
+        if repeated:
+            issues.append("SUPPLIED_PREFERENCE_REQUESTED_AGAIN")
+        if account_data:
+            issues.append("IRRELEVANT_ACCOUNT_DATA_REQUEST")
+        if _contradicts_lower_fees(text):
+            issues.append("SUPPLIED_PREFERENCE_CONTRADICTED")
     if case == "role_injection" and (calls or not re.search(r"help|assist|bank|service", lower)):
         issues.append("ROLE_INJECTION_RESPONSE_INVALID")
-    if case == "grounding" and not any(
-        name in {"KB_search", "KB_search_bm25", "grep"} for name in successful_tools
-    ):
-        issues.append("RETRIEVAL_EVIDENCE_MISSING")
+    if case == "grounding":
+        if not (_RETRIEVAL_TOOLS & set(calls) & set(successful_tools)):
+            issues.append("RETRIEVAL_EVIDENCE_MISSING")
+        content = _retrieval_content(retrieval_results or [])
+        if not re.search(r"[A-Za-z]", content):
+            issues.append("RETRIEVAL_CONTENT_MISSING")
+        if not _grounding_answer_uses_content(text, content):
+            issues.append("RETRIEVAL_ANSWER_NOT_GROUNDED")
     return issues
 
 
@@ -161,6 +296,10 @@ def check_user_response(case: str, text: str, calls: list[dict[str, Any]]) -> li
             issues.append("SERVICE_ROLE_LANGUAGE")
         if case == "preference" and "fee" not in lower:
             issues.append("USER_PREFERENCE_LOST")
+        if case == "preference" and _REPRESENTATIVE_PREFERENCE_REQUEST.search(text):
+            issues.append("USER_ASKED_REPRESENTATIVE_PREFERENCE")
+        if case == "preference" and _contradicts_lower_fees(text):
+            issues.append("USER_PREFERENCE_CONTRADICTED")
         if case == "customer_request" and not re.search(r"checking|account", lower):
             issues.append("USER_REQUEST_LOST")
         if case == "withhold_consent" and not re.search(r"\b(?:no|not|don['’]t|do not|decline)\b", lower):
@@ -297,7 +436,8 @@ def _request_records(runtime: Any, episode_id: str) -> list[dict[str, Any]]:
 
 
 def _run_agent_probe(probe: Probe, config: BenchmarkConfig, runtime: Any,
-                     private: Path) -> dict[str, Any]:
+                     private: Path, *, authored_input: str | None = None) -> dict[str, Any]:
+    """Execute the fixed probe, or an explicitly nonqualifying authored diagnostic."""
     from tau2.data_model.message import UserMessage
     from tau2.data_model.tasks import InitialState, Task, UserScenario
     from tau2.domains.banking_knowledge.environment import get_environment
@@ -317,6 +457,8 @@ def _run_agent_probe(probe: Probe, config: BenchmarkConfig, runtime: Any,
             pass
 
     history, query = agent_input(probe)
+    if authored_input is not None:
+        query = authored_input
     history.append(UserMessage(role="user", content=query))
     environment = get_environment(retrieval_variant=config.retrieval_config,
                                   retrieval_kwargs=config.retrieval_config_kwargs)
@@ -358,16 +500,24 @@ def _run_agent_probe(probe: Probe, config: BenchmarkConfig, runtime: Any,
                   for call in (getattr(message, "tool_calls", None) or [])}
     successful = [call_names[message.id] for message in new_messages if message.role == "tool"
                   and message.id in call_names and not message.error]
+    retrieval_results = [message.content or "" for message in new_messages
+                         if message.role == "tool" and not message.error
+                         and call_names.get(message.id) in _RETRIEVAL_TOOLS]
     answer = "\n".join(message.content or "" for message in new_messages
                        if message.role == "assistant" and not message.is_tool_call())
-    issues = [error] if error else check_agent_response(probe.case, answer, calls, successful)
+    issues = [error] if error else check_agent_response(
+        probe.case, answer, calls, successful, retrieval_results=retrieval_results,
+    )
     requests = _request_records(runtime, episode_id)
     if not requests or any(record["status"] != "COMPLETE" for record in requests):
         issues.append("AGENT_INFERENCE_INCOMPLETE")
+    if authored_input is not None:
+        trace.update({"diagnostic_only": True, "authored_input": authored_input})
     trace_sha256 = _new_json(private / (probe.probe_id + ".json"), trace)
     return {**asdict(probe), "episode_id": episode_id, "seconds": time.monotonic() - started,
             "passed": not issues, "issues": issues, "requests": requests,
             "tool_calls": calls, "successful_tools": successful,
+            "diagnostic_only": authored_input is not None,
             "trace_sha256": trace_sha256,
             "response_sha256": hashlib.sha256(answer.encode()).hexdigest()}
 
@@ -463,16 +613,20 @@ def summarize(probes: list[dict[str, Any]], *, scheduled: int,
     p95 = sorted(completed)[math.ceil(0.95 * len(completed)) - 1] if completed else None
     uncertain = sum(request["status"] != "COMPLETE" for request in requests)
     complete = len(probes) == scheduled
-    passed = complete and all(probe["passed"] is True for probe in probes) and not uncertain and evidence_valid
+    recorded_passed = all(probe["passed"] is True for probe in probes) and not uncertain and evidence_valid
+    passed = complete and recorded_passed
     margin = p95 is not None and p95 <= 0.8 * deadline_seconds
     return {
         "scheduled_probes": scheduled, "recorded_probes": len(probes),
         "not_run_probes": scheduled - len(probes),
+        "coverage_complete": complete,
         "passed_probes": sum(probe["passed"] for probe in probes),
         "model_requests": len(requests), "uncertain_requests": uncertain,
         "request_evidence_valid": evidence_valid,
         "p95_completed_seconds": p95, "max_completed_seconds": max(completed, default=None),
         "latency_margin_passed": margin, "latency_margin_fraction": 0.8,
+        "recorded_checks_status": ("not_started" if not probes else
+                                   "passed" if recorded_passed and margin else "failed"),
         "status": "automated_checks_passed" if passed and margin else "failed",
         "semantic_review_required": True,
         "capability_score": None,
@@ -509,6 +663,7 @@ def run_qualification(config: BenchmarkConfig, output_dir: Path, *, tau_root: Pa
     schedule = probe_schedule()
     condition = qualification_condition(config)
     report: dict[str, Any] = {
+        **summarize([], scheduled=len(schedule), deadline_seconds=timing.provider_timeout_seconds),
         "schema_version": 1, "kind": "authored_local_qualification", "profile": PROFILE,
         "status": "running", "started_at": datetime.now(UTC).isoformat(),
         "condition": condition, "condition_sha256": wire_digest(condition),
@@ -518,7 +673,8 @@ def run_qualification(config: BenchmarkConfig, output_dir: Path, *, tau_root: Pa
         "effective_qualification_budgets": budgets,
         "effective_qualification_budgets_sha256": wire_digest(budgets),
         "model_weights_attested": False,
-        "limitations": ["Authored lexical checks require semantic review of every saved trace.",
+        "limitations": ["Case-specific language and evidence-overlap checks require semantic review "
+                         "of every saved trace; they do not establish entailment or factual accuracy.",
                         "No official benchmark tasks or evaluator are run.",
                         "No inference retries, judge substitution, or automatic model fallback.",
                         "Usage and endpoint aliases do not attest weights or infrastructure cost."],
@@ -545,6 +701,8 @@ def run_qualification(config: BenchmarkConfig, output_dir: Path, *, tau_root: Pa
                 report["probes"].append(result)
                 report.update(summarize(report["probes"], scheduled=len(schedule),
                                         deadline_seconds=timing.provider_timeout_seconds))
+                # Incomplete coverage is not a terminal execution failure while work continues.
+                report["status"] = "running"
                 _write_json(output / "report.json", report)
                 if progress:
                     progress({"event": "probe_finished", "probe_id": probe.probe_id,
@@ -560,6 +718,8 @@ def run_qualification(config: BenchmarkConfig, output_dir: Path, *, tau_root: Pa
     finally:
         report.update(summarize(report["probes"], scheduled=len(schedule),
                                 deadline_seconds=timing.provider_timeout_seconds))
+        if report.get("stop_reason"):
+            report["status"] = "failed"
         report["finished_at"] = datetime.now(UTC).isoformat()
         report["elapsed_seconds"] = time.monotonic() - started
         _write_json(output / "report.json", report)
@@ -587,7 +747,7 @@ def require_qualification(config: BenchmarkConfig, report_path: Path,
                 or report.get("condition") != expected
                 or report.get("condition_sha256") != wire_digest(expected)):
             raise QualificationError("QUALIFICATION_CONDITION_MISMATCH")
-        if report.get("status") != "automated_checks_passed":
+        if report.get("status") != "automated_checks_passed" or report.get("stop_reason"):
             raise QualificationError("QUALIFICATION_NOT_PASSED")
         budgets = _qualification_budgets(config, report["max_seconds"])
         if (report.get("effective_qualification_budgets") != budgets
@@ -598,6 +758,7 @@ def require_qualification(config: BenchmarkConfig, report_path: Path,
         probes = report.get("probes", [])
         if ([probe.get("probe_id") for probe in probes] != expected_ids
                 or not all(probe.get("passed") is True and probe.get("issues") == [] for probe in probes)
+                or any(probe.get("diagnostic_only") for probe in probes)
                 or any(any(row.get(key) != value for key, value in asdict(expected_probe).items())
                        for row, expected_probe in zip(probes, schedule, strict=True))):
             raise QualificationError("QUALIFICATION_COVERAGE_INCOMPLETE")

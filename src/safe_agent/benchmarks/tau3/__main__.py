@@ -39,9 +39,9 @@ def main(argv: list[str] | None = None) -> int:
             command.add_argument("--output", type=Path)
         elif name == "run":
             command.add_argument("--qualification-report", type=Path,
-                                 help="Require a matching passed local qualification report")
+                                 help="Passed report required for every canonical local SAFE run")
             command.add_argument("--qualification-review", type=Path,
-                                 help="Separate attributed semantic review of the qualification traces")
+                                 help="Attributed semantic review required for canonical local SAFE runs")
     qualification = commands.add_parser("qualify", help="Run bounded authored local model checks")
     qualification.add_argument("--config", required=True, type=Path)
     qualification.add_argument("--tau-root", type=Path)
@@ -183,22 +183,15 @@ def main(argv: list[str] | None = None) -> int:
                     return 2
             print(json.dumps(result, indent=2, sort_keys=True))
             return 0 if result["status"] in {"ready_for_attempt", "configuration_validated"} else 2
-        qualification_evidence = None
-        if args.qualification_report or args.qualification_review:
-            from .qualification import QualificationError, require_qualification
+        from .qualification import QualificationError
 
-            try:
-                if args.qualification_report is None:
-                    raise QualificationError("QUALIFICATION_REPORT_REQUIRED")
-                qualification_evidence = require_qualification(
-                    config, args.qualification_report, args.qualification_review,
-                )
-            except QualificationError as exc:
-                print(json.dumps({"status": "blocked", "reason": str(exc)}))
-                return 2
         try:
             output = run_official(config, tau_root=args.tau_root,
-                                  qualification_evidence=qualification_evidence)
+                                  qualification_report=args.qualification_report,
+                                  qualification_review=args.qualification_review)
+        except QualificationError as exc:
+            print(json.dumps({"status": "blocked", "reason": str(exc)}))
+            return 2
         except PreflightError as exc:
             print(json.dumps(exc.report, indent=2, sort_keys=True))
             return 2

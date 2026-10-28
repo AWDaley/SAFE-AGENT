@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from collections import Counter, defaultdict
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -100,6 +101,41 @@ def _route_provenance(manifest: dict[str, Any]) -> dict[str, Any]:
         "basis": "declared saved configuration; no independent endpoint, weight or hardware attestation",
         "model_weights_or_hardware_attested": False,
     }
+
+
+def _launch_classification(manifest: dict[str, Any]) -> str:
+    """Keep saved launch claims distinct from fresh evidence validation."""
+    runtime_mode = manifest.get("runtime_mode")
+    system = manifest.get("system")
+    fixture_modes = {"injected_development", "custom_development"}
+    if runtime_mode in fixture_modes or system in fixture_modes:
+        return "development_fixture"
+    declared = manifest.get("launch_classification")
+    if declared is None:
+        # Old optional gate metadata was accepted from a caller without reading
+        # its files. Its presence cannot retroactively establish qualification.
+        return "legacy_unqualified"
+    if runtime_mode == "stock_baseline" and system == "llm_agent":
+        return "stock_baseline"
+    canonical_safe = runtime_mode == "canonical_safe" and system == "safe_agent"
+    route = manifest.get("config", {}).get("model_route", "openai")
+    if declared == "unqualified_hosted_live" and canonical_safe and route == "openai":
+        return declared
+    if declared == "qualified_local_live" and canonical_safe and route == "local":
+        gate = manifest.get("qualification_gate")
+        if (
+            isinstance(gate, dict)
+            and set(gate) == {"report_sha256", "review_sha256", "condition_sha256",
+                              "review_is_independent_attestation"}
+            and all(isinstance(gate.get(key), str)
+                    and re.fullmatch(r"[0-9a-f]{64}", gate[key]) is not None
+                    for key in ("report_sha256", "review_sha256"))
+            and isinstance(gate.get("condition_sha256"), str)
+            and re.fullmatch(r"sha256:[0-9a-f]{64}", gate["condition_sha256"]) is not None
+            and gate["review_is_independent_attestation"] is False
+        ):
+            return declared
+    raise ValueError("RECORDED_LAUNCH_CLASSIFICATION_INVALID")
 
 
 def cost_accounting(
@@ -440,6 +476,11 @@ def summarize_saved_results(
         "system": manifest["system"],
         "tau_commit": TAU_COMMIT,
         "report_basis": "recorded rewards only; no fresh judging",
+        "launch_classification": _launch_classification(manifest),
+        "launch_classification_basis": (
+            "saved launch metadata; qualification files are not revalidated by reward reporting; "
+            "no independent model, endpoint, or reviewer attestation"
+        ),
         "run_status": manifest.get("status", "not_recorded"),
         "execution": execution,
         "episode_attribution": {
