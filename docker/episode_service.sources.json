@@ -28,6 +28,7 @@
   "safe_agent/evidence/__init__.py",
   "safe_agent/evidence/ledger.py",
   "safe_agent/inference/__init__.py",
+  "safe_agent/inference/deadline_http.py",
   "safe_agent/inference/gateway.py",
   "safe_agent/inference/mock.py",
   "safe_agent/inference/restricted_https.py",

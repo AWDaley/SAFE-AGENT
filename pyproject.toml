@@ -54,7 +54,7 @@ check_untyped_defs = true
 [[tool.mypy.overrides]]
 # Model providers and the pinned harness belong to the isolated tau3 profile.
 # Office-only type checks do not require them; benchmark CI tests the imports.
-module = ["openai", "openai.*", "litellm", "litellm.*", "tau2", "tau2.*"]
+module = ["openai", "openai.*", "litellm", "litellm.*", "loguru", "tau2", "tau2.*"]
 ignore_missing_imports = true
 
 [tool.uv]

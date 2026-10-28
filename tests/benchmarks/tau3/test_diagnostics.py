@@ -87,7 +87,8 @@ def add_episode(store, private, name, *, run_id="run_authored", diagnostics=None
 
 
 def model_attempt(
-    store, private, episode, request_id, start, finish, *, invalid=False, journal_finish=True
+    store, private, episode, request_id, start, finish, *, invalid=False, journal_finish=True,
+    uncertain_reason="timeout", context=None,
 ):
     view = store.inspect(episode)
     request = EpisodeInferenceRequest(
@@ -97,7 +98,7 @@ def model_attempt(
         model="authored-model",
         policy_hash=view.policy_hash,
         observation_hash=view.observation_hash,
-        projected_context={"private_canary": PRIVATE},
+        projected_context={"private_canary": PRIVATE, **(context or {})},
         max_output_tokens=64,
         issued_at=at(start),
         deadline=at(start + 60),
@@ -113,7 +114,7 @@ def model_attempt(
     private.claim_inference(request)
     if finish is None:
         private.uncertain(request_id)
-        store.mark_inference_uncertain(episode, request_id, sha256("timeout"), at(start + 3))
+        store.mark_inference_uncertain(episode, request_id, sha256(uncertain_reason), at(start + 3))
     else:
         output = (
             PRIVATE
@@ -425,3 +426,81 @@ def test_valid_replay_with_missing_run_parent_is_still_an_integrity_failure(auth
     assert report["integrity"]["episode_replay_failures"] == 0
     assert report["integrity"]["failures_by_check"]["episode_run_missing"] == 1
     assert not report["integrity"]["passed"]
+
+
+def test_repetition_repairs_and_unknown_usage_do_not_claim_role_or_domain_safety(authored_journal):
+    path, _, store, private = authored_journal
+    add_episode(store, private, "ep_repeat", run_id="run_repairs", diagnostics=[
+        {"code": "CRITICAL_CLAIM_REQUIRES_SUCCESS_TEMPLATE", "repair": True},
+        {"code": "CRITICAL_CLAIM_REQUIRES_SUCCESS_TEMPLATE", "repair": True},
+        {"code": "REPEATED_REPAIR_WITHOUT_PROGRESS", "repair": True},
+    ])
+    for index in range(3):
+        model_attempt(store, private, "ep_repeat", "repeated_" + str(index), 1 + index * 3,
+                      2 + index * 3, context={"omitted_history_messages": 0})
+    model_attempt(store, private, "ep_repeat", "request_canary_uncertain", 10, None,
+                  uncertain_reason="EPISODE_MODEL_TRANSPORT_TIMEOUT")
+    report = diagnose_database(path, run_id="run_repairs")
+    assert report["integrity"]["passed"]
+    assert report["model_attempts"]["attempts_with_unknown_usage"] == 1
+    assert not report["model_attempts"]["usage_complete_for_reserved_attempts"]
+    assert report["model_attempts"]["uncertainty_by_fixed_reason"] == {"EPISODE_MODEL_TRANSPORT_TIMEOUT": 1}
+    assert report["model_attempts"]["recorded_input_tokens"] == 30
+    assert report["denials"]["domain_proposals"] == 0
+    assert report["denials"]["repair_feedback"] == 3
+    assert not report["denials"]["repair_is_proof_of_unsafe_action_prevented"]
+    assert report["false_refusals"]["all_recorded_denial_rate"] is None
+    behavior = report["behavioral_diagnostics"]
+    assert behavior["max_identical_message_candidates_in_one_episode"] == 3
+    assert behavior["max_consecutive_identical_message_candidates"] == 3
+    assert behavior["requests_with_history_omission_metadata"] == 3
+    assert behavior["requests_omitting_history"] == 0
+    assert behavior["role_mismatch_count"] is None
+    assert not behavior["role_adherence_assessed"]
+    assert behavior["no_progress_terminations"]["REPEATED_REPAIR_WITHOUT_PROGRESS"] == 1
+    for value in (PRIVATE, "ep_repeat", "request_canary_uncertain", "sha256:"):
+        assert value not in json.dumps(report)
+
+
+def test_explicit_task_index_joins_infrastructure_placeholders_without_exporting_episode_ids(authored_journal, tmp_path):
+    from types import SimpleNamespace
+
+    from safe_agent.benchmarks.tau3.execution import EpisodeIndex
+    from safe_agent.benchmarks.tau3.inventory import content_hash
+
+    path, _, _, _ = authored_journal
+    output = tmp_path / "indexed"
+    output.mkdir()
+    config = {"num_trials": 1}
+    pairs = [{"task_id": "task_" + name, "trial": 0} for name in ("complete", "tool_unknown", "model_unknown", "not_run")]
+    manifest = {"run_id": "run_authored", "config": config,
+                "config_sha256": content_hash(config), "scheduled": pairs}
+    index = EpisodeIndex(output, manifest)
+    rows = []
+    for name in ("complete", "tool_unknown", "model_unknown"):
+        index.begin("task_" + name, 0, 42)
+        index.lifecycle("episode_bound", "ep_" + name, {})
+        index.lifecycle("episode_initialized", "ep_" + name, {})
+        raw = {"id": "simulation_" + name, "task_id": "task_" + name, "trial": 0,
+               "seed": 42, "termination_reason": "infrastructure_error", "reward_info": None,
+               "duration": 0.0, "messages": []}
+        index.finish(SimpleNamespace(model_dump=lambda mode, raw=raw: raw))
+        rows.append(raw)
+    index.finalize("stopped", "infrastructure_error_limit")
+    manifest.update(index.manifest_fields())
+    (output / "manifest.json").write_text(json.dumps(manifest))
+    (output / "results.json").write_text(json.dumps({"simulations": rows}))
+    report = diagnose_database(path, run_dir=output)
+    assert report["task_attribution"]["verified_bound_episodes"] == 3
+    tasks = {row["task_id"]: row for row in report["tasks"]}
+    assert tasks["task_complete"]["runtime"]["model_attempts"]["schema_accepted_replies"] == 1
+    assert tasks["task_complete"]["runtime"]["denials"]["domain_proposals"] == 3
+    assert tasks["task_complete"]["episode_elapsed_to_last_journal_event_seconds"] == 24
+    assert tasks["task_model_unknown"]["runtime"]["model_attempts"]["attempts_with_unknown_usage"] == 1
+    assert tasks["task_not_run"]["execution_state"] == "not_run"
+    assert tasks["task_not_run"]["runtime"] is None
+    assert PRIVATE not in json.dumps(report)
+    assert "ep_complete" not in json.dumps(report)
+    assert "simulation_complete" not in json.dumps(report)
+    with pytest.raises(DiagnosticsError, match="DIAGNOSTICS_EPISODE_INDEX_INVALID"):
+        diagnose_database(path, run_dir=output, run_id="another_run")

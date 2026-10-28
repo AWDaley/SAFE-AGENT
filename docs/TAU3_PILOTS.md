@@ -2,7 +2,11 @@
 
 `preflight` and `calibrate` make no model calls. The separate `run` command invokes
 the configured agent, simulator, and unchanged official judge where required.
-The implementation fixtures have not produced a model-backed pilot or score.
+The first real local pilot on 2026-10-27 recorded five infrastructure failures
+and zero graded tasks; it produced no eligible capability score. Its preserved
+evidence, implementation changes, new normalized local condition, and live
+qualification gate are documented in [TAU3_LOCAL_RELIABILITY.md](TAU3_LOCAL_RELIABILITY.md).
+Authored implementation fixtures remain separate from model evidence.
 
 ## Explicit matched development pilots
 
@@ -12,10 +16,13 @@ The implementation fixtures have not produced a model-backed pilot or score.
 | Hosted banking | `configs/benchmarks/tau3-bank-dev-safe.toml` | `configs/benchmarks/tau3-bank-dev-baseline.toml` | `task_001` through `task_005` |
 | Hosted banking, normalized agent controls | `configs/benchmarks/tau3-bank-dev-normalized-safe.toml` | `configs/benchmarks/tau3-bank-dev-normalized-baseline.toml` | `task_001` through `task_005` |
 | Local banking | `configs/benchmarks/tau3-bank-dev-local-safe.toml` | `configs/benchmarks/tau3-bank-dev-local-baseline.toml` | `task_001` through `task_005` |
+| Local banking, normalized reliability condition | `configs/benchmarks/tau3-bank-dev-local-normalized-safe.toml` | `configs/benchmarks/tau3-bank-dev-local-normalized-baseline.toml` | `task_001` through `task_005` |
 
 These are the first five tasks in each domain's pinned source order. Selection
 uses IDs and source order, without choosing successful or easier outcomes.
-Each pilot declares one trial and the same IDs in `development_task_ids`. Within
+Each pilot declares one trial and includes these IDs in `development_task_ids`.
+The normalized local pair also records previously inspected `task_074` as
+development exposure without scheduling it. Within
 each pair, all configuration fields match except system, run ID, and output path.
 Five tasks are a wiring and feasibility pilot, not an effectiveness estimate.
 
@@ -37,7 +44,7 @@ change executes a pilot or grants a spending allowance.
 
 Choose the [hosted setup](TAU3_RUNTIME.md#preparing-a-hosted-pilot) for OpenAI,
 or the [local setup](TAU3_RUNTIME.md#preparing-a-local-development-pilot) for an
-explicit loopback OpenAI-compatible service such as Ollama. The local templates
+explicit loopback OpenAI-compatible service such as Ollama. The original local templates
 use the illustrative `qwen2.5:7b` model for both roles. Local model execution can
 avoid hosted API fees; hardware, electricity, storage, and time are separate.
 The local selection has no NL assertions and does not replace the frozen judge.

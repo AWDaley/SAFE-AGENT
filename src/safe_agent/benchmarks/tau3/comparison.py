@@ -22,6 +22,7 @@ from pydantic import Field
 
 from . import EXPECTED_TASK_COUNTS, TAU_COMMIT
 from .config import BenchmarkConfig, harness_model_settings
+from .execution import load_episode_index
 from .inventory import content_hash, pinned_source_manifest
 from .protocol import BoundaryModel
 from .reporting import _reward, _success, cost_accounting, pass_hat_k, summarize_saved_results
@@ -44,6 +45,8 @@ MATCHED_CONFIG_FIELDS = (
     "retrieval_config_kwargs",
     "model_route",
     "local_api_base",
+    "local_timing",
+    "stop_after_infrastructure_errors",
     "llm_agent",
     "llm_args_agent",
     "llm_user",
@@ -161,6 +164,7 @@ def _agent_transport_controls(
             "provider_num_retries": 0,
             "max_output_tokens": tokens,
             "output_cap_basis": basis,
+            "inference_timing": _recorded_timing(config, manifest, preflight),
         }
         _check_preflight_transport(preflight, controls)
         return controls
@@ -177,9 +181,69 @@ def _agent_transport_controls(
         "max_output_tokens": tokens,
         "output_cap_basis": "explicit_harness_argument" if tokens is not None
         else "provider_default_not_established",
+        "inference_timing": _recorded_timing(config, manifest, preflight),
     }
     _check_preflight_transport(preflight, controls)
     return controls
+
+
+def _recorded_timing(
+    config: BenchmarkConfig,
+    manifest: dict[str, Any] | None,
+    preflight: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Never apply today's timeout defaults to historical measurements."""
+    from safe_agent.contracts.episode_inference import LocalTimingProfile
+
+    raw = manifest.get("config", {}) if manifest is not None else config.model_dump()
+    profile = raw.get("local_timing")
+    timing = None
+    basis = "historical_defaults_not_recorded"
+    if profile is not None:
+        try:
+            validated = LocalTimingProfile.model_validate(profile)
+        except (TypeError, ValueError):
+            raise ComparisonError("RECORDED_TIMING_PROFILE_INVALID") from None
+        timing = {
+            name: getattr(validated, name)
+            for name in ("provider_timeout_seconds", "transport_timeout_seconds", "request_timeout_seconds")
+        }
+        timing.update(
+            harness_provider_timeout_seconds=validated.provider_timeout_seconds,
+            absolute_local_deadline_enforced=True,
+        )
+        basis = "explicit_saved_local_profile"
+    recorded = preflight.get("effective_inference_timing") if preflight is not None else None
+    if recorded is not None:
+        _require(isinstance(recorded, dict), "PREFLIGHT_TIMING_INVALID")
+        for name in ("provider_timeout_seconds", "transport_timeout_seconds", "request_timeout_seconds", "harness_provider_timeout_seconds"):
+            value = recorded.get(name)
+            _require(
+                value is None or (type(value) in {int, float} and math.isfinite(value) and value > 0),
+                "PREFLIGHT_TIMING_INVALID",
+            )
+        _require(
+            type(recorded.get("absolute_local_deadline_enforced")) is bool,
+            "PREFLIGHT_TIMING_INVALID",
+        )
+        if timing is not None:
+            _require(all(recorded.get(name) == value for name, value in timing.items()), "PREFLIGHT_TIMING_MISMATCH")
+        timing = recorded
+        basis = "hash_bound_saved_preflight"
+    timing = timing or {}
+    harness = timing.get("harness_provider_timeout_seconds")
+    safe = config.system == "safe_agent"
+    return {
+        "basis": basis,
+        "agent_provider_timeout_seconds": timing.get("provider_timeout_seconds") if safe else harness,
+        "user_provider_timeout_seconds": harness,
+        "safe_transport_timeout_seconds": timing.get("transport_timeout_seconds") if safe else None,
+        "safe_request_timeout_seconds": timing.get("request_timeout_seconds") if safe else None,
+        "absolute_local_deadline_enforced": timing.get("absolute_local_deadline_enforced"),
+        "simulation_timeout_seconds": raw.get("timeout"),
+        "simulation_timeout_recorded": "timeout" in raw,
+        "measured_timeout_behavior": False,
+    }
 
 
 def _check_preflight_transport(
@@ -209,10 +273,20 @@ def _transport_comparability(controls: dict[str, dict[str, Any]]) -> dict[str, A
         and right["max_output_tokens"] is not None
         and left["max_output_tokens"] == right["max_output_tokens"]
     )
+    timing_left, timing_right = left["inference_timing"], right["inference_timing"]
+    timing_fields = ("agent_provider_timeout_seconds", "user_provider_timeout_seconds", "absolute_local_deadline_enforced")
+    timing_known = all(timing_left[name] is not None and timing_right[name] is not None for name in timing_fields)
+    timing_match = all(timing_left[name] == timing_right[name] for name in timing_fields) if timing_known else None
     return {
         "provider_retry_limits_match": retry_match,
         "explicit_output_caps_match": output_match,
         "agent_transport_controls_match": retry_match and output_match,
+        "agent_transport_controls_match_scope": "declared provider retries and output caps; timing is reported separately",
+        "provider_and_user_timing_match": timing_match,
+        "agent_transport_and_timing_match": (retry_match and output_match and timing_match) if timing_known else None,
+        "timing_evidence_complete": timing_known,
+        "timing_basis": "saved explicit configuration or hash-bound preflight only; historical missing values stay unknown",
+        "safe_only_deadlines_remain_system_specific": True,
         "actual_provider_attempts_measured": False,
         "interpretation": (
             "Full-system comparison. Equal declared retries and output caps do not "
@@ -491,7 +565,10 @@ def _load(run_dir: Path) -> _SavedRun:
             for line in raw.splitlines()
             if line.strip()
         ]
-    summary = summarize_saved_results(manifest, simulations, additional)
+    summary = summarize_saved_results(
+        manifest, simulations, additional,
+        episode_index=load_episode_index(run_dir, manifest, simulations),
+    )
     _, pair_costs = cost_accounting(manifest, simulations, additional)
     metrics_path = run_dir / "official_metrics.json"
     official, metrics_hash = _read_json(metrics_path) if metrics_path.exists() else (None, None)
@@ -775,7 +852,12 @@ def _trial_view(run: _SavedRun, pair: Pair) -> dict[str, Any]:
         "recorded_reward": _reward(row) if row else None,
         "recorded_seed": row["seed"] if row else None,
         "simulation_sha256": content_hash(row) if row else None,
-        "duration_seconds": row.get("duration") if row else None,
+        "duration_seconds": row.get("duration") if row and row.get("termination_reason") != "infrastructure_error" else None,
+        "duration_basis": "not_retained_in_infrastructure_placeholder" if row and row.get("termination_reason") == "infrastructure_error" else "upstream_recorded_duration",
+        "execution_state": next(
+            (item["state"] for item in run.summary["pairs"] if (item["task_id"], item["trial"]) == pair),
+            "unrecorded_status_unknown",
+        ),
         "costs": run.pair_costs[pair],
         "calls": _call_counts(row, run.config.system),
     }

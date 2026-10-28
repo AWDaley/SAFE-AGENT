@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 
@@ -43,6 +44,17 @@ def harness_transport(config: BenchmarkConfig) -> Iterator[None]:
             if (request.method != "POST" or request.url != expected_url
                     or request.headers.get("authorization") != "Bearer safe-local-no-key"):
                 raise ValueError("LOCAL_HARNESS_ROUTE_DENIED")
+            if config.local_timing is not None:
+                from safe_agent.inference.deadline_http import DeadlineBudget, DeadlineHTTPTransport
+
+                timeout = config.local_timing.provider_timeout_seconds
+                # The SDK's defaults cannot override this per-attempt absolute
+                # bound, including a slowly trickled nonstreaming response.
+                request.extensions["timeout"] = dict.fromkeys(
+                    ("connect", "read", "write", "pool"), timeout,
+                )
+                transport = DeadlineHTTPTransport(DeadlineBudget(time.monotonic() + timeout))
+                return transport.handle_request(request)
             return self.transport.handle_request(request)
 
         def close(self) -> None:

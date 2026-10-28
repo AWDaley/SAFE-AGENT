@@ -7,11 +7,12 @@ The host must isolate its working directory/credentials from the planner.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sqlite3
 import threading
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Protocol
 
@@ -30,6 +31,7 @@ from safe_agent.contracts.episode_inference import (
     EpisodeInferenceReply,
     EpisodeInferenceRequest,
     EpisodeServiceCapabilities,
+    inference_failure_reason,
     strict_json,
 )
 from safe_agent.inference_service.__main__ import _secret_from_file
@@ -38,6 +40,49 @@ from safe_agent.inference_service.socket_lifecycle import OwnedUnixListener
 
 class ModelBackend(Protocol):
     def infer(self, request: EpisodeInferenceRequest) -> EpisodeInferenceReply: ...
+
+
+class _ServiceInferenceFailure(ValueError):
+    def __init__(self, reason_code: str):
+        super().__init__("EPISODE_MODEL_OUTCOME_UNCERTAIN")
+        self.reason_code = reason_code
+
+
+async def _local_inference(inbound: Request, backend: ModelBackend,
+                           request: EpisodeInferenceRequest) -> EpisodeInferenceReply:
+    """Keep the dispatch fence when a caller leaves; close only its model call.
+
+    The local backend owns a request-scoped socket and a finite total deadline.
+    We wait for that bounded worker to finish before releasing service capacity;
+    cancellation is not evidence that the model server performed no inference.
+    """
+    cancel = getattr(backend, "cancel", None)
+    worker = asyncio.create_task(run_in_threadpool(backend.infer, request))
+    disconnected = False
+    try:
+        while not worker.done():
+            await asyncio.wait({worker}, timeout=0.05)
+            if not disconnected and await inbound.is_disconnected():
+                disconnected = True
+                if callable(cancel):
+                    cancel(request.request_id)
+        try:
+            reply = worker.result()
+        except Exception:
+            if disconnected:
+                raise _ServiceInferenceFailure("EPISODE_CALLER_DISCONNECTED") from None
+            raise
+        if disconnected or await inbound.is_disconnected():
+            raise _ServiceInferenceFailure("EPISODE_CALLER_DISCONNECTED")
+        return reply
+    except asyncio.CancelledError:
+        if callable(cancel):
+            cancel(request.request_id)
+        try:
+            await asyncio.shield(worker)
+        except Exception:
+            pass
+        raise
 
 
 class DurableServiceFence:
@@ -142,24 +187,37 @@ def create_episode_service(*, model: str, authenticator: EpisodeDispatchAuthenti
             if (request.model != model or not request.issued_at <= now < request.deadline
                     or (request.deadline - request.issued_at).total_seconds() > 120):
                 raise ValueError("route or deadline denied")
-        except Exception:
-            return Response(status_code=403, headers=headers)
+            profile = descriptor.local_timing if isinstance(descriptor, EpisodeBackendCapabilities) else None
+            if profile is not None and (
+                (request.deadline - request.issued_at).total_seconds() != profile.request_timeout_seconds
+                or now >= request.issued_at + timedelta(seconds=profile.provider_timeout_seconds)
+            ):
+                raise _ServiceInferenceFailure("EPISODE_INFERENCE_LIFETIME_INSUFFICIENT")
+        except Exception as exc:
+            return Response(status_code=403, headers={
+                **headers, "X-SAFE-Inference-Reason": inference_failure_reason(exc),
+            })
         if not capacity.acquire(blocking=False):
             return Response(status_code=429, headers=headers)
         try:
             if not fence.claim(request):
                 return Response(status_code=409, headers=headers)
-            reply = await run_in_threadpool(backend.infer, request)
+            reply = (await _local_inference(inbound, backend, request) if profile is not None
+                     else await run_in_threadpool(backend.infer, request))
+            if clock() >= request.deadline:
+                raise _ServiceInferenceFailure("EPISODE_INFERENCE_REPLY_LATE")
             if (reply.request_id != request.request_id or reply.input_hash != request.digest
-                    or reply.model != model or clock() >= request.deadline
+                    or reply.model != model
                     or len(reply.model_dump_json().encode()) > 131_072):
-                raise ValueError("invalid provider result")
+                raise _ServiceInferenceFailure("EPISODE_MODEL_REPLY_INVALID")
             fence.finish(request, reply)
             return Response(content=reply.model_dump_json(), media_type="application/json",
                             headers=headers)
-        except Exception:
+        except Exception as exc:
             # No error body/log contains raw provider errors, prompts, or keys.
-            return Response(status_code=503, headers=headers)
+            return Response(status_code=503, headers={
+                **headers, "X-SAFE-Inference-Reason": inference_failure_reason(exc),
+            })
         finally:
             capacity.release()
 
@@ -171,6 +229,8 @@ def backend_from_environment(*, model: str, dispatch_key: SecretStr) -> ModelBac
     route = EpisodeBackendRoute.model_validate({
         "kind": os.environ.get("SAFE_EPISODE_BACKEND", "hosted_openai"),
         "local_api_base": os.environ.get("SAFE_EPISODE_LOCAL_BASE_URL"),
+        "local_timing": (strict_json(os.environ["SAFE_EPISODE_LOCAL_TIMING_JSON"], max_bytes=8192)
+                         if "SAFE_EPISODE_LOCAL_TIMING_JSON" in os.environ else None),
     })
     if route.kind == "local_openai":
         from safe_agent.inference_service.providers.local_openai_episode import (
@@ -178,7 +238,8 @@ def backend_from_environment(*, model: str, dispatch_key: SecretStr) -> ModelBac
         )
 
         assert route.local_api_base is not None
-        return LocalOpenAIEpisodeBackend(model=model, base_url=route.local_api_base)
+        return LocalOpenAIEpisodeBackend(model=model, base_url=route.local_api_base,
+                                         local_timing=route.local_timing)
     from safe_agent.inference_service.providers.openai_episode import OpenAIEpisodeBackend
 
     provider_key = _secret_from_file(Path(os.environ["SAFE_EPISODE_OPENAI_KEY_FILE"]))
