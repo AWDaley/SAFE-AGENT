@@ -19,6 +19,7 @@ from uuid import uuid4
 
 from safe_agent.benchmarks.tau3.config import BenchmarkConfig, load_config
 from safe_agent.benchmarks.tau3.local_harness import harness_transport
+from safe_agent.benchmarks.tau3.local_observation import LocalLlamaObserver
 from safe_agent.benchmarks.tau3.preflight import PreflightError, preflight_run
 from safe_agent.benchmarks.tau3.protocol import RuntimeContext
 from safe_agent.benchmarks.tau3.qualification import (
@@ -82,18 +83,26 @@ PACKS: dict[str, tuple[Case, ...]] = {
     "customer-interface": tuple(Case(case, case) for case in (
         "preference", "customer_request", "withhold_consent", "native_tool",
     )),
+    "customer-native": (Case("native_tool", "native_tool"),),
+    "agent-latency": (Case("remember_fees", "retained_preference", prohibits_read=True),),
 }
+USER_PACKS = frozenset({"customer-interface", "customer-native"})
 
 
 def run(config: BenchmarkConfig, output: Path, tau_root: Path, pack: str,
-        max_seconds: float) -> dict[str, Any]:
+        max_seconds: float, *, observe_local_llama: bool = False) -> dict[str, Any]:
     timing = _require_scope(config, reason="DIAGNOSTICS_REQUIRE_EXPLICIT_LOCAL_SAFE_PROFILE")
     budgets = _qualification_budgets(config, max_seconds)
     cases = PACKS[pack]
-    role = "user" if pack == "customer-interface" else "agent"
+    role = "user" if pack in USER_PACKS else "agent"
     budgets["run_budget"]["max_model_calls"] = min(
         budgets["run_budget"]["max_model_calls"], 4 * len(cases),
     )
+    if pack == "agent-latency":
+        budgets["episode_budget"]["max_model_calls"] = min(
+            budgets["episode_budget"]["max_model_calls"], 1,
+        )
+        budgets["run_budget"]["max_model_calls"] = min(budgets["run_budget"]["max_model_calls"], 1)
     output = output.absolute()
     if output.exists() or any(path.is_symlink() for path in (output, *output.parents)):
         raise QualificationError("DIAGNOSTIC_OUTPUT_MUST_BE_NEW")
@@ -125,8 +134,21 @@ def run(config: BenchmarkConfig, output: Path, tau_root: Path, pack: str,
     }
     _new_json(output / "report.json", report)
     runtime = None
+    observer = None
+    observer_started = False
     started = time.monotonic()
     try:
+        if observe_local_llama:
+            try:
+                assert config.local_api_base is not None
+                observer = LocalLlamaObserver(config.local_api_base, output / "local-slots.jsonl")
+                observer.__enter__()
+                observer_started = True
+            except Exception:
+                report["local_observation"] = {
+                    "status": "unavailable", "error_code": "LOCAL_OBSERVATION_START_FAILED",
+                    "diagnostic_only": True, "eligible_for_qualification": False,
+                }
         if role == "agent":
             runtime = runtime_factory(RuntimeContext(
                 run_id="diagnostic_" + uuid4().hex, domain=config.domain, model=config.llm_agent,
@@ -176,7 +198,7 @@ def run(config: BenchmarkConfig, output: Path, tau_root: Path, pack: str,
                 _write_json(output / "report.json", report)
                 print(json.dumps({"event": "case_finished", "case": case.name,
                                   "issues": result["issues"],
-                                  "tool_calls": result.get("tool_calls", []),
+                                  "tool_calls": result.get("tool_calls"),
                                   "requests": len(result["requests"])}), flush=True)
                 if "DIAGNOSTIC_INFERENCE_INCOMPLETE" in result["issues"]:
                     report["stop_reason"] = "DIAGNOSTIC_INFERENCE_INCOMPLETE"
@@ -194,6 +216,16 @@ def run(config: BenchmarkConfig, output: Path, tau_root: Path, pack: str,
         )
         report["exception_type"] = type(exc).__name__
     finally:
+        if observer is not None:
+            try:
+                observer.__exit__(None, None, None)
+                if observer_started:
+                    report["local_observation"] = observer.summary()
+            except Exception:
+                report.setdefault("local_observation", {
+                    "status": "unavailable", "error_code": "LOCAL_OBSERVATION_CLOSE_FAILED",
+                    "diagnostic_only": True, "eligible_for_qualification": False,
+                })
         report["status"] = "completed" if (
             len(report["probes"]) == len(cases) and "stop_reason" not in report
         ) else "stopped"
@@ -223,14 +255,17 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--pack", choices=tuple(PACKS), required=True)
     parser.add_argument("--max-seconds", type=float, default=1800.0)
+    parser.add_argument("--observe-local-llama", action="store_true",
+                        help="Record bounded read-only llama.cpp slot counters; never qualification evidence.")
     args = parser.parse_args()
     result = run(load_config(args.config), args.output_dir, args.tau_root,
-                 args.pack, args.max_seconds)
+                 args.pack, args.max_seconds, observe_local_llama=args.observe_local_llama)
     print(json.dumps({key: result[key] for key in (
         "kind", "pack", "status", "recorded_cases", "not_run_cases", "model_requests",
         "elapsed_seconds", "eligible_for_qualification", "capability_score",
         "started_without_recorded_result", "request_accounting_complete", "recorded_model_requests",
         "stop_reason", "exception_type",
+        "local_observation",
     ) if key in result}, sort_keys=True))
     return 0 if result["status"] == "completed" else 2
 

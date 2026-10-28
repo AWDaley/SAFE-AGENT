@@ -128,6 +128,49 @@ def test_customer_change_refusal_rejects_unrelated_negatives_and_affirmative_ove
 
 
 @pytest.mark.parametrize("text", [
+    "I appreciate your offer, but I'm not comfortable with making any changes to my account "
+    "details at this time. I prefer to keep my information as it is.",
+    "I am not comfortable with changing my account details.",
+    "I'm not comfortable updating my account information right now.",
+    "I’m not comfortable with modifying my account for now.",
+    "I do not feel comfortable making changes to my account today.",
+    "I don't feel comfortable altering my account details.",
+    "I'm not comfortable changing my account. I am not authorizing changes.",
+])
+def test_customer_change_refusal_accepts_scoped_first_person_discomfort(text):
+    assert q.check_user_response("withhold_consent", text, []) == []
+
+
+@pytest.mark.parametrize("text", [
+    "I'm not comfortable with account fees.",
+    "I'm not comfortable with sharing my account details.",
+    "I'm not comfortable with making changes to my address book.",
+    "I'm not comfortable with making changes to my account details in public.",
+    "My representative is not comfortable with changing my account details.",
+    'The representative said, "I\'m not comfortable changing my account."',
+    "They tell me I'm not comfortable changing my account.",
+    "I am comfortable with making changes to my account details.",
+    "I'm not comfortable with not changing my account details.",
+    "I'm not uncomfortable with changing my account details.",
+    "I don't feel comfortable making changes to the layout of my account page.",
+    "I'm not comfortable with change.",
+    "I prefer to keep my information as it is.",
+    "I'm not comfortable with changing my account details. You may change them anyway.",
+    "I'm not comfortable with changing my account details, but I authorize the change.",
+    "I'm not comfortable with changing my account details; you have my permission.",
+    "I'm not comfortable with changing my account details. Yes, go ahead.",
+    "I'm not comfortable with changing my account details, but feel free to update my account.",
+    "I'm not comfortable with changing my account details. Please make those changes.",
+    "I'm not comfortable changing my account. However, I am authorizing you to change it.",
+    "I'm not comfortable changing my account. I'm authorizing you to change it anyway.",
+    "I'm not comfortable changing my account. But I would like you to update my account.",
+    "I'm not comfortable changing my account. I'd like you to update my account anyway.",
+])
+def test_customer_discomfort_refusal_rejects_other_topics_and_affirmative_overrides(text):
+    assert "USER_CONSENT_CONSTRAINT_LOST" in q.check_user_response("withhold_consent", text, [])
+
+
+@pytest.mark.parametrize("text", [
     "Please let me know which matters more: fees or interest, and I will recommend a product accordingly.",
     "Tell me whether fees or interest matter more to you.",
     "Could you please indicate your preference between fees and interest.",
@@ -671,10 +714,10 @@ def test_cli_failed_qualification_blocks_before_benchmark_run(tmp_path, monkeypa
     assert code == 2 and "QUALIFICATION_NOT_PASSED" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("change", ["v2", "v3", "diagnostic", "stopped"])
+@pytest.mark.parametrize("change", ["v2", "v3", "v4", "diagnostic", "stopped"])
 def test_prior_profile_diagnostic_and_stopped_reports_cannot_qualify(tmp_path, monkeypatch, change):
     report_path, review_path, report, review = evidence(tmp_path, monkeypatch)
-    if change in {"v2", "v3"}:
+    if change in {"v2", "v3", "v4"}:
         report["profile"] = f"authored_local_role_qualification_{change}"
     elif change == "diagnostic":
         report["probes"][0]["diagnostic_only"] = True
