@@ -347,6 +347,7 @@ def test_failed_probe_stops_before_next_model_call_and_keeps_missing_schedule(tm
 
 
 def test_agent_probe_applies_exact_retrieval_condition_and_binds_trace(tmp_path, monkeypatch):
+    pytest.importorskip("tau2", reason="Pinned benchmark dependency is optional in office CI")
     from tau2.data_model.message import AssistantMessage
     from tau2.domains.banking_knowledge import environment
     from tau2.orchestrator import orchestrator
@@ -382,6 +383,7 @@ def test_agent_probe_applies_exact_retrieval_condition_and_binds_trace(tmp_path,
 
 
 def test_user_probe_applies_declared_seed_and_exact_local_route_without_model_calls(tmp_path, monkeypatch):
+    pytest.importorskip("tau2", reason="Pinned benchmark dependency is optional in office CI")
     from tau2.user import user_simulator
 
     observed = {}

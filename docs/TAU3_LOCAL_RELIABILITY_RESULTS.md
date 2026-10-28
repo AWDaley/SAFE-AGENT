@@ -70,6 +70,15 @@ same initial run passed all eight real benchmark PostgreSQL cases and the actual
 container isolation probe; the latter recorded six denied read attempts and zero
 provider calls or dispatches. Final-head results are recorded on the PR.
 
+Once typing passed, the general and coordinated-runtime suites exposed three
+new tests that assumed the optional `tau2` or `openai` packages were installed in
+the office profile. Those cases now use the existing per-test optional-dependency
+guard pattern. The independent local-route and dependency-free cases still run
+in the office profile. All three guarded cases remain mandatory in benchmark CI,
+whose complete 747-test fixture suite still requires zero skips. These corrections
+change test selection for the declared dependency profiles, without changing
+runtime behavior or installing benchmark dependencies into office environments.
+
 ## Real local qualification
 
 Both attempts used the already downloaded Qwen2.5-3B-Instruct Q4_K_M file,

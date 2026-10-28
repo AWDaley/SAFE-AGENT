@@ -43,7 +43,7 @@ def request():
 def test_real_backend_request_anchors_agent_role_and_keeps_observations_as_data(monkeypatch, route):
     sent = []
     if route == "hosted":
-        import openai
+        openai = pytest.importorskip("openai", reason="Model SDK is part of the separate tau3 profile")
 
         def create(**kwargs):
             sent.append(kwargs)
