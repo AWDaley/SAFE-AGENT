@@ -38,6 +38,7 @@
   "safe_agent/inference_service/episode_service.py",
   "safe_agent/inference_service/providers/__init__.py",
   "safe_agent/inference_service/providers/local_openai_episode.py",
+  "safe_agent/inference_service/providers/native_episode.py",
   "safe_agent/inference_service/providers/openai_episode.py",
   "safe_agent/inference_service/service.py",
   "safe_agent/inference_service/socket_lifecycle.py",

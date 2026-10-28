@@ -86,6 +86,7 @@ def authored_launch(tmp_path, monkeypatch):
     ("altered_trace", "QUALIFICATION_TRACE_INVALID"),
     ("rejected_review", "QUALIFICATION_REVIEW_INVALID"),
     ("model_mismatch", "QUALIFICATION_CONDITION_MISMATCH"),
+    ("proposal_format_mismatch", "QUALIFICATION_CONDITION_MISMATCH"),
     ("source_mismatch", "QUALIFICATION_CONDITION_MISMATCH"),
     ("legacy_timing", "QUALIFICATION_CONDITION_MISMATCH"),
     ("legacy_profile", "QUALIFICATION_CONDITION_MISMATCH"),
@@ -116,6 +117,8 @@ def test_invalid_evidence_blocks_both_entrypoints_before_any_preparation(
         review["approved"] = False
     elif case == "model_mismatch":
         config = config.model_copy(update={"llm_agent": "different-authored-model"})
+    elif case == "proposal_format_mismatch":
+        config = config.model_copy(update={"agent_proposal_format": "native_tools_v1"})
     elif case == "source_mismatch":
         monkeypatch.setattr(runner, "_repository_revision", lambda: {
             "runtime_sources_sha256": "sha256:" + "b" * 64,

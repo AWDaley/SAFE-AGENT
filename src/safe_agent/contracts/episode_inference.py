@@ -88,6 +88,7 @@ class MessageCandidate(StrictModel):
 
 EpisodeCandidate: TypeAlias = Annotated[ToolCandidate | MessageCandidate, Field(discriminator="kind")]
 CANDIDATE_ADAPTER: TypeAdapter[EpisodeCandidate] = TypeAdapter(EpisodeCandidate)
+EpisodeProposalFormat: TypeAlias = Literal["candidate_json_v1", "native_tools_v1"]
 
 
 def parse_candidate(raw: str) -> EpisodeCandidate:
@@ -151,6 +152,9 @@ class EpisodeBackendRoute(StrictModel):
     kind: Literal["hosted_openai", "local_openai"] = "hosted_openai"
     local_api_base: str | None = None
     local_timing: LocalTimingProfile | None = Field(default=None, exclude_if=lambda value: value is None)
+    proposal_format: EpisodeProposalFormat = Field(
+        default="candidate_json_v1", exclude_if=lambda value: value == "candidate_json_v1",
+    )
 
     @model_validator(mode="after")
     def coherent_route(self) -> "EpisodeBackendRoute":
@@ -158,7 +162,8 @@ class EpisodeBackendRoute(StrictModel):
             if self.local_api_base is None:
                 raise ValueError("LOCAL_MODEL_API_BASE_REQUIRED")
             validate_local_api_base(self.local_api_base)
-        elif self.local_api_base is not None or self.local_timing is not None:
+        elif (self.local_api_base is not None or self.local_timing is not None
+              or self.proposal_format != "candidate_json_v1"):
             raise ValueError("HOSTED_MODEL_LOCAL_API_BASE_DENIED")
         return self
 
@@ -208,14 +213,14 @@ class EpisodeInferenceReply(StrictModel):
 class EpisodeBackendCapabilities(StrictModel):
     """Public, immutable configuration; never provider access or quota proof."""
 
-    profile: Literal["openai_chat_v1", "local_openai_chat_v1", "scripted_fixture_v1"]
+    profile: Literal["openai_chat_v1", "local_openai_chat_v1", "local_openai_tools_v1", "scripted_fixture_v1"]
     model: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
     provider_origin: str | None
     timeout_seconds: float = Field(gt=0.0, le=120.0)
     provider_retries: Literal[0] = 0
     follow_redirects: Literal[False] = False
     trust_env: Literal[False] = False
-    response_format: Literal["json_object", "scripted_fixture"]
+    response_format: Literal["json_object", "native_tools", "scripted_fixture"]
     candidate_schema_hash: Digest
     system_instruction_hash: Digest
     local_timing: LocalTimingProfile | None = Field(default=None, exclude_if=lambda value: value is None)
@@ -223,7 +228,7 @@ class EpisodeBackendCapabilities(StrictModel):
     @model_validator(mode="after")
     def coherent_profile(self) -> "EpisodeBackendCapabilities":
         if self.local_timing is not None and (
-            self.profile != "local_openai_chat_v1"
+            self.profile not in {"local_openai_chat_v1", "local_openai_tools_v1"}
             or self.timeout_seconds != self.local_timing.provider_timeout_seconds
         ):
             raise ValueError("LOCAL_TIMING_CAPABILITY_MISMATCH")
@@ -231,8 +236,9 @@ class EpisodeBackendCapabilities(StrictModel):
             if (self.provider_origin != "https://api.openai.com/v1"
                     or self.response_format != "json_object"):
                 raise ValueError("invalid hosted capability profile")
-        elif self.profile == "local_openai_chat_v1":
-            if self.provider_origin is None or self.response_format != "json_object":
+        elif self.profile in {"local_openai_chat_v1", "local_openai_tools_v1"}:
+            expected_format = "native_tools" if self.profile == "local_openai_tools_v1" else "json_object"
+            if self.provider_origin is None or self.response_format != expected_format:
                 raise ValueError("invalid local capability profile")
             validate_local_api_base(self.provider_origin)
         elif self.provider_origin is not None or self.response_format != "scripted_fixture":

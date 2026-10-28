@@ -94,6 +94,7 @@ def register_safe_agent(
             run_budget=config.run_budget,
             output_dir=str(output_dir),
             local_timing=config.local_timing,
+            agent_proposal_format=config.agent_proposal_format,
         )
         return agent_class(
             tools=tools,

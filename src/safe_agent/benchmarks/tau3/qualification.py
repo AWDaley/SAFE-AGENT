@@ -353,6 +353,7 @@ def qualification_condition(config: BenchmarkConfig) -> dict[str, Any]:
         "tau_commit": config.tau_commit, "domain": config.domain,
         "system": config.system, "runtime_factory": config.runtime_factory, "stage": config.stage,
         "model_route": config.model_route, "local_api_base": config.local_api_base,
+        "agent_proposal_format": config.agent_proposal_format,
         "llm_agent": config.llm_agent, "llm_user": config.llm_user,
         "llm_args_agent": config.llm_args_agent, "llm_args_user": config.llm_args_user,
         "retrieval_config": config.retrieval_config,
@@ -688,6 +689,7 @@ def run_qualification(config: BenchmarkConfig, output_dir: Path, *, tau_root: Pa
             model_args=config.llm_args_agent, episode_budget=budgets["episode_budget"],
             run_budget=budgets["run_budget"],
             output_dir=str(output), local_timing=timing,
+            agent_proposal_format=config.agent_proposal_format,
         ))
         with harness_transport(config):
             for probe in schedule:

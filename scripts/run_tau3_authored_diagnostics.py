@@ -132,6 +132,7 @@ def run(config: BenchmarkConfig, output: Path, tau_root: Path, pack: str,
                 run_id="diagnostic_" + uuid4().hex, domain=config.domain, model=config.llm_agent,
                 model_args=config.llm_args_agent, episode_budget=budgets["episode_budget"],
                 run_budget=budgets["run_budget"], output_dir=str(output), local_timing=timing,
+                agent_proposal_format=config.agent_proposal_format,
             ))
         with harness_transport(config):
             for case in cases:

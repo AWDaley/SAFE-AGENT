@@ -259,7 +259,8 @@ def _probe_service(config: BenchmarkConfig) -> dict[str, Any]:
     authenticator = EpisodeDispatchAuthenticator(_secret_from_file(key_path))
     backend = (
         local_openai_backend_capabilities(model=config.llm_agent, base_url=config.local_api_base,
-                                          local_timing=config.local_timing)
+                                          local_timing=config.local_timing,
+                                          proposal_format=config.agent_proposal_format)
         if config.model_route == "local" and config.local_api_base is not None
         else openai_backend_capabilities(model=config.llm_agent)
     )

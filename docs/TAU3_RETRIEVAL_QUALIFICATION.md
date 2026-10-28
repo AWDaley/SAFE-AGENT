@@ -321,3 +321,10 @@ development subset is distinct from the complete domain. A larger repeated
 comparison, hosted full-domain evaluation, leaderboard submission, or production
 rollout requires its own declared protocol and authorization. Neither these
 repairs nor this document claim that those later stages have succeeded.
+
+## Native proposal condition
+
+The optional `native_tools_v1` local agent presentation is documented in
+[TAU3_NATIVE_PROPOSALS.md](TAU3_NATIVE_PROPOSALS.md). It has a distinct capability
+and qualification identity. All progression and semantic review requirements
+above still apply; the default candidate-JSON interface is unchanged.
