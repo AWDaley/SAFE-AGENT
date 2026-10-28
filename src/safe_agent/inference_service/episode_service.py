@@ -229,6 +229,7 @@ def backend_from_environment(*, model: str, dispatch_key: SecretStr) -> ModelBac
     route = EpisodeBackendRoute.model_validate({
         "kind": os.environ.get("SAFE_EPISODE_BACKEND", "hosted_openai"),
         "local_api_base": os.environ.get("SAFE_EPISODE_LOCAL_BASE_URL"),
+        "proposal_format": os.environ.get("SAFE_EPISODE_PROPOSAL_FORMAT", "candidate_json_v1"),
         "local_timing": (strict_json(os.environ["SAFE_EPISODE_LOCAL_TIMING_JSON"], max_bytes=8192)
                          if "SAFE_EPISODE_LOCAL_TIMING_JSON" in os.environ else None),
     })
@@ -239,7 +240,8 @@ def backend_from_environment(*, model: str, dispatch_key: SecretStr) -> ModelBac
 
         assert route.local_api_base is not None
         return LocalOpenAIEpisodeBackend(model=model, base_url=route.local_api_base,
-                                         local_timing=route.local_timing)
+                                         local_timing=route.local_timing,
+                                         proposal_format=route.proposal_format)
     from safe_agent.inference_service.providers.openai_episode import OpenAIEpisodeBackend
 
     provider_key = _secret_from_file(Path(os.environ["SAFE_EPISODE_OPENAI_KEY_FILE"]))

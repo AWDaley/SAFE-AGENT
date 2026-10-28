@@ -10,7 +10,7 @@ from typing import Any, Literal, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
-from safe_agent.contracts.episode_inference import LocalTimingProfile
+from safe_agent.contracts.episode_inference import EpisodeProposalFormat, LocalTimingProfile
 
 
 class BoundaryModel(BaseModel):
@@ -106,6 +106,9 @@ class RuntimeContext(BoundaryModel):
     episode_budget: dict[str, JsonValue] = Field(default_factory=dict)
     run_budget: dict[str, JsonValue] = Field(default_factory=dict)
     local_timing: LocalTimingProfile | None = Field(default=None, exclude_if=lambda value: value is None)
+    agent_proposal_format: EpisodeProposalFormat = Field(
+        default="candidate_json_v1", exclude_if=lambda value: value == "candidate_json_v1",
+    )
     output_dir: str
 
 

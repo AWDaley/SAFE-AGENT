@@ -154,7 +154,9 @@ class EpisodeRuntime:
                                    "episode_limits": self.limits.model_dump(),
                                    "run_limits": self.run_limits.model_dump(),
                                    **({"local_timing": context.local_timing.model_dump()}
-                                      if context.local_timing is not None else {})})
+                                      if context.local_timing is not None else {}),
+                                   **({"agent_proposal_format": context.agent_proposal_format}
+                                      if context.agent_proposal_format != "candidate_json_v1" else {})})
         now = clock()
         try:
             existing = self.episodes.get_run(self.run_id)

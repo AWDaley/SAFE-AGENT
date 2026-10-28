@@ -8,7 +8,11 @@ from typing import Literal, Self
 
 from pydantic import Field, JsonValue, model_validator
 
-from safe_agent.contracts.episode_inference import LocalTimingProfile, validate_local_api_base
+from safe_agent.contracts.episode_inference import (
+    EpisodeProposalFormat,
+    LocalTimingProfile,
+    validate_local_api_base,
+)
 
 from . import TAU_COMMIT
 from .protocol import BoundaryModel
@@ -44,6 +48,9 @@ class BenchmarkConfig(BoundaryModel):
     model_route: Literal["openai", "local"] = "openai"
     local_api_base: str | None = None
     local_timing: LocalTimingProfile | None = Field(default=None, exclude_if=lambda value: value is None)
+    agent_proposal_format: EpisodeProposalFormat = Field(
+        default="candidate_json_v1", exclude_if=lambda value: value == "candidate_json_v1",
+    )
     stop_after_infrastructure_errors: int | None = Field(
         default=None, gt=0, exclude_if=lambda value: value is None,
     )
@@ -84,6 +91,11 @@ class BenchmarkConfig(BoundaryModel):
                 raise ValueError("The local route currently supports development pilots only")
         elif self.local_api_base is not None or self.local_timing is not None:
             raise ValueError("The hosted route does not accept a local_api_base")
+        if self.agent_proposal_format != "candidate_json_v1" and (
+            self.model_route != "local" or self.system != "safe_agent"
+            or self.runtime_factory != CANONICAL_RUNTIME_FACTORY
+        ):
+            raise ValueError("NATIVE_PROPOSALS_REQUIRE_CANONICAL_LOCAL_SAFE_ROUTE")
         return self
 
 
