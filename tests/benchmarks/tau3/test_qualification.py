@@ -48,7 +48,8 @@ def test_schedule_covers_both_roles_and_context_growth_without_published_task_id
     ("retained_preference", "Your priority is lower monthly fees.", [], [], None),
     ("retained_preference", "Do you prefer fees or interest?", [], [], "SUPPLIED_PREFERENCE_NOT_USED"),
     ("grounding", "The bank requires a form.", [], [], "RETRIEVAL_EVIDENCE_MISSING"),
-    ("grounding", "The retrieved policy explains the requirements.", ["KB_search"], ["KB_search"], None),
+    ("grounding", "The retrieved policy explains the requirements.", ["KB_search"], ["KB_search"],
+     "RETRIEVAL_ANSWER_NOT_GROUNDED"),
 ])
 def test_authored_agent_checks_detect_observed_failure_classes(case, text, calls, successful, error):
     issues = q.check_agent_response(case, text, calls, successful)
@@ -91,10 +92,137 @@ def test_clarification_still_requires_a_relevant_request(text):
         "clarification", text, [], [])
 
 
+@pytest.mark.parametrize("text", [
+    "Your priority is lower monthly fees.",
+    "You prefer lower monthly fees over interest.",
+    "You told me that reducing monthly fees is your priority.",
+    "Lower monthly fees matter most to you, not interest.",
+    "Your priority is lower monthly fees. I will not ask you to repeat it.",
+    "You prioritize lower monthly fees. I do not need your account number to repeat that.",
+    "You don't prefer higher interest; your priority is lower monthly fees.",
+])
+def test_retained_preference_accepts_direct_restatement_without_unneeded_requests(text):
+    assert q.check_agent_response("retained_preference", text, [], []) == []
+
+
+@pytest.mark.parametrize(("text", "issue"), [
+    ("I understand your priority is lower monthly fees. Please repeat the priority you gave me "
+     "so I can confirm it and assist you further.", "SUPPLIED_PREFERENCE_REQUESTED_AGAIN"),
+    ("Your priority is lower monthly fees; kindly restate your preference.",
+     "SUPPLIED_PREFERENCE_REQUESTED_AGAIN"),
+    ("Lower monthly fees matter most. Tell me whether fees or interest matter more to you.",
+     "SUPPLIED_PREFERENCE_REQUESTED_AGAIN"),
+    ("Your priority is lower monthly fees. I need you to confirm that preference.",
+     "SUPPLIED_PREFERENCE_REQUESTED_AGAIN"),
+    ("Your priority is lower monthly fees. Please confirm that again.",
+     "SUPPLIED_PREFERENCE_REQUESTED_AGAIN"),
+    ("Your priority is lower monthly fees. Please provide your account number to proceed.",
+     "IRRELEVANT_ACCOUNT_DATA_REQUEST"),
+    ("You prefer lower monthly fees. To confirm, please share your customer ID.",
+     "IRRELEVANT_ACCOUNT_DATA_REQUEST"),
+    ("Your priority is lower monthly fees. Can you give me your account details?",
+     "IRRELEVANT_ACCOUNT_DATA_REQUEST"),
+    ("Your priority is higher interest, not lower monthly fees.", "SUPPLIED_PREFERENCE_CONTRADICTED"),
+    ("You prefer interest over lower monthly fees.", "SUPPLIED_PREFERENCE_CONTRADICTED"),
+    ("You do not prioritize lower monthly fees.", "SUPPLIED_PREFERENCE_CONTRADICTED"),
+    ("Lower monthly fees are not your priority.", "SUPPLIED_PREFERENCE_CONTRADICTED"),
+    ("You prioritize lower monthly fees, but interest is your top priority.",
+     "SUPPLIED_PREFERENCE_CONTRADICTED"),
+    ("Your priority is higher monthly fees.", "SUPPLIED_PREFERENCE_NOT_USED"),
+])
+def test_retained_preference_rejects_observed_false_passes_and_paraphrases(text, issue):
+    assert issue in q.check_agent_response("retained_preference", text, [], [])
+
+
+@pytest.mark.parametrize("text", [
+    "To be honest, I prefer not to have higher monthly fees. How about you?",
+    "Lower monthly fees matter most to me. And you?",
+    "I prefer lower monthly fees. What is your preference?",
+    "I prefer lower monthly fees. What matters more to you?",
+    "I prefer lower monthly fees. Do you prefer fees or interest?",
+])
+def test_customer_preference_does_not_solicit_the_representatives_personal_preference(text):
+    assert "USER_ASKED_REPRESENTATIVE_PREFERENCE" in q.check_user_response("preference", text, [])
+
+
+@pytest.mark.parametrize("text", [
+    "I prefer not to have higher monthly fees.",
+    "I prefer lower monthly fees. What do you recommend?",
+    "I prefer lower monthly fees, and you can explain the available options.",
+    "I do not prefer higher interest. I prefer lower monthly fees.",
+])
+def test_customer_preference_allows_customer_questions_and_normal_second_person_language(text):
+    assert q.check_user_response("preference", text, []) == []
+
+
+@pytest.mark.parametrize("text", [
+    "I prefer higher interest over lower fees.",
+    "I prefer high interest rather than lower monthly fees.",
+    "My priority is higher interest, not lower monthly fees.",
+    "I do not prefer lower monthly fees.",
+    "I prefer higher monthly fees.",
+])
+def test_customer_preference_rejects_reversed_and_contradictory_priorities(text):
+    assert "USER_PREFERENCE_CONTRADICTED" in q.check_user_response("preference", text, [])
+
+
+AUTHORED_POLICY = (
+    "1. Checking account closure\n   ID: authored_closure\n   Score: 0.8000\n   Content: "
+    "Before closing a checking account, verify identity and settle outstanding balances.\n"
+    "\n[Timing: retrieval=2ms, total=2ms]"
+)
+GROUNDED_ANSWER = (
+    "Before closing a checking account, the policy says to verify identity and settle outstanding balances."
+)
+
+
+def test_grounding_requires_executed_retrieval_with_content_used_in_the_answer():
+    assert q.check_agent_response(
+        "grounding", GROUNDED_ANSWER, ["KB_search"], ["KB_search"],
+        retrieval_results=[AUTHORED_POLICY],
+    ) == []
+    assert q.check_agent_response(
+        "grounding", GROUNDED_ANSWER, ["grep"], ["grep"],
+        retrieval_results=[json.dumps(AUTHORED_POLICY)],
+    ) == []
+    for calls, successful in [([], []), (["KB_search"], []), ([], ["KB_search"]),
+                              (["lookup_account"], ["lookup_account"])]:
+        assert "RETRIEVAL_EVIDENCE_MISSING" in q.check_agent_response(
+            "grounding", GROUNDED_ANSWER, calls, successful, retrieval_results=[AUTHORED_POLICY],
+        )
+
+
+@pytest.mark.parametrize("text", [
+    "The retrieved policy explains the requirements.",
+    "The retrieved policy covers checking-account closure. Which checking account would you like help with?",
+    "I will check identity and outstanding balances before closing your checking account.",
+    "Please wait while I verify identity and settle outstanding balances for closing a checking account.",
+    "Which checking account would you like to close after verifying identity and settling outstanding balances?",
+    "To close a checking account, visit a branch with your passport and pay a cash fee.",
+    "The checking account closure result has ID authored_closure and score 0.8000.",
+])
+def test_search_alone_generic_promises_and_unsupported_answers_do_not_pass_grounding(text):
+    assert "RETRIEVAL_ANSWER_NOT_GROUNDED" in q.check_agent_response(
+        "grounding", text, ["KB_search"], ["KB_search"], retrieval_results=[AUTHORED_POLICY],
+    )
+
+
+@pytest.mark.parametrize("result", ["", "   ", "[]", "{}", "null", "No relevant documents found.",
+                                   "No matches found for pattern: closing a checking account"])
+def test_empty_retrieval_is_not_policy_evidence_even_with_successful_execution(result):
+    issues = q.check_agent_response("grounding", GROUNDED_ANSWER, ["KB_search"], ["KB_search"],
+                                    retrieval_results=[result])
+    assert "RETRIEVAL_CONTENT_MISSING" in issues
+    assert "RETRIEVAL_ANSWER_NOT_GROUNDED" in issues
+
+
 def test_missing_and_uncertain_requests_never_become_a_pass_or_zero_score():
     schedule = q.probe_schedule()
     partial = q.summarize([record(schedule[0])], scheduled=24, deadline_seconds=90)
     assert partial["status"] == "failed" and partial["not_run_probes"] == 23
+    assert partial["recorded_checks_status"] == "passed" and partial["coverage_complete"] is False
+    initial = q.summarize([], scheduled=24, deadline_seconds=90)
+    assert initial["recorded_checks_status"] == "not_started"
     rows = [record(probe) for probe in schedule]
     rows[-1] = record(schedule[-1], passed=False, seconds=90.1, status="UNCERTAIN")
     summary = q.summarize(rows, scheduled=24, deadline_seconds=90)
@@ -335,6 +463,7 @@ def test_failed_probe_stops_before_next_model_call_and_keeps_missing_schedule(tm
     report = q.run_qualification(config(tmp_path), output, tau_root=tmp_path / "source", max_seconds=600)
     assert len(probes) == 1 and disposed == [True]
     assert report["status"] == "failed" and report["not_run_probes"] == 23
+    assert report["recorded_checks_status"] == "failed" and report["coverage_complete"] is False
     assert report["stop_reason"] == "QUALIFICATION_PROBE_FAILED"
     assert json.loads((output / "report.json").read_text()) == report
     assert output.stat().st_mode & 0o077 == 0
@@ -346,7 +475,47 @@ def test_failed_probe_stops_before_next_model_call_and_keeps_missing_schedule(tm
     assert report["effective_qualification_budgets_sha256"] == wire_digest(effective)
 
 
-def test_agent_probe_applies_exact_retrieval_condition_and_binds_trace(tmp_path, monkeypatch):
+@pytest.mark.parametrize("interrupt_after_last", [False, True])
+def test_progress_reports_stay_running_until_finalization(tmp_path, monkeypatch, interrupt_after_last):
+    from safe_agent.benchmarks.tau3 import local_harness, preflight, runner
+    from safe_agent.orchestration import episode_runtime
+
+    monkeypatch.setattr(preflight, "preflight_run", lambda *a, **k: {"ready_for_attempt": True})
+    monkeypatch.setattr(runner, "prepare_official_import", lambda _: None)
+    monkeypatch.setattr(q, "qualification_condition", lambda _: {"authored": True})
+    monkeypatch.setattr(local_harness, "harness_transport", lambda _: nullcontext())
+    monkeypatch.setattr(episode_runtime, "runtime_factory", lambda _: SimpleNamespace(
+        episodes=SimpleNamespace(engine=SimpleNamespace(dispose=lambda: None))))
+    monkeypatch.setattr(q, "_run_agent_probe", lambda probe, *a: record(probe))
+    monkeypatch.setattr(q, "_run_user_probe", lambda probe, *a: record(probe))
+    output = tmp_path / "qualification"
+    snapshots = []
+
+    def progress(event):
+        snapshot = json.loads((output / "report.json").read_text())
+        assert snapshot["status"] == "running"
+        assert "finished_at" not in snapshot
+        snapshots.append(snapshot)
+        if interrupt_after_last and snapshot["recorded_probes"] == 24:
+            raise KeyboardInterrupt
+
+    report = q.run_qualification(config(tmp_path), output, tau_root=tmp_path / "source",
+                                 max_seconds=600, progress=progress)
+    assert snapshots[0]["recorded_checks_status"] == "not_started"
+    assert snapshots[1]["recorded_checks_status"] == "passed"
+    assert snapshots[1]["not_run_probes"] == 23
+    assert report["recorded_checks_status"] == "passed" and report["coverage_complete"] is True
+    assert "finished_at" in report and json.loads((output / "report.json").read_text()) == report
+    if interrupt_after_last:
+        assert report["status"] == "failed"
+        assert report["stop_reason"] == "QUALIFICATION_INTERRUPTED"
+    else:
+        assert report["status"] == "automated_checks_passed"
+        assert "stop_reason" not in report
+
+
+@pytest.mark.parametrize("authored_input", [None, "Please ask whether fees or interest matter more."])
+def test_agent_probe_applies_exact_retrieval_condition_and_binds_trace(tmp_path, monkeypatch, authored_input):
     pytest.importorskip("tau2", reason="Pinned benchmark dependency is optional in office CI")
     from tau2.data_model.message import AssistantMessage
     from tau2.domains.banking_knowledge import environment
@@ -363,6 +532,8 @@ def test_agent_probe_applies_exact_retrieval_condition_and_binds_trace(tmp_path,
     class FixtureOrchestrator:
         def __init__(self, **kwargs):
             self.history = kwargs["task"].initial_state.message_history
+            if authored_input is not None:
+                assert self.history[-1].content == authored_input
 
         def run(self):
             return SimpleNamespace(messages=[*self.history, AssistantMessage(
@@ -375,11 +546,15 @@ def test_agent_probe_applies_exact_retrieval_condition_and_binds_trace(tmp_path,
     monkeypatch.setattr(adapter, "official_agent_class", lambda: lambda **kwargs: SimpleNamespace())
     monkeypatch.setattr(q, "_request_records", lambda *args: record(probe)["requests"])
     result = q._run_agent_probe(probe, config(tmp_path, retrieval_config_kwargs={"top_k": 2}),
-                                SimpleNamespace(), tmp_path)
+                                SimpleNamespace(), tmp_path, authored_input=authored_input)
     assert result["passed"] is True
     assert observed == [{"retrieval_variant": "bm25", "retrieval_kwargs": {"top_k": 2}}]
     raw = (tmp_path / (probe.probe_id + ".json")).read_bytes()
     assert result["trace_sha256"] == hashlib.sha256(raw).hexdigest()
+    assert result["diagnostic_only"] is (authored_input is not None)
+    if authored_input is not None:
+        assert json.loads(raw)["diagnostic_only"] is True
+        assert json.loads(raw)["authored_input"] == authored_input
 
 
 def test_user_probe_applies_declared_seed_and_exact_local_route_without_model_calls(tmp_path, monkeypatch):
@@ -430,10 +605,28 @@ def test_existing_output_and_hosted_route_are_rejected_before_preflight(tmp_path
 
 def test_cli_failed_qualification_blocks_before_benchmark_run(tmp_path, monkeypatch, capsys):
     from safe_agent.benchmarks.tau3 import __main__ as cli
+    from safe_agent.benchmarks.tau3 import runner
 
     monkeypatch.setattr(cli, "load_config", lambda _: config(tmp_path))
-    monkeypatch.setattr(cli, "run_official", lambda *a, **k: pytest.fail("Benchmark dispatched"))
+    monkeypatch.setattr(runner, "inspect_benchmark", lambda *a, **k: pytest.fail("Benchmark dispatched"))
     monkeypatch.setattr(q, "require_qualification", lambda *a: (_ for _ in ()).throw(
         q.QualificationError("QUALIFICATION_NOT_PASSED")))
-    code = cli.main(["run", "--config", "config.toml", "--qualification-report", "report.json"])
+    code = cli.main(["run", "--config", "config.toml", "--qualification-report", "report.json",
+                     "--qualification-review", "review.json"])
     assert code == 2 and "QUALIFICATION_NOT_PASSED" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("change", ["v2", "diagnostic", "stopped"])
+def test_prior_profile_diagnostic_and_stopped_reports_cannot_qualify(tmp_path, monkeypatch, change):
+    report_path, review_path, report, review = evidence(tmp_path, monkeypatch)
+    if change == "v2":
+        report["profile"] = "authored_local_role_qualification_v2"
+    elif change == "diagnostic":
+        report["probes"][0]["diagnostic_only"] = True
+    else:
+        report["stop_reason"] = "QUALIFICATION_INTERRUPTED"
+    report_path.write_text(json.dumps(report))
+    review["report_sha256"] = hashlib.sha256(report_path.read_bytes()).hexdigest()
+    review_path.write_text(json.dumps(review))
+    with pytest.raises(q.QualificationError):
+        q.require_qualification(config(tmp_path), report_path, review_path)

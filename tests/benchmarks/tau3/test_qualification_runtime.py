@@ -6,6 +6,7 @@ and the customer utterances are explicit fixtures; no judge is allowed to run.
 
 import hashlib
 import json
+import re
 import stat
 
 import pytest
@@ -131,7 +132,7 @@ def test_authored_clarification_uses_real_runtime_and_one_complete_request(
 
 def test_authored_kb_search_and_answer_trace_real_bm25_success_without_evaluation(runtime_fixture):
     config, private, create = runtime_fixture
-    answer = "The retrieved policy covers checking-account closure. Which checking account would you like help with?"
+    answers = []
 
     def propose(request):
         context = request.projected_context
@@ -151,6 +152,18 @@ def test_authored_kb_search_and_answer_trace_real_bm25_success_without_evaluatio
             if message["role"] == "tool" and message["tool_name"] == "KB_search"
         ]
         assert len(observed) == 1 and observed[0]["content"]
+        # Copy a substantive line from the actual read result, without a task-specific gold answer.
+        content = observed[0]["content"]
+        try:
+            content = json.loads(content)
+        except ValueError:
+            pass
+        assert isinstance(content, str)
+        rule = next(line.strip() for line in content.splitlines()
+                    if re.search(r"\b(?:must|ensure|verify|required|before|balance)\b", line, re.I)
+                    and len(re.findall(r"\b[a-zA-Z]+\b", line)) >= 7)
+        answer = "For closing a checking account, the retrieved policy states: " + rule
+        answers.append(answer)
         return json.dumps({"kind": "message", "purpose": "answer", "text": answer})
 
     runtime, transport = create(propose)
@@ -166,7 +179,52 @@ def test_authored_kb_search_and_answer_trace_real_bm25_success_without_evaluatio
         message["content"]
         for message in trace["messages"]
         if message["role"] == "assistant" and not message.get("tool_calls")
-    ] == [answer]
+    ] == answers
     durable = runtime.private.load(result["episode_id"]).data
     assert len(durable["successful_calls"]) == 1
     assert next(iter(durable["successful_calls"].values()))["tool_name"] == "KB_search"
+
+
+def test_search_promise_stops_on_first_normal_message_without_dispatching_next_candidate(runtime_fixture):
+    config, private, create = runtime_fixture
+    promise = (
+        "I understand the bank's policy requires checking the knowledge base for relevant information. "
+        "Let me search the knowledge base to find the current policy regarding closing a checking account. "
+        "Please be patient while I retrieve the information."
+    )
+    runtime, transport = create([
+        json.dumps({"kind": "message", "purpose": "user_instruction", "text": promise}),
+        json.dumps({"kind": "tool", "tool_name": "KB_search",
+                    "arguments": {"query": "closing a checking account"}}),
+    ])
+    result = _run_agent_probe(
+        Probe("agent_grounding_history0", "agent", "grounding", 0), config, runtime, private,
+    )
+    assert result["passed"] is False
+    assert "RETRIEVAL_EVIDENCE_MISSING" in result["issues"]
+    assert "RETRIEVAL_ANSWER_NOT_GROUNDED" in result["issues"]
+    assert len(transport.requests) == len(result["requests"]) == 1
+    assert result["requests"][0]["status"] == "COMPLETE"
+    assert result["tool_calls"] == result["successful_tools"] == []
+    trace = json.loads((private / (result["probe_id"] + ".json")).read_bytes())
+    assert [message["content"] for message in trace["messages"]
+            if message["role"] == "assistant"] == [promise]
+
+
+def test_real_retrieval_receipt_without_a_substantive_answer_does_not_qualify(runtime_fixture):
+    config, private, create = runtime_fixture
+    runtime, transport = create([
+        json.dumps({"kind": "tool", "tool_name": "KB_search",
+                    "arguments": {"query": "closing a checking account"}}),
+        json.dumps({"kind": "message", "purpose": "answer",
+                    "text": "The retrieved policy covers checking-account closure. "
+                            "Which checking account would you like help with?"}),
+    ])
+    result = _run_agent_probe(
+        Probe("agent_grounding_history0", "agent", "grounding", 0), config, runtime, private,
+    )
+    assert len(transport.requests) == len(result["requests"]) == 2
+    assert result["tool_calls"] == result["successful_tools"] == ["KB_search"]
+    assert result["passed"] is False
+    assert "RETRIEVAL_ANSWER_NOT_GROUNDED" in result["issues"]
+    assert "RETRIEVAL_EVIDENCE_MISSING" not in result["issues"]

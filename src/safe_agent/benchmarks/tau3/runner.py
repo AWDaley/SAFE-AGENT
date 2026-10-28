@@ -7,7 +7,6 @@ import importlib
 import importlib.metadata
 import json
 import os
-import re
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -180,30 +179,54 @@ def run_official(
     *,
     tau_root: Path | None = None,
     runtime_factory: RuntimeFactory | None = None,
+    qualification_report: Path | None = None,
+    qualification_review: Path | None = None,
     qualification_evidence: dict[str, Any] | None = None,
 ) -> Path:
     """Execute an explicit official run. This function may make billed model calls.
 
-    Inspection and manifest preparation happen before any agent is constructed.
+    Canonical local SAFE evaluation requires matching qualification files and a
+    separate attributed review. This boundary validates their contents before
+    inspection, preflight, output preparation, or construction of any agent.
+    Prevalidated hash dictionaries are not accepted as launch credentials.
     No retry, filtering, automatic review, or rejudging is added by this wrapper.
     The explicit development infrastructure-stop setting selects a SAFE serial
     schedule around the pinned per-task runner; the default batch path is unchanged.
     """
-    root = tau_root or (Path(config.tau_root) if config.tau_root else None)
+    from .qualification import QualificationError, require_qualification
+
     if qualification_evidence is not None:
-        expected_keys = {"report_sha256", "review_sha256", "condition_sha256", "review_is_independent_attestation"}
-        if (
-            set(qualification_evidence) != expected_keys
-            or any(not isinstance(qualification_evidence.get(name), str)
-                   or re.fullmatch(r"[0-9a-f]{64}", qualification_evidence[name]) is None
-                   for name in ("report_sha256", "review_sha256"))
-            or not isinstance(qualification_evidence.get("condition_sha256"), str)
-            or re.fullmatch(r"sha256:[0-9a-f]{64}", qualification_evidence["condition_sha256"]) is None
-            or qualification_evidence["review_is_independent_attestation"] is not False
-        ):
-            raise ValueError("QUALIFICATION_GATE_METADATA_INVALID")
+        # Retain the old keyword only to fail with a migration error. Even a
+        # correctly shaped digest dictionary says nothing about the underlying
+        # report, private traces, review, or requested runtime condition.
+        raise QualificationError("QUALIFICATION_EVIDENCE_PATHS_REQUIRED")
     if runtime_factory is not None and config.stage != "development":
         raise ValueError("Injected runtime factories are restricted to labelled development runs")
+    runtime_mode = (
+        "injected_development"
+        if runtime_factory is not None
+        else "custom_development"
+        if config.runtime_factory != CANONICAL_RUNTIME_FACTORY
+        else "canonical_safe"
+        if config.system == "safe_agent"
+        else "stock_baseline"
+    )
+    requires_qualification = config.model_route == "local" and runtime_mode == "canonical_safe"
+    validated_qualification: dict[str, Any] | None = None
+    if requires_qualification:
+        # Gate every canonical local SAFE launch, including legacy configs that
+        # omit timing. The qualifier rejects unsupported or unmatched conditions;
+        # dropping a config field must never turn the gate off.
+        if qualification_report is None:
+            raise QualificationError("QUALIFICATION_REPORT_REQUIRED")
+        validated_qualification = require_qualification(
+            config, qualification_report, qualification_review,
+        )
+    elif qualification_report is not None or qualification_review is not None:
+        # Fixture, stock, and hosted executions cannot borrow local SAFE evidence
+        # or be presented as a qualified local model evaluation.
+        raise QualificationError("QUALIFICATION_SCOPE_UNSUPPORTED")
+    root = tau_root or (Path(config.tau_root) if config.tau_root else None)
     inventory = inspect_benchmark(config, root)
     if inventory["status"] != "ready" or root is None:
         raise RuntimeError("Official run requires a complete, content-verified pinned τ checkout")
@@ -227,15 +250,6 @@ def run_official(
         raise FileExistsError("Run directory is not empty; choose a new run ID/output directory")
     output_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     output_dir.chmod(0o700)
-    runtime_mode = (
-        "injected_development"
-        if runtime_factory is not None
-        else "custom_development"
-        if config.runtime_factory != CANONICAL_RUNTIME_FACTORY
-        else "canonical_safe"
-        if config.system == "safe_agent"
-        else "stock_baseline"
-    )
     manifest: dict[str, Any] = {
         "schema_version": 1,
         "kind": "official_tau3_text",
@@ -246,6 +260,12 @@ def run_official(
         if runtime_mode in {"canonical_safe", "stock_baseline"}
         else runtime_mode,
         "runtime_mode": runtime_mode,
+        "launch_classification": (
+            "qualified_local_live" if validated_qualification is not None
+            else "development_fixture" if runtime_mode.endswith("_development")
+            else "stock_baseline" if runtime_mode == "stock_baseline"
+            else "unqualified_hosted_live"
+        ),
         "started_at": datetime.now(UTC).isoformat(),
         "status": "preparing",
         "config": config.model_dump(),
@@ -282,12 +302,12 @@ def run_official(
     episode_index = None
     previous_umask = os.umask(0o077)
     try:
-        if qualification_evidence is not None:
-            # CLI validation has already bound these digests to the requested
-            # condition. Persist the reviewed fixed metadata before constructing
-            # any official agent; no reviewer identity or review prose is copied.
-            manifest["qualification_gate"] = dict(qualification_evidence)
-            _write_json(output_dir / "qualification-gate.json", qualification_evidence)
+        if validated_qualification is not None:
+            # The shared runner has bound these digests to the requested condition.
+            # Persist fixed metadata before constructing any official agent; no
+            # reviewer identity, review prose, or private paths are copied.
+            manifest["qualification_gate"] = validated_qualification
+            _write_json(output_dir / "qualification-gate.json", validated_qualification)
         _write_json(manifest_path, manifest)
         prepare_official_import(root)
         from tau2.config import (  # type: ignore[import-untyped]

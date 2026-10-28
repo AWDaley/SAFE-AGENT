@@ -151,8 +151,8 @@ correct native tool arguments. Write a separate JSON record with:
 - `reviewer`: a nonempty attribution describing who performed the review
 - `reviewed_at`: an ISO-8601 timestamp with timezone, after report completion
 
-The review is an attributed assertion, not independent service attestation. To
-require it at launch, provide both files:
+The review is an attributed assertion, not independent service attestation.
+Every canonical local SAFE launch requires both files at the shared runner boundary:
 
 ```bash
 python -m safe_agent.benchmarks.tau3 run \
@@ -170,8 +170,12 @@ Changed conditions or trace files need a new qualification and review. This
 qualifies SAFE and the official customer interface; it does not certify a stock
 agent's distinct prompt or planning behavior. Verified
 hash metadata is saved in the initial run manifest before agent construction,
-so a stopped run retains its launch evidence. The flags are optional for legacy
-and fixture compatibility; the improvement execution protocol requires them.
+so a stopped run retains its launch evidence. Omitting either file, dropping the
+timing profile, or supplying a prevalidated hash dictionary cannot bypass the
+gate. Explicit development fixtures and legacy saved reports retain separate
+unqualified classifications. See [the retrieval qualification repairs and current
+execution protocol](TAU3_RETRIEVAL_QUALIFICATION.md) for the v3 checker, mandatory
+launch validation, diagnostic packs, and staged comparison.
 
 ## Staged execution and interpretation
 
