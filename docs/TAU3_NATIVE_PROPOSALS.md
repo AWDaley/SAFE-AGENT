@@ -125,3 +125,31 @@ rejection. They are authored fixtures and do not measure model quality.
 Live results and the exact tested serving conditions belong in the associated
 development evidence report. A passing code test suite alone never authorizes
 an official local launch.
+
+## Development observations on 2026-10-28
+
+The initial interface implementation at `b49daa6c1ae5387ddd9f704cebdee8df7f7ad014`
+was frozen before the following local diagnostics. The serving condition used
+CPU-only inference with an eight-CPU quota, 8 GiB of memory, a 32,768-token
+context, a 2,048-token output cap, seed 300, temperature zero, and no retries.
+The provider, transport and request deadlines remained 90, 105 and 115 seconds.
+No hosted inference or official benchmark task/evaluator ran.
+
+| Condition | Recorded observation | Consequence |
+| --- | --- | --- |
+| Qwen2.5-3B, legacy JSON discovery | The process stopped, but a workspace interruption removed its report and traces. Exact requests and reason are unknown. | Incomplete control evidence; no matched interface comparison. |
+| Qwen2.5-3B, native discovery | The first case timed out after 90.098 seconds without a usable reply; three cases were unrun. | No tool-selection verdict; customer and later stages blocked. |
+| Granite 4.0 Micro, official customer interface | Three text responses completed; the fourth native-tool request timed out after 90.544 seconds. | Agent discovery and later stages blocked. |
+
+Semantic review found that all three completed Granite replies met their narrow
+authored obligations. The v3 automatic checker had falsely rejected the polite
+refusal; the separate review preserves that raw result. This finding motivated
+qualification profile v4 and regression tests, not a retroactive qualification.
+Token usage for both timed-out requests remains unknown. The recorded
+continuation contains three completed and two uncertain requests, excluding the
+lost control whose request count is unknown.
+
+Neither condition qualified. Confirmation, the 24-probe qualification, and the
+official pilot remained unrun. These observations support work on latency and
+native tool completion under the fixed resource budget; they do not provide a
+capability score or establish that the new interface improves model quality.

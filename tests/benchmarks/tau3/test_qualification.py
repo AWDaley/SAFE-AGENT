@@ -73,6 +73,61 @@ def test_customer_checks_preserve_role_constraints_and_native_tool_arguments():
 
 
 @pytest.mark.parametrize("text", [
+    "I appreciate your offer, but I would prefer to stick with the public information available. "
+    "Could you please provide me with the details I need to make an informed decision?",
+    "I would prefer public information. Could you explain my options?",
+    "I'd rather stick to public information for now.",
+    "I only want public information.",
+    "No thanks. Please leave my account unchanged.",
+    "I decline your offer to change my account.",
+    "I decline.",
+    "I do not authorize.",
+    "I do not authorize any account changes.",
+    "I don't give you permission to change my account.",
+    "I am not authorizing changes to my account.",
+    "I do not consent to changes. I only want public information.",
+    "You do not have my permission to change it.",
+    "You may not change my account details.",
+    "Please don't go ahead and change my account.",
+])
+def test_customer_change_refusal_accepts_contextual_public_only_and_direct_refusal(text):
+    assert q.check_user_response("withhold_consent", text, []) == []
+
+
+@pytest.mark.parametrize("text", [
+    "I have not read the information yet.",
+    "I do not know the account number.",
+    "No fees are charged on my account.",
+    "I have no account details to share.",
+    "I'm not sure.",
+    "I don't prefer public information.",
+    "I do not want public information only.",
+    "I do not authorize advertising emails.",
+    "I do not approve the fee increase.",
+    "I decline advertising emails.",
+    "No worries, go ahead and change my account.",
+    "Not a problem, please proceed.",
+    "I prefer public information, but you may change it.",
+    "I only want public information, but I authorize you to change my account.",
+    "No account changes, please. You have my permission to change it.",
+    "I do not authorize deposits, but you may change my account details.",
+    "I do not mind if you update my account.",
+    "I prefer public information, but yes, you may change my details.",
+    "Not only information—please change my account.",
+    "I only want public information. Yes, please.",
+    "I decline. Go ahead and change it.",
+    "I prefer public information, but please update my account.",
+    "I prefer public information, but change my account.",
+    "I prefer public information—please change my account.",
+    "I prefer public information, but feel free to update my account.",
+    "I only want public information. You are allowed to change my account details.",
+    "I only want public information. Please make those changes.",
+])
+def test_customer_change_refusal_rejects_unrelated_negatives_and_affirmative_overrides(text):
+    assert "USER_CONSENT_CONSTRAINT_LOST" in q.check_user_response("withhold_consent", text, [])
+
+
+@pytest.mark.parametrize("text", [
     "Please let me know which matters more: fees or interest, and I will recommend a product accordingly.",
     "Tell me whether fees or interest matter more to you.",
     "Could you please indicate your preference between fees and interest.",
@@ -616,11 +671,11 @@ def test_cli_failed_qualification_blocks_before_benchmark_run(tmp_path, monkeypa
     assert code == 2 and "QUALIFICATION_NOT_PASSED" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("change", ["v2", "diagnostic", "stopped"])
+@pytest.mark.parametrize("change", ["v2", "v3", "diagnostic", "stopped"])
 def test_prior_profile_diagnostic_and_stopped_reports_cannot_qualify(tmp_path, monkeypatch, change):
     report_path, review_path, report, review = evidence(tmp_path, monkeypatch)
-    if change == "v2":
-        report["profile"] = "authored_local_role_qualification_v2"
+    if change in {"v2", "v3"}:
+        report["profile"] = f"authored_local_role_qualification_{change}"
     elif change == "diagnostic":
         report["probes"][0]["diagnostic_only"] = True
     else:
