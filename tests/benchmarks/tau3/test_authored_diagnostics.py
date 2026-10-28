@@ -68,7 +68,9 @@ def probe_result(probe, *, statuses=("COMPLETE",), issues=(), tools=()):
     }
 
 
-@pytest.mark.parametrize("pack", ["agent-discovery", "customer-interface"])
+@pytest.mark.parametrize("pack", [
+    "agent-discovery", "customer-interface", "customer-native", "agent-latency",
+])
 def test_last_case_uncertainty_remains_stopped_and_cli_returns_nonzero(
     diagnostic_script, tmp_path, monkeypatch, capsys, pack,
 ):
@@ -101,7 +103,7 @@ def test_last_case_uncertainty_remains_stopped_and_cli_returns_nonzero(
     summary = json.loads(capsys.readouterr().out.splitlines()[-1])
     assert summary["status"] == "stopped"
     assert summary["stop_reason"] == "DIAGNOSTIC_INFERENCE_INCOMPLETE"
-    assert disposed == ([True] if pack == "agent-discovery" else [])
+    assert disposed == ([True] if pack.startswith("agent-") else [])
 
 
 def test_zero_requests_stops_before_the_next_case(diagnostic_script, tmp_path, monkeypatch):
@@ -195,3 +197,115 @@ def test_required_knowledge_read_cannot_be_satisfied_by_an_unrelated_successful_
     assert ("DIAGNOSTIC_REQUIRED_READ_MISSING" in result["issues"]) is missing
     assert "passed" not in result
     assert report["eligible_for_qualification"] is False
+
+
+@pytest.mark.parametrize("status", ["COMPLETE", "UNCERTAIN"])
+@pytest.mark.parametrize("failure", [None, "start", "close"])
+def test_optional_slot_observation_cannot_change_probe_outcome_or_request_accounting(
+    diagnostic_script, tmp_path, monkeypatch, status, failure,
+):
+    module, disposed = diagnostic_script
+    events = []
+
+    class Observer:
+        def __init__(self, base, path):
+            assert base == "http://127.0.0.1:11434/v1"
+            assert path == tmp_path / "diagnostic" / "local-slots.jsonl"
+
+        def __enter__(self):
+            events.append("enter")
+            if failure == "start":
+                raise OSError("Authored private observation setup failure")
+            return self
+
+        def __exit__(self, *args):
+            events.append("exit")
+            if failure == "close":
+                raise OSError("Authored private observation cleanup failure")
+
+        def summary(self):
+            return {"status": "completed", "samples": 7, "diagnostic_only": True,
+                    "eligible_for_qualification": False, "model_requests": 0}
+
+    def user_probe(probe, *args):
+        assert probe.role == "user" and probe.case == "native_tool"
+        events.append("probe")
+        return probe_result(probe, statuses=(status,))
+
+    monkeypatch.setattr(module, "LocalLlamaObserver", Observer)
+    monkeypatch.setattr(module, "_run_user_probe", user_probe)
+    report = module.run(local_config(tmp_path), tmp_path / "diagnostic", tmp_path / "frozen",
+                        "customer-native", 600, observe_local_llama=True)
+    assert events == ["enter", "probe", "exit"]
+    assert disposed == []
+    assert report["model_requests"] == report["recorded_model_requests"] == 1
+    assert report["status"] == ("completed" if status == "COMPLETE" else "stopped")
+    assert report["probes"][0]["requests"][0]["status"] == status
+    assert report["eligible_for_qualification"] is False and report["capability_score"] is None
+    assert report["local_observation"]["eligible_for_qualification"] is False
+    if failure:
+        assert report["local_observation"]["error_code"] == (
+            "LOCAL_OBSERVATION_START_FAILED" if failure == "start"
+            else "LOCAL_OBSERVATION_CLOSE_FAILED"
+        )
+        assert "Authored private" not in json.dumps(report)
+    else:
+        assert report["local_observation"]["samples"] == 7
+    assert json.loads((tmp_path / "diagnostic/report.json").read_text()) == report
+
+
+def test_default_diagnostic_does_not_contact_slot_endpoint(diagnostic_script, tmp_path, monkeypatch):
+    module, _ = diagnostic_script
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Default diagnostics started slot observation")
+
+    monkeypatch.setattr(module, "LocalLlamaObserver", forbidden)
+    monkeypatch.setattr(module, "_run_user_probe", lambda probe, *args: probe_result(probe))
+    report = module.run(local_config(tmp_path), tmp_path / "diagnostic", tmp_path / "frozen",
+                        "customer-native", 600)
+    assert report["status"] == "completed" and "local_observation" not in report
+
+
+def test_agent_latency_pack_reserves_only_one_model_attempt(diagnostic_script, tmp_path, monkeypatch):
+    module, _ = diagnostic_script
+    observed = []
+    original_factory = module.runtime_factory
+
+    def factory(context):
+        observed.append(context)
+        return original_factory(context)
+
+    monkeypatch.setattr(module, "runtime_factory", factory)
+    monkeypatch.setattr(module, "_run_agent_probe", lambda probe, *args, **kwargs: probe_result(probe))
+    report = module.run(local_config(tmp_path), tmp_path / "diagnostic", tmp_path / "frozen",
+                        "agent-latency", 600)
+    assert len(observed) == 1
+    assert observed[0].episode_budget["max_model_calls"] == 1
+    assert observed[0].run_budget["max_model_calls"] == 1
+    assert report["effective_safe_budgets"]["episode_budget"]["max_model_calls"] == 1
+    assert report["effective_safe_budgets"]["run_budget"]["max_model_calls"] == 1
+    assert report["eligible_for_qualification"] is False
+
+
+@pytest.mark.parametrize("reported_calls", [None, [], ["qualification_add"]])
+def test_progress_does_not_turn_an_unreported_tool_summary_into_zero_calls(
+    diagnostic_script, tmp_path, monkeypatch, capsys, reported_calls,
+):
+    module, _ = diagnostic_script
+
+    def user_probe(probe, *args):
+        result = probe_result(probe)
+        if reported_calls is None:
+            result.pop("tool_calls")
+        else:
+            result["tool_calls"] = reported_calls
+        return result
+
+    monkeypatch.setattr(module, "_run_user_probe", user_probe)
+    report = module.run(local_config(tmp_path), tmp_path / "diagnostic", tmp_path / "frozen",
+                        "customer-native", 600)
+    progress = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    finished = next(row for row in progress if row["event"] == "case_finished")
+    assert finished["tool_calls"] == reported_calls
+    assert report["model_requests"] == 1 and report["status"] == "completed"

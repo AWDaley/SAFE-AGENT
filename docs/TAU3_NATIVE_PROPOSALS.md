@@ -126,6 +126,9 @@ Live results and the exact tested serving conditions belong in the associated
 development evidence report. A passing code test suite alone never authorizes
 an official local launch.
 
+For bounded phase observations and small authored latency cases, see
+[Local latency diagnostics](TAU3_LOCAL_LATENCY.md).
+
 ## Development observations on 2026-10-28
 
 The initial interface implementation at `b49daa6c1ae5387ddd9f704cebdee8df7f7ad014`
