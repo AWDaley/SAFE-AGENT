@@ -88,7 +88,7 @@ class MessageCandidate(StrictModel):
 
 EpisodeCandidate: TypeAlias = Annotated[ToolCandidate | MessageCandidate, Field(discriminator="kind")]
 CANDIDATE_ADAPTER: TypeAdapter[EpisodeCandidate] = TypeAdapter(EpisodeCandidate)
-EpisodeProposalFormat: TypeAlias = Literal["candidate_json_v1", "native_tools_v1"]
+EpisodeProposalFormat: TypeAlias = Literal["candidate_json_v1", "native_tools_v1", "native_tools_v2"]
 
 
 def parse_candidate(raw: str) -> EpisodeCandidate:
@@ -213,7 +213,7 @@ class EpisodeInferenceReply(StrictModel):
 class EpisodeBackendCapabilities(StrictModel):
     """Public, immutable configuration; never provider access or quota proof."""
 
-    profile: Literal["openai_chat_v1", "local_openai_chat_v1", "local_openai_tools_v1", "scripted_fixture_v1"]
+    profile: Literal["openai_chat_v1", "local_openai_chat_v1", "local_openai_tools_v1", "local_openai_tools_v2", "scripted_fixture_v1"]
     model: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
     provider_origin: str | None
     timeout_seconds: float = Field(gt=0.0, le=120.0)
@@ -223,12 +223,15 @@ class EpisodeBackendCapabilities(StrictModel):
     response_format: Literal["json_object", "native_tools", "scripted_fixture"]
     candidate_schema_hash: Digest
     system_instruction_hash: Digest
+    message_function_hash: Digest | None = Field(default=None, exclude_if=lambda value: value is None)
     local_timing: LocalTimingProfile | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def coherent_profile(self) -> "EpisodeBackendCapabilities":
+        if (self.profile == "local_openai_tools_v2") != (self.message_function_hash is not None):
+            raise ValueError("NATIVE_MESSAGE_FUNCTION_CAPABILITY_MISMATCH")
         if self.local_timing is not None and (
-            self.profile not in {"local_openai_chat_v1", "local_openai_tools_v1"}
+            self.profile not in {"local_openai_chat_v1", "local_openai_tools_v1", "local_openai_tools_v2"}
             or self.timeout_seconds != self.local_timing.provider_timeout_seconds
         ):
             raise ValueError("LOCAL_TIMING_CAPABILITY_MISMATCH")
@@ -236,8 +239,8 @@ class EpisodeBackendCapabilities(StrictModel):
             if (self.provider_origin != "https://api.openai.com/v1"
                     or self.response_format != "json_object"):
                 raise ValueError("invalid hosted capability profile")
-        elif self.profile in {"local_openai_chat_v1", "local_openai_tools_v1"}:
-            expected_format = "native_tools" if self.profile == "local_openai_tools_v1" else "json_object"
+        elif self.profile in {"local_openai_chat_v1", "local_openai_tools_v1", "local_openai_tools_v2"}:
+            expected_format = "json_object" if self.profile == "local_openai_chat_v1" else "native_tools"
             if self.provider_origin is None or self.response_format != expected_format:
                 raise ValueError("invalid local capability profile")
             validate_local_api_base(self.provider_origin)

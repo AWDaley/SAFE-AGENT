@@ -6,6 +6,7 @@ import copy
 import json
 from contextlib import contextmanager
 from datetime import timedelta
+from os.path import commonprefix
 
 import httpx
 import pytest
@@ -15,22 +16,31 @@ from safe_agent.contracts.episode_inference import (
     LocalTimingProfile,
     parse_candidate,
     wire_digest,
+    wire_json,
 )
+from safe_agent.inference_service.providers import native_episode
 from safe_agent.inference_service.providers.local_openai_episode import (
     LocalOpenAIEpisodeBackend,
     local_openai_backend_capabilities,
 )
 from safe_agent.inference_service.providers.native_episode import (
     MESSAGE_FUNCTION,
+    NATIVE_SYSTEM_INSTRUCTION,
     TOOL_METADATA_FIELD,
     native_episode_system_instructions,
     native_proposal_payload,
 )
+from safe_agent.inference_service.providers.openai_episode import episode_system_instructions
 from tests.episodes.test_episode_foundation import NOW
 from tests.episodes.test_episode_local_backend import BASE, MODEL, completion, request
 
 CANARY = "AUTHORED_LOW_TRUST_NATIVE_DATA_39018"
 REFERENCE = "[[safe:user_id:authored_reference]]"
+
+
+@pytest.fixture(params=["native_tools_v1", "native_tools_v2"])
+def proposal_format(request):
+    return request.param
 
 
 def context():
@@ -76,10 +86,10 @@ def native_completion(name="KB_search", arguments=None):
 
 
 @contextmanager
-def backend(monkeypatch, handler, **kwargs):
+def backend(monkeypatch, handler, *, proposal_format="native_tools_v1", **kwargs):
     monkeypatch.setattr(httpx, "HTTPTransport", lambda **_: httpx.MockTransport(handler))
     model = LocalOpenAIEpisodeBackend(model=MODEL, base_url=BASE,
-                                    proposal_format="native_tools_v1", **kwargs)
+                                    proposal_format=proposal_format, **kwargs)
     try:
         yield model
     finally:
@@ -101,7 +111,7 @@ def backend(monkeypatch, handler, **kwargs):
       "evidence_call_ids": [], "stop": True}),
 ])
 def test_native_function_translates_one_proposal_without_execution_or_authority(
-    monkeypatch, name, arguments, expected,
+    monkeypatch, name, arguments, expected, proposal_format,
 ):
     sent = []
 
@@ -111,14 +121,14 @@ def test_native_function_translates_one_proposal_without_execution_or_authority(
 
     original = context()
     req = request(projected_context=original)
-    with backend(monkeypatch, handler) as model:
+    with backend(monkeypatch, handler, proposal_format=proposal_format) as model:
         result = model.infer(req)
         assert parse_candidate(result.output_json).model_dump() == expected
         assert result.request_id == req.request_id and result.input_hash == req.digest
         assert (result.input_tokens, result.output_tokens, result.usage_source) == (12, 8, "provider_reported")
-        assert model.capabilities.profile == "local_openai_tools_v1"
+        assert model.capabilities.profile == proposal_format.replace("native_tools", "local_openai_tools")
         assert model.capabilities.response_format == "native_tools"
-        assert model.capabilities.system_instruction_hash == wire_digest(native_episode_system_instructions())
+        assert model.capabilities.system_instruction_hash == wire_digest(native_episode_system_instructions(proposal_format))
     assert len(sent) == 1 and sent[0].method == "POST"
     assert str(sent[0].url) == BASE + "/chat/completions"
     assert "authorization" not in sent[0].headers
@@ -132,10 +142,10 @@ def test_native_function_translates_one_proposal_without_execution_or_authority(
     assert req.projected_context == original
 
 
-def test_native_presentation_preserves_context_schema_effect_metadata_and_data_boundary():
+def test_native_presentation_preserves_context_schema_effect_metadata_and_data_boundary(proposal_format):
     original = context()
     before = copy.deepcopy(original)
-    payload = native_proposal_payload(original)
+    payload = native_proposal_payload(original, proposal_format=proposal_format)
     assert original == before
     assert [message["role"] for message in payload["messages"]] == ["system", "user"]
     system = payload["messages"][0]["content"]
@@ -170,7 +180,7 @@ def test_native_presentation_preserves_context_schema_effect_metadata_and_data_b
     "dot_name", "hyphen_name", "overlong_name", "missing_name", "bad_description",
     "bad_parameters", "nonobject_parameters", "metadata_collision", "too_many_tools",
 ])
-def test_invalid_native_tool_context_is_rejected_before_http(monkeypatch, case):
+def test_invalid_native_tool_context_is_rejected_before_http(monkeypatch, case, proposal_format):
     value = context()
     first = value["tool_schemas"][0]
     if case == "missing_schema_list":
@@ -197,7 +207,8 @@ def test_invalid_native_tool_context_is_rejected_before_http(monkeypatch, case):
         value[TOOL_METADATA_FIELD] = "Do not silently replace existing context."
     elif case == "too_many_tools":
         value["tool_schemas"] = [dict(first, name=f"authored_{n}") for n in range(128)]
-    with backend(monkeypatch, lambda _: pytest.fail("Invalid tool context reached HTTP")) as model:
+    with backend(monkeypatch, lambda _: pytest.fail("Invalid tool context reached HTTP"),
+                 proposal_format=proposal_format) as model:
         with pytest.raises(ValueError, match="NATIVE_TOOL_CONTEXT_INVALID"):
             model.infer(request(projected_context=value))
 
@@ -209,7 +220,7 @@ def test_invalid_native_tool_context_is_rejected_before_http(monkeypatch, case):
     "message_kind_override", "message_extra_authority", "ordinary_finish", "length_finish",
     "refusal", "nonassistant", "missing_usage", "invalid_usage", "multiple_choices",
 ])
-def test_invalid_native_response_is_uncertain_once_without_retry_or_json_fallback(monkeypatch, case):
+def test_invalid_native_response_is_uncertain_once_without_retry_or_json_fallback(monkeypatch, case, proposal_format):
     response = native_completion()
     choice = response["choices"][0]
     message = choice["message"]
@@ -267,7 +278,7 @@ def test_invalid_native_response_is_uncertain_once_without_retry_or_json_fallbac
         observed.append(inbound)
         return httpx.Response(200, json=response)
 
-    with backend(monkeypatch, handler) as model:
+    with backend(monkeypatch, handler, proposal_format=proposal_format) as model:
         with pytest.raises(ValueError, match="^LOCAL_MODEL_RESPONSE_UNCERTAIN$") as failure:
             model.infer(request(projected_context=context()))
     assert len(observed) == 1
@@ -275,9 +286,9 @@ def test_invalid_native_response_is_uncertain_once_without_retry_or_json_fallbac
     assert failure.value.__cause__ is None
 
 
-def test_native_profile_preserves_candidate_schema_and_is_distinct_from_legacy():
+def test_native_profile_preserves_candidate_schema_and_is_distinct_from_legacy(proposal_format):
     legacy = local_openai_backend_capabilities(model=MODEL, base_url=BASE)
-    native = local_openai_backend_capabilities(model=MODEL, base_url=BASE, proposal_format="native_tools_v1")
+    native = local_openai_backend_capabilities(model=MODEL, base_url=BASE, proposal_format=proposal_format)
     assert native.candidate_schema_hash == legacy.candidate_schema_hash == wire_digest(CANDIDATE_ADAPTER.json_schema())
     assert native.system_instruction_hash != legacy.system_instruction_hash
     assert native.profile != legacy.profile and native.response_format != legacy.response_format
@@ -285,17 +296,18 @@ def test_native_profile_preserves_candidate_schema_and_is_distinct_from_legacy()
     assert native.timeout_seconds == legacy.timeout_seconds == 60
 
 
-def test_native_route_respects_existing_absolute_deadline_before_http(monkeypatch):
+def test_native_route_respects_existing_absolute_deadline_before_http(monkeypatch, proposal_format):
     profile = LocalTimingProfile(provider_timeout_seconds=90, transport_timeout_seconds=105,
                                  request_timeout_seconds=115)
     with backend(monkeypatch, lambda _: pytest.fail("Expired native request reached HTTP"),
-                 local_timing=profile, clock=lambda: NOW + timedelta(seconds=91)) as model:
+                 proposal_format=proposal_format, local_timing=profile,
+                 clock=lambda: NOW + timedelta(seconds=91)) as model:
         with pytest.raises(ValueError, match="LOCAL_MODEL_RESPONSE_UNCERTAIN") as failure:
             model.infer(request(projected_context=context(), deadline=NOW + timedelta(seconds=115)))
     assert failure.value.reason_code == "EPISODE_INFERENCE_LIFETIME_INSUFFICIENT"
 
 
-def test_native_route_completes_through_the_explicit_deadline_transport(monkeypatch):
+def test_native_route_completes_through_the_explicit_deadline_transport(monkeypatch, proposal_format):
     from safe_agent.inference_service.providers import local_openai_episode
 
     profile = LocalTimingProfile(provider_timeout_seconds=90, transport_timeout_seconds=105,
@@ -313,7 +325,7 @@ def test_native_route_completes_through_the_explicit_deadline_transport(monkeypa
         return httpx.MockTransport(handler)
 
     monkeypatch.setattr(local_openai_episode, "DeadlineHTTPTransport", transport)
-    with backend(monkeypatch, handler, local_timing=profile,
+    with backend(monkeypatch, handler, proposal_format=proposal_format, local_timing=profile,
                  clock=lambda: NOW, monotonic=lambda: 100.0) as model:
         result = model.infer(request(projected_context=context(), deadline=NOW + timedelta(seconds=115)))
         assert parse_candidate(result.output_json).kind == "tool"
@@ -322,7 +334,7 @@ def test_native_route_completes_through_the_explicit_deadline_transport(monkeypa
     assert len(budgets) == len(sent) == 1
 
 
-def test_native_success_proposal_still_requires_a_real_host_receipt(tmp_path, monkeypatch):
+def test_native_success_proposal_still_requires_a_real_host_receipt(tmp_path, monkeypatch, proposal_format):
     from tests.episodes.test_episode_runtime_audit import customer, runtime_fixture, start
 
     feedback = []
@@ -341,7 +353,7 @@ def test_native_success_proposal_still_requires_a_real_host_receipt(tmp_path, mo
 
     monkeypatch.setattr(httpx, "HTTPTransport", lambda **_: httpx.MockTransport(handler))
     model = LocalOpenAIEpisodeBackend(model="fixture-model", base_url=BASE,
-                                    proposal_format="native_tools_v1")
+                                    proposal_format=proposal_format)
     runtime, transport, _, tools, engine = runtime_fixture(
         tmp_path, lambda req: model.infer(req).output_json,
     )
@@ -358,3 +370,122 @@ def test_native_success_proposal_still_requires_a_real_host_receipt(tmp_path, mo
     finally:
         model.close()
         engine.dispose()
+
+
+def test_v1_and_default_renderings_keep_the_published_bytes():
+    # Captured from unchanged PR50 head d91a9bf before implementing V2, using
+    # the pinned runtime. These checks protect the old experimental condition.
+    assert wire_digest(native_episode_system_instructions()) == (
+        "sha256:b7a88b5ae10b735ea5e1bb01dedd1c353f44700a941eca3fa5cedfe3ba151365"
+    )
+    assert wire_digest(native_proposal_payload(context())) == (
+        "sha256:ad8c32c45c01a0317e1a5efe1751b80d6890ce29de943c1a0c3badbf29c3a983"
+    )
+    assert native_proposal_payload(context()) == native_proposal_payload(
+        context(), proposal_format="native_tools_v1",
+    )
+    assert wire_digest(episode_system_instructions()) == (
+        "sha256:3ed6272b6cbaa37e5d910c1a13c132b95bfd6d5bd83d562377cf39bb82314ed5"
+    )
+    for selected, expected in (
+        ("native_tools_v1", "sha256:63a05a4d94e86e4a99971420f902bfcd7933ba9044d1c813a9203e5a493bddd7"),
+        ("candidate_json_v1", "sha256:e68151504afdf2d99f3637b58af333e5e4d0edc363be18abf7b14079f7115667"),
+    ):
+        capabilities = local_openai_backend_capabilities(model=MODEL, base_url=BASE, proposal_format=selected)
+        assert wire_digest(capabilities.model_dump(mode="json")) == expected
+
+
+def test_v2_capabilities_bind_complete_message_function_metadata_without_prompt_duplication(monkeypatch):
+    before = local_openai_backend_capabilities(model=MODEL, base_url=BASE, proposal_format="native_tools_v2")
+    original = native_episode.message_function
+
+    def different_description():
+        function = original()
+        function["function"]["description"] = "Authored different message function description."
+        return function
+
+    monkeypatch.setattr(native_episode, "message_function", different_description)
+    after = local_openai_backend_capabilities(model=MODEL, base_url=BASE, proposal_format="native_tools_v2")
+    assert before.message_function_hash != after.message_function_hash
+    assert before.model_dump(exclude={"message_function_hash"}) == after.model_dump(exclude={"message_function_hash"})
+    payload = native_proposal_payload(context(), proposal_format="native_tools_v2")
+    assert after.message_function_hash == wire_digest(payload["tools"][-1])
+    assert "Authored different message function description." not in payload["messages"][0]["content"]
+
+
+def test_v2_keeps_every_value_schema_and_low_trust_boundary_with_future_fields():
+    original = context()
+    original.update({
+        "domain": "authored_domain", "privacy_profile": "authored_privacy_v1",
+        "completion_profile": "authored_completion_v1",
+        "domain_policy": 'Policy café: retain literal \\n and "quoted" values. 東京',
+        "future_field": {"z": [None, False, {"β": "λ", "a": 7}], "a": 3.5},
+        "successful_calls": {"host_call_1": {"result_hash": wire_digest("result"),
+                                             "tool_name": "change_user_email"}},
+        "consent_binding": {"proposal_hash": wire_digest("exact action"),
+                            "customer": {"user_id": REFERENCE}},
+    })
+    original["tool_schemas"][0]["future_metadata"] = {"z": [None, "ø"], "a": True}
+    before = copy.deepcopy(original)
+    old = native_proposal_payload(original)
+    new = native_proposal_payload(original, proposal_format="native_tools_v2")
+    assert original == before
+    assert new["tools"] == old["tools"]
+    assert new["tool_choice"] == old["tool_choice"] == "required"
+    assert new["parallel_tool_calls"] == old["parallel_tool_calls"] is False
+    assert [message["role"] for message in new["messages"]] == ["system", "user"]
+    assert json.loads(new["messages"][1]["content"]) == json.loads(old["messages"][1]["content"])
+    rendered = json.loads(new["messages"][1]["content"])
+    assert list(rendered)[:5] == [
+        "domain", "domain_policy", "privacy_profile", "completion_profile", "native_tool_metadata",
+    ]
+    assert list(rendered)[5:] == sorted(list(rendered)[5:])
+    assert all(wire_json(value) in new["messages"][1]["content"] for value in rendered.values())
+    system = new["messages"][0]["content"]
+    assert system.startswith(NATIVE_SYSTEM_INSTRUCTION + "\nNative proposal protocol:\n")
+    assert CANARY not in system and REFERENCE not in system and "Policy café" not in system
+    protocol = json.loads(system.split("\nNative proposal protocol:\n", 1)[1])
+    assert protocol == {"profile": "native_tools_v2", "context_rendering": "stable_prefix_context_v2",
+                        "message_function": MESSAGE_FUNCTION, "tool_choice": "required",
+                        "parallel_tool_calls": False}
+    assert len(system.encode()) < len(old["messages"][0]["content"].encode())
+    # Returned objects cannot mutate the authenticated host projection.
+    new["tools"][0]["function"]["parameters"]["properties"]["query"]["minLength"] = 99
+    assert original == before
+
+
+def test_v2_order_is_deterministic_and_extends_only_the_reusable_prefix():
+    first = context() | {"domain": "authored", "privacy_profile": "privacy",
+                         "completion_profile": "completion", "future_field": {"z": 1, "a": 2}}
+    shuffled = dict(reversed(list(first.items())))
+    shuffled["future_field"] = {"a": 2, "z": 1}
+    before = native_proposal_payload(first, proposal_format="native_tools_v2")
+    assert before == native_proposal_payload(shuffled, proposal_format="native_tools_v2")
+    second = copy.deepcopy(first)
+    second["conversation"][0]["content"] = "A new customer turn with the same policy."
+    after = native_proposal_payload(second, proposal_format="native_tools_v2")
+    assert before["tools"] == after["tools"]
+    assert before["messages"][0] == after["messages"][0]
+    old_pair = [native_proposal_payload(value)["messages"][1]["content"] for value in (first, second)]
+    new_pair = [value["messages"][1]["content"] for value in (before, after)]
+    prefix = commonprefix(new_pair)
+    assert wire_json(first["domain_policy"]) in prefix
+    assert '"native_tool_metadata":' in prefix
+    assert len(prefix.encode()) > len(commonprefix(old_pair).encode())
+    # Ordering itself adds/removes no bytes. This is no cache-hit or speed claim.
+    assert [len(value.encode()) for value in new_pair] == [len(value.encode()) for value in old_pair]
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
+def test_native_renderers_reject_nonfinite_future_data(value, proposal_format):
+    with pytest.raises(ValueError):
+        native_proposal_payload(context() | {"future_field": {"nested": value}},
+                                proposal_format=proposal_format)
+
+
+@pytest.mark.parametrize("selected", ["candidate_json_v1", "native_tools_v3"])
+def test_native_renderer_does_not_silently_accept_another_format(selected):
+    with pytest.raises(ValueError, match="LOCAL_PROPOSAL_FORMAT_UNSUPPORTED"):
+        native_episode_system_instructions(selected)
+    with pytest.raises(ValueError, match="LOCAL_PROPOSAL_FORMAT_UNSUPPORTED"):
+        native_proposal_payload(context(), proposal_format=selected)

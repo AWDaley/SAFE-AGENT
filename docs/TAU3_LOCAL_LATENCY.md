@@ -133,9 +133,9 @@ Neither uncertain attempt was retried or reconciled from partial counters.
 | Condition | Recorded result | Interpretation |
 | --- | --- | --- |
 | Granite, F16 cache | Four customer requests completed; native proposal in 22.281 s. | The expected `qualification_add(a=2, b=3)` proposal was parsed; no tool was executed. The older native timeout did not recur. |
-| Qwen, F16 cache | One request uncertain after 90.113 s; 4,096 tokens processed in the last observed prompt batch, zero generated. | Cold prompt processing exceeds the deadline in this condition; no tool-selection verdict is possible. |
+| Qwen, F16 cache | One request uncertain after 90.113 s; 4,096 prompt tokens cumulatively processed at the last observation, zero generated. | Cold prompt processing exceeds the deadline in this condition; no tool-selection verdict is possible. |
 | Granite, Q8_0 K/V cache | Four customer requests completed; native proposal in 28.345 s. One clear refusal failed the finite v4 checker. | Cache memory fell, but timings did not improve consistently. Separate semantic review confirmed the refusal. |
-| Qwen, Q8_0 K/V cache | One request uncertain after 90.137 s; 2,048 tokens processed in the last observed prompt batch, zero generated. | The single memory mitigation did not resolve the prompt-processing timeout. |
+| Qwen, Q8_0 K/V cache | One request uncertain after 90.137 s; 2,048 prompt tokens cumulatively processed at the last observation, zero generated. | The single memory mitigation did not resolve the prompt-processing timeout. |
 
 The completed requests reported 3,502 input and 268 output tokens in total.
 Final provider usage for both uncertain requests remains unknown; partial slot
@@ -206,6 +206,11 @@ with the complete serving condition recorded explicitly.
 The [development evidence bundle](https://chatgpt.com/library?file_id=libfile_32e626206e6881918a2852f3cd30c3de&account_id=personal)
 contains the frozen plan, source/serving identities, raw reports and traces,
 phase/resource observations, independent audits and validation records.
+
+A separate continuation investigates a versioned presentation with less
+duplicate schema text and a longer stable prefix. See
+[Native proposal prefix experiment](TAU3_NATIVE_PREFIX.md). The ten-request
+campaign above remains closed; its uncertain attempts and reports are unchanged.
 
 Pinned implementation references:
 

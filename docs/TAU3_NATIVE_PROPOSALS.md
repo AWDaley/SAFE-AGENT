@@ -129,6 +129,11 @@ an official local launch.
 For bounded phase observations and small authored latency cases, see
 [Local latency diagnostics](TAU3_LOCAL_LATENCY.md).
 
+For the separate `native_tools_v2` experiment that removes the duplicated
+message-function manifest and places stable context first, see
+[Native proposal prefix experiment](TAU3_NATIVE_PREFIX.md). V1 remains available
+with its original rendering; v2 does not inherit v1 qualification.
+
 ## Development observations on 2026-10-28
 
 The initial interface implementation at `b49daa6c1ae5387ddd9f704cebdee8df7f7ad014`

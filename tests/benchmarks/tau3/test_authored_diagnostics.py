@@ -177,6 +177,56 @@ def test_custom_case_preserves_execution_failure_and_stops_after_completed_reque
     assert disposed == [True]
 
 
+def test_partial_failed_latency_probe_keeps_unnecessary_read_diagnostic(
+    diagnostic_script, tmp_path, monkeypatch,
+):
+    module, disposed = diagnostic_script
+
+    def partial_probe(probe, *args, **kwargs):
+        return probe_result(probe, tools=("KB_search",), issues=("AGENT_PROBE_EXECUTION_FAILED",)) | {
+            "trace_partial": True,
+        }
+
+    monkeypatch.setattr(module, "_run_agent_probe", partial_probe)
+    report = module.run(local_config(tmp_path), tmp_path / "diagnostic", tmp_path / "frozen",
+                        "agent-latency", 600)
+    result = report["probes"][0]
+    assert report["status"] == "stopped" and report["stop_reason"] == "DIAGNOSTIC_EXECUTION_FAILED"
+    assert report["model_requests"] == 1
+    assert result["requests"][0]["status"] == "COMPLETE"
+    assert result["tool_calls"] == result["successful_tools"] == ["KB_search"]
+    assert result["trace_partial"] is True and result["passed"] is False
+    assert result["issues"] == ["AGENT_PROBE_EXECUTION_FAILED", "DIAGNOSTIC_UNNECESSARY_READ"]
+    assert report["eligible_for_qualification"] is False and report["capability_score"] is None
+    assert disposed == [True]
+
+
+def test_unavailable_partial_tool_summary_remains_null_when_a_read_was_required(
+    diagnostic_script, tmp_path, monkeypatch,
+):
+    module, disposed = diagnostic_script
+    monkeypatch.setitem(module.PACKS, "agent-latency", (
+        module.Case("unknown_read", "grounding", requires_read=True),
+    ))
+
+    def unavailable_probe(probe, *args, **kwargs):
+        return probe_result(probe, issues=("AGENT_PROBE_EXECUTION_FAILED",)) | {
+            "tool_calls": None, "successful_tools": None, "trace_partial": True,
+            "trace_messages_available": False,
+        }
+
+    monkeypatch.setattr(module, "_run_agent_probe", unavailable_probe)
+    report = module.run(local_config(tmp_path), tmp_path / "diagnostic", tmp_path / "frozen",
+                        "agent-latency", 600)
+    assert report["status"] == "stopped" and report["stop_reason"] == "DIAGNOSTIC_EXECUTION_FAILED"
+    result = report["probes"][0]
+    assert result["tool_calls"] is result["successful_tools"] is None
+    assert result["trace_messages_available"] is False
+    assert result["issues"] == ["AGENT_PROBE_EXECUTION_FAILED", "DIAGNOSTIC_REQUIRED_READ_MISSING"]
+    assert report["model_requests"] == 1 and report["started_without_recorded_result"] == []
+    assert disposed == [True]
+
+
 @pytest.mark.parametrize(("tool", "missing"), [
     ("get_account_balance", True), ("KB_search", False),
     ("KB_search_bm25", False), ("grep", False),

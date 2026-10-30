@@ -14,6 +14,7 @@ from typing import Any
 
 from safe_agent.contracts.episode_inference import (
     CANDIDATE_ADAPTER,
+    EpisodeProposalFormat,
     MessageCandidate,
     strict_json,
     wire_json,
@@ -23,6 +24,9 @@ NATIVE_PROPOSAL_PROFILE = "native_tools_v1"
 MESSAGE_FUNCTION = "safe_agent_message"
 TOOL_METADATA_FIELD = "native_tool_metadata"
 NATIVE_FUNCTION_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}\Z")
+_STABLE_CONTEXT_FIELDS = (
+    "domain", "domain_policy", "privacy_profile", "completion_profile", TOOL_METADATA_FIELD,
+)
 
 NATIVE_SYSTEM_INSTRUCTION = """You are the customer-service agent helping the customer.
 Choose exactly one supplied function for your next step. Every function call is
@@ -83,26 +87,47 @@ def message_function() -> dict[str, Any]:
     }
 
 
-def native_episode_system_instructions() -> str:
-    # The public capability hash binds the version, fixed synthetic name and
-    # message schema as well as the prose. Actual tool schemas remain bound by
-    # the immutable projected request and are supplied through native tools.
+def native_episode_system_instructions(
+    proposal_format: EpisodeProposalFormat = "native_tools_v1",
+) -> str:
+    if proposal_format not in {"native_tools_v1", "native_tools_v2"}:
+        raise ValueError("LOCAL_PROPOSAL_FORMAT_UNSUPPORTED")
+    # V1 retains its original bytes. V2 names the synthetic function only;
+    # its unchanged complete function is supplied in tools and separately bound
+    # by the public message_function_hash, with candidate_schema_hash retaining
+    # the candidate contract. The system hash binds this presentation version
+    # and prose. Domain schemas remain bound by the projected request.
     return NATIVE_SYSTEM_INSTRUCTION + "\nNative proposal protocol:\n" + wire_json({
-        "profile": NATIVE_PROPOSAL_PROFILE,
-        "context_rendering": "retain_fields_except_tool_schemas; native_tool_metadata_v1",
-        "message_function": message_function(),
+        "profile": proposal_format,
+        "context_rendering": (
+            "retain_fields_except_tool_schemas; native_tool_metadata_v1"
+            if proposal_format == "native_tools_v1" else "stable_prefix_context_v2"
+        ),
+        "message_function": message_function() if proposal_format == "native_tools_v1" else MESSAGE_FUNCTION,
         "tool_choice": "required",
         "parallel_tool_calls": False,
     })
 
 
-def native_proposal_payload(context: Mapping[str, Any]) -> dict[str, Any]:
+def _stable_context_json(context: Mapping[str, Any]) -> str:
+    # Presentation order only: do not change canonical wire JSON or any signed
+    # request/hash. Every key/value is retained and encoded with the same finite
+    # JSON rules. Unknown future fields remain present in deterministic order.
+    keys = [key for key in _STABLE_CONTEXT_FIELDS if key in context]
+    keys.extend(sorted(set(context) - set(_STABLE_CONTEXT_FIELDS)))
+    return "{" + ",".join(wire_json(key) + ":" + wire_json(context[key]) for key in keys) + "}"
+
+
+def native_proposal_payload(
+    context: Mapping[str, Any], *, proposal_format: EpisodeProposalFormat = "native_tools_v1",
+) -> dict[str, Any]:
     """Preserve all context; present each parameter schema once as a function.
 
     The caller already authenticated this host-projected context. Native names
     are deliberately not aliased: unsupported names or collisions are rejected
     before sending any model request. No discovered/user-only tools are added.
     """
+    instructions = native_episode_system_instructions(proposal_format)
     schemas = context.get("tool_schemas")
     if (not isinstance(schemas, list) or len(schemas) > 127
             or TOOL_METADATA_FIELD in context):
@@ -134,8 +159,11 @@ def native_proposal_payload(context: Mapping[str, Any]) -> dict[str, Any]:
                 if key != "tool_schemas"}
     rendered[TOOL_METADATA_FIELD] = metadata
     return {
-        "messages": [{"role": "system", "content": native_episode_system_instructions()},
-                     {"role": "user", "content": wire_json(rendered)}],
+        "messages": [{"role": "system", "content": instructions},
+                     {"role": "user", "content": (
+                         wire_json(rendered) if proposal_format == "native_tools_v1"
+                         else _stable_context_json(rendered)
+                     )}],
         "tools": tools,
         "tool_choice": "required",
         "parallel_tool_calls": False,

@@ -164,6 +164,46 @@ def test_omitting_evidence_never_disables_the_local_safe_gate(tmp_path, monkeypa
     assert not Path(config.output_dir).exists()
 
 
+@pytest.mark.parametrize("original,changed", [
+    ("native_tools_v1", "native_tools_v2"), ("native_tools_v2", "native_tools_v1"),
+])
+@pytest.mark.parametrize("entrypoint", ["runner", "cli"])
+def test_native_versions_cannot_borrow_each_others_reviewed_qualification(
+    authored_launch, monkeypatch, capsys, original, changed, entrypoint,
+):
+    config, report_path, review_path = authored_launch
+    qualified = config.model_copy(update={"agent_proposal_format": original})
+    report = json.loads(report_path.read_text())
+    report["condition"] = qualification.qualification_condition(qualified)
+    report["condition_sha256"] = wire_digest(report["condition"])
+    report_path.write_text(json.dumps(report))
+    review = json.loads(review_path.read_text())
+    review["report_sha256"] = hashlib.sha256(report_path.read_bytes()).hexdigest()
+    review_path.write_text(json.dumps(review))
+    # The authored fixture is internally valid for its original condition.
+    qualification.require_qualification(qualified, report_path, review_path)
+    selected = qualified.model_copy(update={"agent_proposal_format": changed})
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Mismatched native qualification reached preparation or inference")
+
+    monkeypatch.setattr(runner, "inspect_benchmark", forbidden)
+    monkeypatch.setattr(preflight, "preflight_run", forbidden)
+    monkeypatch.setattr(runner, "prepare_official_import", forbidden)
+    if entrypoint == "runner":
+        with pytest.raises(qualification.QualificationError, match="^QUALIFICATION_CONDITION_MISMATCH$"):
+            runner.run_official(selected, tau_root=report_path.parent,
+                                qualification_report=report_path, qualification_review=review_path)
+    else:
+        monkeypatch.setattr(cli, "load_config", lambda _: selected)
+        assert cli.main(["run", "--config", "authored.toml", "--qualification-report", str(report_path),
+                         "--qualification-review", str(review_path)]) == 2
+        assert json.loads(capsys.readouterr().out) == {
+            "status": "blocked", "reason": "QUALIFICATION_CONDITION_MISMATCH",
+        }
+    assert not Path(selected.output_dir).exists()
+
+
 @pytest.mark.parametrize("entrypoint", ["runner", "cli"])
 def test_actual_files_are_validated_and_hashes_saved_before_official_import(
     authored_launch, monkeypatch, entrypoint,
