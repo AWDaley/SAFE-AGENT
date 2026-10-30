@@ -562,21 +562,39 @@ def _run_agent_probe(probe: Probe, config: BenchmarkConfig, runtime: Any,
     )
     started = time.monotonic()
     error = None
+    messages_available = True
     trace: dict[str, Any]
     try:
         outcome = orchestrator.run()  # Deliberately no evaluator or benchmark score.
         new_messages = outcome.messages[len(history):]
-        trace = {"messages": [message.model_dump(mode="json", exclude={"raw_data"})
-                               for message in new_messages]}
+        trace = {}
     except (Exception, KeyboardInterrupt) as exc:
         error = "QUALIFICATION_INTERRUPTED" if isinstance(exc, KeyboardInterrupt) else (
             "AGENT_PROBE_EXECUTION_FAILED"
         )
-        trace = {"error_code": error}
+        # The pinned public accessor reads the recorded trajectory without
+        # advancing the simulation. A later budget failure or interruption
+        # must not erase a proposal or result already recorded by the harness.
+        # Never infer a missing result from a proposal or retry to fill a trace.
+        trace = {"error_code": error, "partial": True,
+                 "messages_source": "recorded_orchestrator_trajectory"}
+        try:
+            new_messages = orchestrator.get_messages()[len(history):]
+        except (Exception, KeyboardInterrupt):
+            new_messages = []
+            messages_available = False
+            trace["trace_error_code"] = "AGENT_PROBE_TRAJECTORY_UNAVAILABLE"
+        trace["messages_available"] = messages_available
         state = getattr(orchestrator, "agent_state", None)
         if state is not None:
-            agent.stop(state=state)
-        new_messages = []
+            try:
+                agent.stop(state=state)
+            except (Exception, KeyboardInterrupt):
+                # Preserve the original fixed failure and recorded messages
+                # even when best-effort cleanup also fails.
+                trace["cleanup_error_code"] = "AGENT_PROBE_CLEANUP_FAILED"
+    trace["messages"] = ([message.model_dump(mode="json", exclude={"raw_data"})
+                          for message in new_messages] if messages_available else None)
     calls = [call.name for message in new_messages if message.role == "assistant"
              for call in (getattr(message, "tool_calls", None) or [])]
     call_names = {call.id: call.name for message in new_messages if message.role == "assistant"
@@ -599,10 +617,13 @@ def _run_agent_probe(probe: Probe, config: BenchmarkConfig, runtime: Any,
     trace_sha256 = _new_json(private / (probe.probe_id + ".json"), trace)
     return {**asdict(probe), "episode_id": episode_id, "seconds": time.monotonic() - started,
             "passed": not issues, "issues": issues, "requests": requests,
-            "tool_calls": calls, "successful_tools": successful,
+            "tool_calls": calls if messages_available else None,
+            "successful_tools": successful if messages_available else None,
             "diagnostic_only": authored_input is not None,
+            "trace_partial": error is not None,
+            "trace_messages_available": messages_available,
             "trace_sha256": trace_sha256,
-            "response_sha256": hashlib.sha256(answer.encode()).hexdigest()}
+            "response_sha256": hashlib.sha256(answer.encode()).hexdigest() if messages_available else None}
 
 
 def qualification_add(a: int, b: int) -> int:

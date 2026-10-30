@@ -27,11 +27,7 @@ from safe_agent.contracts.episode_inference import (
     wire_json,
 )
 from safe_agent.inference.deadline_http import DeadlineBudget, DeadlineHTTPTransport
-from safe_agent.inference_service.providers.native_episode import (
-    native_episode_system_instructions,
-    native_proposal_output,
-    native_proposal_payload,
-)
+from safe_agent.inference_service.providers import native_episode
 from safe_agent.inference_service.providers.openai_episode import episode_system_instructions
 
 MAX_PROVIDER_RESPONSE_BYTES = 262_144
@@ -48,16 +44,19 @@ def local_openai_backend_capabilities(
         raise ValueError("LOCAL_TIMING_CAPABILITY_MISMATCH")
     timeout = (local_timing.provider_timeout_seconds if local_timing is not None
                else 60.0 if timeout_seconds is None else timeout_seconds)
-    if proposal_format not in {"candidate_json_v1", "native_tools_v1"}:
+    if proposal_format not in {"candidate_json_v1", "native_tools_v1", "native_tools_v2"}:
         raise ValueError("LOCAL_PROPOSAL_FORMAT_UNSUPPORTED")
-    native = proposal_format == "native_tools_v1"
+    native = proposal_format != "candidate_json_v1"
     return EpisodeBackendCapabilities(
-        profile="local_openai_tools_v1" if native else "local_openai_chat_v1", model=model,
+        profile=("local_openai_tools_v2" if proposal_format == "native_tools_v2"
+                 else "local_openai_tools_v1" if native else "local_openai_chat_v1"), model=model,
         provider_origin=validate_local_api_base(base_url), timeout_seconds=timeout,
         response_format="native_tools" if native else "json_object",
         candidate_schema_hash=wire_digest(CANDIDATE_ADAPTER.json_schema()),
-        system_instruction_hash=wire_digest(native_episode_system_instructions() if native
+        system_instruction_hash=wire_digest(native_episode.native_episode_system_instructions(proposal_format) if native
                                             else episode_system_instructions()),
+        message_function_hash=(wire_digest(native_episode.message_function())
+                               if proposal_format == "native_tools_v2" else None),
         local_timing=local_timing,
     )
 
@@ -83,7 +82,8 @@ class LocalOpenAIEpisodeBackend:
             proposal_format=proposal_format,
         )
         self._proposal_format = proposal_format
-        self._instructions = (native_episode_system_instructions() if proposal_format == "native_tools_v1"
+        self._native = proposal_format != "candidate_json_v1"
+        self._instructions = (native_episode.native_episode_system_instructions(proposal_format) if self._native
                               else episode_system_instructions())
         self._url = base_url + "/chat/completions"
         self.clock = clock
@@ -134,9 +134,10 @@ class LocalOpenAIEpisodeBackend:
             "response_format": {"type": "json_object"}, "stream": False,
         }
         tool_names = None
-        if self._proposal_format == "native_tools_v1":
+        if self._native:
             payload.pop("response_format")
-            payload.update(native_proposal_payload(request.projected_context))
+            payload.update(native_episode.native_proposal_payload(request.projected_context,
+                                                                  proposal_format=self._proposal_format))
             tool_names = {tool["function"]["name"] for tool in payload["tools"]}
         if request.seed is not None:
             payload["seed"] = request.seed
@@ -214,7 +215,7 @@ class LocalOpenAIEpisodeBackend:
             raise ValueError("invalid local response model")
         choices = parsed.get("choices")
         usage = parsed.get("usage")
-        finish = "tool_calls" if self._proposal_format == "native_tools_v1" else "stop"
+        finish = "tool_calls" if self._native else "stop"
         if (not isinstance(choices, list) or len(choices) != 1
                 or not isinstance(choices[0], dict) or choices[0].get("finish_reason") != finish
                 or not isinstance(usage, dict)):
@@ -224,10 +225,10 @@ class LocalOpenAIEpisodeBackend:
                 or message.get("refusal")):
             raise ValueError("invalid local response message")
         output: Any
-        if self._proposal_format == "native_tools_v1":
+        if self._native:
             if tool_names is None:
                 raise ValueError("native reply requires the exposed tool names")
-            output = native_proposal_output(message, tool_names=tool_names)
+            output = native_episode.native_proposal_output(message, tool_names=tool_names)
         else:
             if message.get("tool_calls"):
                 raise ValueError("invalid local response message")

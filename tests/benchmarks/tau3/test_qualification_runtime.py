@@ -57,7 +57,7 @@ def runtime_fixture(monkeypatch, tmp_path):
     private.mkdir(mode=0o700)
     engines = []
 
-    def create(propose):
+    def create(propose, *, episode_budget=None, run_budget=None):
         engine = create_engine("sqlite://")
         engines.append(engine)
         EpisodeRuntime.create_fixture_schema(engine)
@@ -70,6 +70,8 @@ def runtime_fixture(monkeypatch, tmp_path):
                 model_args=config.llm_args_agent,
                 output_dir=str(tmp_path),
                 local_timing=config.local_timing,
+                episode_budget=episode_budget or {},
+                run_budget=run_budget or {},
             ),
             engine=engine,
             transport=transport,
@@ -228,3 +230,153 @@ def test_real_retrieval_receipt_without_a_substantive_answer_does_not_qualify(ru
     assert result["passed"] is False
     assert "RETRIEVAL_ANSWER_NOT_GROUNDED" in result["issues"]
     assert "RETRIEVAL_EVIDENCE_MISSING" not in result["issues"]
+
+
+def assert_partial_trace(result, private, error_code, *, messages_available=True):
+    assert result["passed"] is False
+    assert result["trace_partial"] is True
+    assert error_code in result["issues"]
+    raw = (private / (result["probe_id"] + ".json")).read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == result["trace_sha256"]
+    trace = json.loads(raw)
+    assert trace["error_code"] == error_code and trace["partial"] is True
+    assert trace["messages_available"] is result["trace_messages_available"] is messages_available
+    assert trace["messages_source"] == "recorded_orchestrator_trajectory"
+    assert "AUTHORED_EXCEPTION_TEXT_MUST_NOT_BE_REPORTED" not in raw.decode()
+    assert all("raw_data" not in message for message in (trace["messages"] or []))
+    assert "reward_info" not in trace and "reward_info" not in result
+    return trace
+
+
+@pytest.mark.parametrize("cleanup_error", [False, True])
+def test_completed_read_survives_later_one_attempt_budget_failure(runtime_fixture, monkeypatch, cleanup_error):
+    from safe_agent.benchmarks.tau3.adapter import SafeTauAgent
+
+    config, private, create = runtime_fixture
+    if cleanup_error:
+        stop = SafeTauAgent.stop
+        cleanups = []
+
+        def fail_after_second_cleanup(agent, *args, **kwargs):
+            stop(agent, *args, **kwargs)
+            cleanups.append(True)
+            if len(cleanups) == 2:
+                raise RuntimeError("AUTHORED_EXCEPTION_TEXT_MUST_NOT_BE_REPORTED")
+
+        monkeypatch.setattr(SafeTauAgent, "stop", fail_after_second_cleanup)
+    runtime, transport = create([
+        json.dumps({"kind": "tool", "tool_name": "KB_search",
+                    "arguments": {"query": "user priority lower monthly fees"}}),
+        json.dumps({"kind": "message", "purpose": "answer", "text": "Must never be requested."}),
+    ], episode_budget={"max_model_calls": 1}, run_budget={"max_model_calls": 1})
+    result = _run_agent_probe(
+        Probe("agent_retained_preference_history0", "agent", "retained_preference", 0),
+        config, runtime, private,
+    )
+    trace = assert_partial_trace(result, private, "AGENT_PROBE_EXECUTION_FAILED")
+    if cleanup_error:
+        assert cleanups == [True, True]
+        assert trace["cleanup_error_code"] == "AGENT_PROBE_CLEANUP_FAILED"
+    else:
+        assert "cleanup_error_code" not in trace
+    assert result["issues"] == ["AGENT_PROBE_EXECUTION_FAILED"]
+    assert len(transport.requests) == len(result["requests"]) == 1
+    request, reply, status = runtime.private.inference(result["requests"][0]["request_id"])
+    assert status == result["requests"][0]["status"] == "COMPLETE"
+    assert reply is not None and reply.usage_source == "scripted"
+    assert result["requests"][0]["input_tokens"] == reply.input_tokens
+    assert result["requests"][0]["output_tokens"] == reply.output_tokens
+    assert request.episode_id == result["episode_id"]
+    assert result["tool_calls"] == result["successful_tools"] == ["KB_search"]
+    assert [message["role"] for message in trace["messages"]] == ["assistant", "tool"]
+    call = trace["messages"][0]["tool_calls"][0]
+    observed = trace["messages"][1]
+    assert call["arguments"] == {"query": "user priority lower monthly fees"}
+    assert observed["id"] == call["id"] and observed["error"] is False
+    assert observed["content"]
+    assert runtime.episodes.get_call(result["episode_id"], call["id"]).success is True
+    assert runtime.episodes.inspect(result["episode_id"]).usage.model_calls == 1
+    assert runtime.episodes.inspect(result["episode_id"]).usage.tool_calls == 1
+    assert result["response_sha256"] == hashlib.sha256(b"").hexdigest()
+
+
+@pytest.mark.parametrize("phase", ["proposal", "result"])
+@pytest.mark.parametrize("exception,error_code", [
+    (RuntimeError, "AGENT_PROBE_EXECUTION_FAILED"), (KeyboardInterrupt, "QUALIFICATION_INTERRUPTED"),
+])
+def test_interrupted_trajectory_retains_only_recorded_messages_without_replay_or_receipt(
+    runtime_fixture, monkeypatch, phase, exception, error_code,
+):
+    from tau2.orchestrator.orchestrator import Orchestrator
+
+    from safe_agent.contracts.episodes import EpisodeState
+
+    config, private, create = runtime_fixture
+    runtime, transport = create([
+        json.dumps({"kind": "tool", "tool_name": "KB_search",
+                    "arguments": {"query": "user priority lower monthly fees"}}),
+        json.dumps({"kind": "message", "purpose": "answer", "text": "Must never be requested."}),
+    ])
+    step = Orchestrator.step
+
+    def interrupted_step(orchestrator):
+        step(orchestrator)
+        last = orchestrator.get_messages()[-1]
+        if (phase == "proposal" and last.role == "assistant" and last.is_tool_call()
+                or phase == "result" and last.role == "tool"):
+            raise exception("AUTHORED_EXCEPTION_TEXT_MUST_NOT_BE_REPORTED")
+
+    monkeypatch.setattr(Orchestrator, "step", interrupted_step)
+    result = _run_agent_probe(
+        Probe("agent_retained_preference_history0", "agent", "retained_preference", 0),
+        config, runtime, private,
+    )
+    trace = assert_partial_trace(result, private, error_code)
+    assert result["issues"] == [error_code]
+    assert len(transport.requests) == len(result["requests"]) == 1
+    assert result["requests"][0]["status"] == "COMPLETE"
+    assert result["tool_calls"] == ["KB_search"]
+    assert result["successful_tools"] == (["KB_search"] if phase == "result" else [])
+    assert [message["role"] for message in trace["messages"]] == (
+        ["assistant", "tool"] if phase == "result" else ["assistant"]
+    )
+    call = trace["messages"][0]["tool_calls"][0]
+    view = runtime.episodes.inspect(result["episode_id"])
+    # Interruption before the next agent step leaves any observed result
+    # unconsumed by the host. Trace preservation cannot mint a host receipt.
+    assert view.state is EpisodeState.OUTCOME_UNCERTAIN
+    assert view.pending_call_id == call["id"]
+    assert runtime.episodes.get_call(result["episode_id"], call["id"]).success is None
+    assert runtime.private.load(result["episode_id"]).data["successful_calls"] == {}
+    if phase == "result":
+        assert trace["messages"][1]["id"] == call["id"]
+        assert trace["messages"][1]["error"] is False
+
+
+def test_unavailable_partial_trajectory_is_unknown_not_an_empty_tool_history(
+    runtime_fixture, monkeypatch,
+):
+    from tau2.orchestrator.orchestrator import Orchestrator
+
+    config, private, create = runtime_fixture
+    runtime, transport = create([
+        json.dumps({"kind": "tool", "tool_name": "KB_search",
+                    "arguments": {"query": "user priority lower monthly fees"}}),
+    ], episode_budget={"max_model_calls": 1}, run_budget={"max_model_calls": 1})
+
+    def unavailable(_):
+        raise RuntimeError("AUTHORED_EXCEPTION_TEXT_MUST_NOT_BE_REPORTED")
+
+    monkeypatch.setattr(Orchestrator, "get_messages", unavailable)
+    result = _run_agent_probe(
+        Probe("agent_retained_preference_history0", "agent", "retained_preference", 0),
+        config, runtime, private,
+    )
+    trace = assert_partial_trace(result, private, "AGENT_PROBE_EXECUTION_FAILED",
+                                 messages_available=False)
+    assert trace["messages"] is None
+    assert trace["trace_error_code"] == "AGENT_PROBE_TRAJECTORY_UNAVAILABLE"
+    assert result["tool_calls"] is result["successful_tools"] is result["response_sha256"] is None
+    assert len(transport.requests) == len(result["requests"]) == 1
+    assert result["requests"][0]["status"] == "COMPLETE"
+    assert runtime.episodes.inspect(result["episode_id"]).usage.tool_calls == 1

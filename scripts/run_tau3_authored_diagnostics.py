@@ -185,7 +185,7 @@ def run(config: BenchmarkConfig, output: Path, tau_root: Path, pack: str,
                                                      "AGENT_INFERENCE_INCOMPLETE"}]
                 if case.requires_read and not (
                     {"KB_search", "KB_search_bm25", "grep"}
-                    & set(result.get("successful_tools", []))
+                    & set(result.get("successful_tools") or [])
                 ):
                     result["issues"].append("DIAGNOSTIC_REQUIRED_READ_MISSING")
                 if case.prohibits_read and result.get("tool_calls"):

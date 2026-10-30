@@ -36,6 +36,17 @@ PILOTS = (
 )
 
 
+def test_native_v2_is_a_separate_presentation_with_all_workload_limits_preserved():
+    original = load_config(CONFIGS / "tau3-bank-dev-local-native-safe.toml")
+    compact = load_config(CONFIGS / "tau3-bank-dev-local-native-v2-safe.toml")
+    assert original.agent_proposal_format == "native_tools_v1"
+    assert compact.agent_proposal_format == "native_tools_v2"
+    assert original.run_id != compact.run_id and original.output_dir != compact.output_dir
+    assert compact.model_dump(exclude={"run_id", "output_dir", "agent_proposal_format"}) == (
+        original.model_dump(exclude={"run_id", "output_dir", "agent_proposal_format"})
+    )
+
+
 def test_normalized_pilot_explicitly_matches_provider_retries_and_output_caps():
     from safe_agent.benchmarks.tau3.comparison import _agent_transport_controls
 

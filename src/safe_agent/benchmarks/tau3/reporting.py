@@ -95,8 +95,8 @@ def _route_provenance(manifest: dict[str, Any]) -> dict[str, Any]:
     elif route != "openai" or base is not None:
         raise ValueError("RECORDED_MODEL_ROUTE_INVALID")
     proposal_format = config.get("agent_proposal_format", "candidate_json_v1")
-    if (proposal_format not in {"candidate_json_v1", "native_tools_v1"}
-            or (proposal_format == "native_tools_v1" and (
+    if (proposal_format not in {"candidate_json_v1", "native_tools_v1", "native_tools_v2"}
+            or (proposal_format != "candidate_json_v1" and (
                 route != "local" or config.get("system") != "safe_agent"
             ))):
         raise ValueError("RECORDED_AGENT_PROPOSAL_FORMAT_INVALID")
